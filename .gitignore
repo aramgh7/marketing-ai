@@ -1,0 +1,64 @@
+# ── Java / Gradle ──────────────────────────────────────────────────
+.gradle/
+build/
+*.class
+*.jar
+*.war
+*.ear
+!gradle/wrapper/gradle-wrapper.jar
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+
+# ── Python ─────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+.env
+*.egg-info/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Node / Next.js ─────────────────────────────────────────────────
+node_modules/
+.next/
+out/
+.vercel/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ── Environment / Secrets ──────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.env
+secrets/
+credentials.json
+service-account*.json
+
+# ── Docker ─────────────────────────────────────────────────────────
+.docker/
+
+# ── OS ─────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Logs ───────────────────────────────────────────────────────────
+logs/
+*.log
+
+# ── PDF / generated docs (keep source md, not output) ─────────────
+*.pdf
+*.html
+!.ai/

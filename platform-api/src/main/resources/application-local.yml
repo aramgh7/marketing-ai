@@ -1,0 +1,19 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:marketingai}
+    username: ${DB_USER:mai}
+    password: ${DB_PASS:mai_local}
+    driver-class-name: org.postgresql.Driver
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  flyway:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:marketingai}
+    user: ${DB_USER:mai}
+    password: ${DB_PASS:mai_local}
+
+logging:
+  level:
+    com.marketingai: DEBUG
+    org.springframework.security: DEBUG

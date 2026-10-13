@@ -1,0 +1,94 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: mai-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: marketingai
+      POSTGRES_USER: mai
+      POSTGRES_PASSWORD: mai_local
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mai -d marketingai"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: mai-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  platform-api:
+    build:
+      context: ./platform-api
+      dockerfile: Dockerfile
+    container_name: mai-platform-api
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: local
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: marketingai
+      DB_USER: mai
+      DB_PASS: mai_local
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      ML_SERVICE_URL: http://ml-service:8000
+      JWT_SECRET: local-dev-secret-min-32-chars-long!!
+      JWT_EXPIRY_MS: 86400000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  ml-service:
+    build:
+      context: ./ml-service
+      dockerfile: Dockerfile
+    container_name: mai-ml-service
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://mai:mai_local@postgres:5432/marketingai
+      REDIS_URL: redis://redis:6379/0
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      PLATFORM_API_URL: http://platform-api:8080
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-local-internal-key}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mai-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+      ML_SERVICE_URL: http://ml-service:8000
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-local-internal-key}
+      NODE_ENV: development
+    depends_on:
+      - platform-api
+      - ml-service
+
+volumes:
+  pgdata:
