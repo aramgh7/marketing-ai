@@ -1,9 +1,13 @@
 spring:
   datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:marketingai}
+    # stringtype=unspecified: allows String parameters to be coerced to JSONB by PostgreSQL
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:marketingai}?stringtype=unspecified
     username: ${DB_USER:mai}
     password: ${DB_PASS:mai_local}
     driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: none   # Flyway owns the schema; Hibernate must not touch it
   data:
     redis:
       host: ${REDIS_HOST:localhost}
