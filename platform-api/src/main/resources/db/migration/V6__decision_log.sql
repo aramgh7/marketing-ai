@@ -5,7 +5,8 @@ CREATE TABLE decision_log (
     session_id        VARCHAR(100) NOT NULL,
     creative_id       UUID,
     chosen_variant_id UUID NOT NULL,
-    -- Full candidate set with probabilities: [{"variant_id":"...","sample_value":0.42,"alpha":12,"beta":88},...]
+    -- Full candidate set: [{"variant_id":"...","arm_id":"...","propensity":0.72,"sample_value":0.42,"alpha":12,"beta":88},...]
+    -- propensity = P(arm wins) from N=200 Monte Carlo draws (arch v1.1 §4.6, mandatory §23)
     candidates        JSONB NOT NULL,
     context           JSONB,   -- device, geo, utm_*, time_of_day, etc.
     model_version     VARCHAR(50),

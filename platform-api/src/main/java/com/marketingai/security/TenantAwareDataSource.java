@@ -32,9 +32,12 @@ public class TenantAwareDataSource extends AbstractDataSource {
 
     private void applyTenant(Connection conn) throws SQLException {
         String tenantId = TenantContext.get();
+        // arch v1.1 §8: SET LOCAL is transaction-scoped — resets automatically when the
+        // transaction ends. Plain SET persists on the pooled connection and leaks the tenant
+        // to whoever gets that connection next from HikariCP.
         String sql = (tenantId != null && isValidUuid(tenantId))
-                ? "SET app.current_tenant = '" + tenantId + "'"
-                : "RESET app.current_tenant";
+                ? "SET LOCAL app.current_tenant = '" + tenantId + "'"
+                : "SET LOCAL app.current_tenant = ''";
         try (Statement stmt = conn.createStatement()) {
             stmt.execute(sql);
         }

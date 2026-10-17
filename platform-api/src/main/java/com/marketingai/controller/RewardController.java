@@ -17,7 +17,7 @@ public class RewardController {
     private final RewardService rewardService;
 
     @GetMapping("/ladder")
-    public ResponseEntity<List<Map<String, Object>>> getLadder(
+    public ResponseEntity<Map<String, Object>> getLadder(
             @RequestAttribute("tenantId") UUID tenantId) {
         return ResponseEntity.ok(rewardService.getRewardLadder(tenantId));
     }

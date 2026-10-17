@@ -71,8 +71,8 @@ public class RewardService {
         log.debug("Stage reward: tenant={} stage={} quality={}", tenantId, stageKey, isQuality);
     }
 
-    public List<Map<String, Object>> getRewardLadder(UUID tenantId) {
-        return jdbc.queryForList("""
+    public Map<String, Object> getRewardLadder(UUID tenantId) {
+        List<Map<String, Object>> stages = jdbc.queryForList("""
             SELECT
                 fs.stage_key,
                 fs.stage_label,
@@ -80,16 +80,63 @@ public class RewardService {
                 fs.is_quality_key,
                 fs.reward_weight,
                 fs.micro_reward_weight,
+                cem.meta_event_name                                AS capi_event,
                 COUNT(re.id)                                       AS total_rewards,
                 COUNT(re.id) FILTER (WHERE re.is_quality_stage)    AS quality_rewards,
                 COUNT(DISTINCT re.session_id)                      AS unique_sessions
             FROM funnel_stages fs
             LEFT JOIN reward_events re
                 ON re.tenant_id = fs.tenant_id AND re.stage_key = fs.stage_key
+            LEFT JOIN capi_event_map cem
+                ON cem.tenant_id = fs.tenant_id AND cem.stage_key = fs.stage_key
             WHERE fs.tenant_id = ?
             GROUP BY fs.stage_key, fs.stage_label, fs.ordinal,
-                     fs.is_quality_key, fs.reward_weight, fs.micro_reward_weight
+                     fs.is_quality_key, fs.reward_weight, fs.micro_reward_weight,
+                     cem.meta_event_name
             ORDER BY fs.ordinal
             """, tenantId);
+
+        // Weekly counters: this week vs prev week
+        List<Map<String, Object>> thisWeek = jdbc.queryForList("""
+            SELECT stage_key, COUNT(*) AS cnt
+            FROM reward_events
+            WHERE tenant_id = ? AND rewarded_at >= date_trunc('week', NOW())
+            GROUP BY stage_key
+            """, tenantId);
+
+        List<Map<String, Object>> prevWeek = jdbc.queryForList("""
+            SELECT stage_key, COUNT(*) AS cnt
+            FROM reward_events
+            WHERE tenant_id = ?
+              AND rewarded_at >= date_trunc('week', NOW()) - INTERVAL '7 days'
+              AND rewarded_at <  date_trunc('week', NOW())
+            GROUP BY stage_key
+            """, tenantId);
+
+        java.util.Map<String, Long> thisMap = thisWeek.stream().collect(
+            java.util.stream.Collectors.toMap(
+                r -> (String) r.get("stage_key"),
+                r -> ((Number) r.get("cnt")).longValue()
+            ));
+        java.util.Map<String, Long> prevMap = prevWeek.stream().collect(
+            java.util.stream.Collectors.toMap(
+                r -> (String) r.get("stage_key"),
+                r -> ((Number) r.get("cnt")).longValue()
+            ));
+
+        List<Map<String, Object>> weeklyCounters = stages.stream().map(s -> {
+            String key  = (String) s.get("stage_key");
+            long   curr = thisMap.getOrDefault(key, 0L);
+            long   prev = prevMap.getOrDefault(key, 0L);
+            Double delta = prev > 0 ? ((curr - prev) * 100.0 / prev) : null;
+            return java.util.Map.<String, Object>of(
+                "stage_key",       key,
+                "count_this_week", curr,
+                "count_prev_week", prev,
+                "delta_pct",       delta != null ? Math.round(delta * 10.0) / 10.0 : null
+            );
+        }).collect(java.util.stream.Collectors.toList());
+
+        return Map.of("stages", stages, "weekly_counters", weeklyCounters);
     }
 }

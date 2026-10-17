@@ -4515,3 +4515,36 @@ SAFETY RULES (19.6):
 - Phase 8 миграций: V94–V113 (20 файлов)
 - Phase 8 пунктов реализовано: 21/21 (8-1 до 8-21)
 - Архитектурных нарушений найдено: 0
+
+---
+
+## Audit 038 — Онбординг клиента #1: B1 items
+**Дата:** 2026-10-17
+**Область:** roadmap 8-1 (admin UI), 8-2 (CAPI EMQ), 8-3 (show-rate corrector), 8-15 (booking window)
+
+### Реализовано
+
+**8-1 Admin UI — Funnel Ladder + Weekly Counters**
+- `GET /api/v1/funnel/me` добавлен в `FunnelController` (stages + CAPI event из `meta_event_name`)
+- `GET /api/v1/reward/ladder` расширен: теперь возвращает `{stages, weekly_counters}` с Δ% неделя-к-неделе
+- `frontend/src/app/(admin)/funnel/page.tsx` — таблица этапов с colour-coded quality rows, onboarding checklist (7 пунктов), CAPI event mapping
+
+**8-2 CAPI EMQ Pre-Check**
+- `CAPIEmqCheckService.java` — first-party pre-check: events sent via `capi_events`, dedup via `event_id`, active pixel check
+- `OnboardingController.java` — `GET /api/v1/onboarding/capi-emq-check` + `GET /api/v1/onboarding/checklist` (funnel_stages, pixel, capi_map, followup_control, funnel_paths, compliance, regcf_gate)
+
+**8-3 Show-Rate Corrector**
+- `compute_show_rate_corrector()` + `apply_show_rate_to_gates()` добавлены в `reward_service.py` (Beta shrinkage, multiplier clipped 0.5–1.5)
+- `app/routers/reward.py` — `POST /reward/show-rate-corrector`, `POST /reward/gate-adjustment`
+- `ShowRateCorrectorScheduler.java` — @Scheduled Monday 06:00 UTC; пишет в `tenants.settings.show_rate_multiplier`
+
+**8-15 Dynamic Booking Window**
+- `BookingWindowService.java` — читает `noshow_scores.risk_tier`; HIGH=1-3d, MED=1-5d, LOW=2-7d
+- `GET /api/v1/propensity/booking-window?session_id=` добавлен в `PropensityController`
+
+### Тесты
+- Python: 849 PASS, 0 FAIL (9 новых в test_show_rate_corrector.py)
+- Java: BUILD SUCCESSFUL
+
+### Статус
+Клиент #1 готов к онбордингу: `/api/v1/onboarding/checklist` возвращает 7 go-live checks.

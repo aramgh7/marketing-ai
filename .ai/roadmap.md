@@ -1002,7 +1002,7 @@
 - [x] New first-party events `CALENDAR_OPEN`, `SLOT_SELECTED`, `MATERIAL_VIEW`, `DATAROOM_OPEN` registered in `event_schemas`
 - [x] `appointments` + `booking_distance_h`, `slot_tz`, `lead_tz`, `coord_confirmed_at`, `followup_variant_id`; `sessions` + `self_accredited`, `ticket_bucket`, `accreditation_verified_at`, `funnel_key`
 - [ ] GHL mapping for custom fields: `accreditation_verified` → ACCRED_VERIFIED; ⚠️ coordinator-confirmation field/event name to confirm with client
-- [ ] `GET/PUT /api/v1/tenants/me/funnel`; admin page showing the stage ladder with weekly counts
+- [x] `GET/PUT /api/v1/tenants/me/funnel` → `GET /api/v1/funnel/me`; admin page `/admin/funnel` with stage ladder, weekly counters (Δ%), CAPI event map, onboarding checklist **[v1.3]**
 
 ### 8-2. CAPI Chain v2 + Pixel Routing (vision §19.4; arch §16.3) — changes 0-5 `CAPIForwardingService`
 
@@ -1011,7 +1011,7 @@
 - [x] `meta_pixels.role_key` added to entity + repository (`findPixelIdByRole`, `findCapiTokenByRole`)
 - [x] `ValueFormulaService` + `tenants.value_coeffs` JSONB (V95); `k_accr` (yes=1.0, no=0.0), `k_ticket` (LT25K=0.3...GT250K=3.0)
 - [ ] ⚠️ Verify with Meta CAPI docs: value update for already-sent event_id
-- [ ] Onboarding step: CAPI live on client's pixel; EMQ check; dedup confirmed in Events Manager
+- [x] Onboarding step: `CAPIEmqCheckService` + `GET /api/v1/onboarding/capi-emq-check` + `GET /api/v1/onboarding/checklist` (7 go-live checks); first-party pre-check, dedup via capi_events.event_id **[v1.3]**
 
 ### 8-3. Reward Ladder + Gates on Held Calls (vision §19.3, §19.5; arch §16.6) — changes 2-3/2-6, 3-4, 2-12
 
@@ -1020,7 +1020,7 @@
 - [x] `RewardService.java`: `onStageReached()` → notifies FastAPI `/thompson/reward`; wired into `GhlWebhookService` after `forwardByStage()`
 - [x] `RewardController`: `GET /api/v1/reward/ladder`, `POST /api/v1/reward/stage-reached`
 - [ ] `tenants.settings.reward_levels` (`L1 SLOT_SELECTED`, `L2 FORM_SUBMIT`, weights, `corrector CALL_HELD`) replaces the global `REWARD_ON_FORM_SUBMIT` flag (Audit F1) for tenants that define it; `/decide/reward` resolves via `stage_key`
-- [ ] Weekly **show-rate corrector** job: `CALL_HELD / BOOKED` per landing variant and per creative with Beta shrinkage → multiplicative weight on the L1/L2 combination (clipped 0.5–1.5); never an α/β increment
+- [x] Weekly **show-rate corrector** job: `ShowRateCorrectorScheduler` Monday 06:00 UTC; Beta shrinkage posterior → `tenants.settings.show_rate_multiplier` (clipped 0.5–1.5); `POST /reward/show-rate-corrector`; never an α/β increment **[v1.3]**
 - [ ] Gates (3-4): Gate 2 += `booking_rate`; Gate 3 = **cost per CALL_HELD vs anchor** + `P(show_rate < anchor) > 0.9` kill; `GateEvaluationService` reads the quality stage from `funnel_stages.is_quality_key`
 - [ ] Quality Score (2-12): `show_rate` component, highest default weight when the quality key is an appointment stage
 - [ ] **No-show attribution model** (3-1 extension): `logit(show_rate) = Σ β_j·atom_j + γ·booking_distance + δ·tz_known + segment`; β exported to brief (4-4) and clickbait detector (3-14)
@@ -1133,7 +1133,7 @@
 - [x] FastAPI `POST /propensity/noshow`: features = `booking_distance_h`, `lead_tz_known`, `ticket_bucket`, `self_accredited`, device, country; rule-based model (`rule_based_v1`); AUC gate at 0.70; risk tiers LOW/MED/HIGH
 - [x] `noshow_scores` table (RLS); `NoshowPropensityService.scoreOnBooked()`; HIGH-risk arms: `get_followup_audience_override()` returns ghl_tag + preferred channels
 - [x] `slot_capacity_policies` table (enabled=false default); `POST /propensity/slot-fill` — P(no one shows) = Π(noshow_prob_i)
-- [ ] `GET /api/v1/booking/window?session_id=` → dynamic calendar window from pre-booking score
+- [x] `GET /api/v1/propensity/booking-window?session_id=` → dynamic calendar window: HIGH=1-3d, MED=1-5d, LOW=2-7d; `BookingWindowService` reads noshow_scores **[v1.3]**
 - [ ] Report: show rate by risk tier; team-slot fill rate; AUC on rolling holdout
 
 ### 8-16. Predicted Lead Value at Day 0 (vision §19.18.3; arch §16.16) — extends 8-2 `value_formula`, 3-21

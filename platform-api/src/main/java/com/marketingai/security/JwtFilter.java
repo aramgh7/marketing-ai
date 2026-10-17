@@ -31,9 +31,13 @@ public class JwtFilter extends OncePerRequestFilter {
             if (jwtUtil.isValid(token)) {
                 Claims claims = jwtUtil.parse(token);
                 String tenantId = claims.get("tenantId", String.class);
-                String role = claims.get("role", String.class);
+                String userId   = claims.getSubject();   // user UUID stored as JWT subject
+                String role     = claims.get("role", String.class);
 
                 TenantContext.set(tenantId);
+                // Set as request attributes so controllers can use @RequestAttribute
+                if (tenantId != null) request.setAttribute("tenantId", java.util.UUID.fromString(tenantId));
+                if (userId   != null) request.setAttribute("userId",   java.util.UUID.fromString(userId));
 
                 var auth = new UsernamePasswordAuthenticationToken(
                         claims.getSubject(),

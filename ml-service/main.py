@@ -15,6 +15,7 @@ from app.routers import offer_validity
 from app.routers import niche_store, hierarchy, red_flags
 from app.routers import model_quality
 from app.routers import post_call, investor_archetype, agency, regcf
+from app.routers import reward
 
 
 @asynccontextmanager
@@ -82,3 +83,4 @@ app.include_router(post_call.router, prefix="/post-call")
 app.include_router(investor_archetype.router, prefix="/investor")
 app.include_router(agency.router, prefix="/agency")
 app.include_router(regcf.router)
+app.include_router(reward.router, prefix="/reward")

@@ -9,7 +9,10 @@ import java.time.Instant;
 import java.util.UUID;
 
 @Entity
-@Table(name = "users")
+// arch v1.1 §4.1: email unique per-tenant (one person can belong to two tenants)
+@Table(name = "users", uniqueConstraints = {
+        @UniqueConstraint(name = "users_tenant_email_unique", columnNames = {"tenant_id", "email"})
+})
 @Getter
 @Setter
 @NoArgsConstructor
@@ -23,7 +26,7 @@ public class User {
     @JoinColumn(name = "tenant_id", nullable = false)
     private Tenant tenant;
 
-    @Column(nullable = false, unique = true)
+    @Column(nullable = false)
     private String email;
 
     @Column(nullable = false)

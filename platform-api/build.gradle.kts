@@ -1,6 +1,6 @@
 plugins {
-    id("org.springframework.boot") version "3.3.0"
-    id("io.spring.dependency-management") version "1.1.4"
+    id("org.springframework.boot") version "3.5.0"
+    id("io.spring.dependency-management") version "1.1.7"
     java
 }
 
@@ -47,6 +47,12 @@ dependencies {
     // Lombok
     compileOnly("org.projectlombok:lombok")
     annotationProcessor("org.projectlombok:lombok")
+
+    // Email (weekly report delivery — optional, skipped if not configured)
+    implementation("org.springframework.boot:spring-boot-starter-mail")
+
+    // AWS SDK v2 — S3-compatible (Cloudflare R2, Phase 4 media asset pipeline)
+    implementation("software.amazon.awssdk:s3:2.25.0")
 
     // Test
     testImplementation("org.springframework.boot:spring-boot-starter-test")
