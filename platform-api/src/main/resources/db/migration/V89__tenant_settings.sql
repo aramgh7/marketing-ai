@@ -1,0 +1,4 @@
+ALTER TABLE tenants
+    ADD COLUMN IF NOT EXISTS report_email      VARCHAR(255),
+    ADD COLUMN IF NOT EXISTS alert_channel     VARCHAR(10) DEFAULT 'TELEGRAM',
+    ADD COLUMN IF NOT EXISTS slack_webhook_url VARCHAR(500);
