@@ -4216,3 +4216,85 @@ SAFETY RULES (19.6):
 ### Test Results
 - Python: 761 PASS, 0 FAIL (new: 23 tests across 3 files)
 - Java: BUILD SUCCESSFUL
+
+---
+
+## Audit 034 — Phase 8: External Signals (8-10) + Creative Setup (8-11) + Month-1 Deliverables (8-12) + Open Items (8-13)
+
+**Date**: 2026-10-17
+**Scope**: Phase 8 blocks 8-10 through 8-13
+**Test result**: Python 775 PASS, 0 FAIL (new: 14 tests in test_signals_funnel_service.py)
+
+### What Was Built
+
+#### 8-10 — External Signals Role per Funnel (vision §19.13; arch §16.10)
+
+**Migration V104** (`funnel_signals_config.sql`):
+- `tenants.funnel_signal_config` JSONB — per-funnel `weather_role` (NARRATIVE | DEMAND) + `news_tags`
+- `funnel_calendar_events` table (RLS, tenant-scoped) — `round_close`, `regulatory`, `webinar`, `field_event` entries; `days_until` computed column
+
+**`signals_service.py`** (non-destructive append):
+- `route_signal_for_funnel()`: DEMAND → budget_multiplier (drought_severe=1.6, moderate=1.3, heat_stress=1.2) + 10% per urgent calendar event ≤7 days; NARRATIVE → urgency_tags only, budget_multiplier always 1.0
+- `extract_narrative_context()`: offer-centric context lines; META_PERSONAL_ATTR compliant (describes market/offer, never the viewer)
+
+**FastAPI** (`signals.py` router):
+- `POST /signals/route` — route external signals by funnel role
+- `POST /signals/narrative-context` — extract brief context block
+
+**Spring Boot** (`FunnelSignalController.java`):
+- `GET/PUT /api/v1/funnel-signals/config` — read/update per-tenant funnel_signal_config
+- `GET/POST /api/v1/funnel-signals/calendar` — list/add funnel_calendar_events
+- `DELETE /api/v1/funnel-signals/calendar/{eventId}` — remove event
+- `GET /api/v1/funnel-signals/narrative-context?funnelKey=investor` — proxies to ml-service
+
+#### 8-11 — Creative Production & Exploration Set-up (vision §19.10)
+
+**Migration V105** (`creative_setup.sql`):
+- `creatives.client_label` VARCHAR(32) — winner | loser | questionable
+- `creatives.informed_prior_alpha/beta` NUMERIC(10,4) DEFAULT 1.0 — informed Beta priors
+- `creative_aliases` table (RLS) — hook/body/CTA/voice variation stream aliases
+
+**Spring Boot** (`CreativeSetupController.java`):
+- `POST /api/v1/creative-setup/import-labels` — bulk import client labels with informed priors: winner→Beta(5,1), loser→Beta(1,5), questionable→Beta(2,2)
+- `GET /api/v1/creative-setup/labels` — list creatives with prior + graveyard status
+- `GET/POST /api/v1/creative-setup/aliases` — manage variation aliases per creative
+- `POST /api/v1/creative-setup/graveyard-entry` — register blocked creative in `creative_postmortems`
+
+#### 8-12 — Month-1 Deliverables (vision §19.15)
+
+**Spring Boot** (`Month1Controller.java`):
+- `GET /api/v1/month1/pixel-protection` — protected/sent counts, 7-day window
+- `GET /api/v1/month1/cost-per-held-call` — cost per CALL_HELD + vs-anchor %, 30-day window
+- `GET /api/v1/month1/noshow-rate` — per-variant no-show rate + days-to-significance estimate
+- `GET /api/v1/month1/summary` — all three widgets combined
+- `GET /api/v1/month1/compliance-status` — recent compliance pre-check audit
+
+**Frontend** (`frontend/src/app/(admin)/month1/page.tsx`):
+- Server component, fetches all 4 endpoints in parallel
+- Widget 1: Pixel protection stat cards
+- Widget 2: Cost per CALL_HELD table with color-coded vs-anchor column
+- Widget 3: No-show rate table with days-to-significance per variant
+- Open items panel from `GET /open-items`
+
+#### 8-13 — Open Items Registry (vision §19.16)
+
+**Spring Boot** (`OpenItemsController.java`):
+- `GET /api/v1/open-items` (with `?status=` and `?category=` filters)
+- 7 structured items: OI-1 deal cycle, OI-2 fall-through rate, OI-3 counsel/RegCF (legal-blocked), OI-4 funnel priority, OI-5 GHL data, OI-6 Meta pixel/event, OI-7 Universal Model vertical
+- Aggregate summary: total, open, high_impact_open, legal_blocked counts
+
+### Security & Compliance Checks
+
+- `REGCF_WAITLIST` audience: OI-3 note field explicitly states "MUST NOT be activated without legal clearance" — frozen in registry
+- `extract_narrative_context()`: test `test_narrative_context_no_meta_personal_attr` verifies no viewer-describing language in context lines
+- `route_signal_for_funnel()`: NARRATIVE path budget_multiplier = 1.0 always — budget decisions are DEMAND-only
+- RLS: both V104/V105 tables use standard `NULLIF(current_setting(...), '')::uuid` pattern with FORCE and `mai_app` GRANT
+- `informed_prior_alpha/beta`: only written by import endpoint — no spontaneous writes from experiment loop
+
+### Deferred Items (captured in roadmap)
+
+- GLM DEMAND/NARRATIVE routing split — awaits first live data
+- Test contour 2-anchor enforcement — enforced at launch time by 3-2 placement rule
+- Variation stream ingestion (12 OMM videos + evergreen) — requires client asset delivery
+- VoC import (220 inbound messages) — requires client data export
+- Open items OI-1 through OI-7 — resolved by client onboarding call
