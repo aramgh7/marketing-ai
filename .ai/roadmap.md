@@ -1,13 +1,15 @@
 # Marketing AI Platform — Roadmap
 
-> Version **[v1.1 — changed]** ~~1.0 — 2026-10-13~~ 1.1 — 2026-10-15 · **v1.1.1**: weather for client #1 corrected from OFF to critical (3-12)
-> First client: B2B hydrogel manufacturer (long sales cycle)
+> Version **[v1.1 — changed]** ~~1.0 — 2026-10-13~~ 1.1 — 2026-10-15 · **v1.1.1**: weather for client #1 corrected from OFF to critical (3-12) · **[v1.2 — changed]** **1.2 — 2026-10-17**: Phase 8 Client #1 Adaptation (vision §19, arch §16) · **[v1.3 — changed]** **1.3 — 2026-10-17**: 8-14 … 8-21 beyond-capability modules (vision §19.18, arch §16.13–16.21), additive
+> First client: **[v1.2 — changed]** ~~B2B hydrogel manufacturer (long sales cycle)~~ hydrogel manufacturer **raising capital — investor lead-gen funnel under Reg D 506(c)** (book a call → held call → accreditation → funds; $75K avg ticket). A secondary grower-facing funnel (webinar, field events) exists. See vision §19.
 > Business model: SaaS
-> Reference: vision-public.md v1.9.9 §23-24, architecture.md **[v1.1 — changed]** ~~v1.1~~ v1.2 (§15 Gap Closure Modules)
+> Reference: vision-public.md **[v1.2 — changed]** ~~v1.9.9 §23-24~~ v1.9.10 (§19, §23-24), architecture.md **[v1.1 — changed]** ~~v1.1~~ ~~v1.2 (§15 Gap Closure Modules)~~ **[v1.2 — changed]** v1.3 (§15 Gap Closure, §16 Client #1 Adaptation)
 >
 > **[v1.1 — added] v1.1 — gap closure against vision v1.9.9.** A full read of the vision found 35 mechanisms with no item in this roadmap (or only a deferred stub). They are added below as **unchecked** items inside the phase the vision assigns them, each tagged **[v1.1 — added]** with the vision § and the architecture §15 subsection. Phases previously marked COMPLETE keep that status for their *original* scope; the status table at the end now carries a separate "open v1.1 items" column so nothing is hidden behind a ✅. A consolidated index of all added items is in **"Gap Closure Index (v1.1)"** at the end.
 >
 > **Marking convention for v1.1 edits**: every touched place is tagged **[v1.1 — added]** or **[v1.1 — changed]**; replaced text kept ~~struck through~~.
+>
+> **[v1.2 — added] v1.2 — Phase 8.** The client questionnaire (vision §19) showed that client #1 is an investor funnel, not a B2B product sale. Several ✅ modules are coded on the old chain (0-5 CAPI gate, 2-6 reward map, 3-4 gates on CPA-per-booking). Phase 8 is the adaptation track: it does not reopen those items; it moves the funnel behind per-tenant configuration (arch §16.1) and adds the modules §19 introduces (follow-up bandit, securities compliance, investor offer schema). Items 8-1 … 8-3, 8-4 and 8-7 are **pre-onboarding** for client #1. Tag **[v1.2 — added]**.
 
 ---
 
@@ -61,7 +63,7 @@
 ### 0-5. Server-Side Tracking (sGTM / proxy) ✅
 
 - [x] Custom server-side proxy: Spring Boot IS the proxy (sGTM on GCP = optional external setup, not needed for MVP)
-- [x] CAPI quality gate (B2B §16.1): CRM_CALL_ANSWERED=Lead(×0.15), AppointmentUpdate_showed=Schedule(×0.40), OpportunityStatusUpdate_won=Purchase(×1.00)
+- [x] CAPI quality gate (B2B §16.1): CRM_CALL_ANSWERED=Lead(×0.15), AppointmentUpdate_showed=Schedule(×0.40), OpportunityStatusUpdate_won=Purchase(×1.00) **[v1.2 — changed]** → becomes the **B2B template row set** of `capi_event_map`; client #1 chain is 8-2 (arch §16.3)
 - [x] GHL webhook handler: POST /webhooks/ghl/{tenantId} → logs to ghl_webhook_log, links session by email, triggers CAPI pipeline
 - [x] CAPIForwardingService: builds Meta CAPI payload (SHA-256 hashed PII), posts to graph.facebook.com/v20.0/{pixel_id}/events, falls back to PENDING when no credentials
 - [x] `capi_events` log table (V12): tracks PENDING/SENT/FAILED/SKIPPED for every CAPI attempt
@@ -395,7 +397,7 @@
 - [x] `RewardController.java` — proxies to `POST {ML_SERVICE_URL}/decide/reward`
 - [x] `thompson_service.apply_reward()` — updates α/β, invalidates Redis cache
 - [x] FORM_SUBMIT on CTABlock calls `/public/reward` with decisionId (keepalive fetch)
-- [x] Reward map (arch v1.1 §4.4, binary only): all signals δ=1.0 — CTA_CLICK/FORM_START/FORM_SUBMIT/CALL_ANSWERED/MEETING_ATTENDED/CONVERSION/PURCHASE→α, NO_RESPONSE_7D→β
+- [x] Reward map (arch v1.1 §4.4, binary only): all signals δ=1.0 — CTA_CLICK/FORM_START/FORM_SUBMIT/CALL_ANSWERED/MEETING_ATTENDED/CONVERSION/PURCHASE→α, NO_RESPONSE_7D→β **[v1.2 — changed]** → reward events resolved through `FunnelService.stage_key` + `tenants.settings.reward_levels` (8-3); client #1: L1 `SLOT_SELECTED`, L2 `FORM_SUBMIT`, corrector `CALL_HELD`
 
 ### 2-7. A/B Dashboard (Bayesian) ✅
 
@@ -989,6 +991,184 @@
 
 ---
 
+## Phase 8 — Client #1 Adaptation: Investor Funnel (vision §19, arch §16) **[v1.2 — added]**
+
+> Goal: run client #1's real funnel (booking → held call → accreditation → funds) on the platform without forking code: funnel, CAPI chain and reward ladder become per-tenant configuration; the modules §19 introduces are added. Pre-onboarding set: **8-1, 8-2, 8-3, 8-4, 8-7**. Everything else follows once the first campaigns run under our control.
+
+### 8-1. Funnel as Configuration (vision §19.1–19.2; arch §16.1–16.2)
+
+- [x] `funnel_stages` + `capi_event_map` tables (V94) with RLS; `FunnelService.resolveStage(event) → stage_key`
+- [x] Seed the **B2B template** + **client #1** investor funnel (11 stages); `GhlWebhookService` updated to use DB-driven funnel
+- [x] New first-party events `CALENDAR_OPEN`, `SLOT_SELECTED`, `MATERIAL_VIEW`, `DATAROOM_OPEN` registered in `event_schemas`
+- [x] `appointments` + `booking_distance_h`, `slot_tz`, `lead_tz`, `coord_confirmed_at`, `followup_variant_id`; `sessions` + `self_accredited`, `ticket_bucket`, `accreditation_verified_at`, `funnel_key`
+- [ ] GHL mapping for custom fields: `accreditation_verified` → ACCRED_VERIFIED; ⚠️ coordinator-confirmation field/event name to confirm with client
+- [ ] `GET/PUT /api/v1/tenants/me/funnel`; admin page showing the stage ladder with weekly counts
+
+### 8-2. CAPI Chain v2 + Pixel Routing (vision §19.4; arch §16.3) — changes 0-5 `CAPIForwardingService`
+
+- [x] `CAPIForwardingService.forwardByStage()` reads `capi_event_map` + `evaluateCondition()`; existing B2B legacy gate preserved as fallback
+- [x] Client #1 rows seeded: BOOKED→Lead (accred→investor_primary; non-accred→future_regcf), CALL_HELD→Schedule, ACCRED_VERIFIED→CompleteRegistration, INVEST_COMMITTED→Purchase
+- [x] `meta_pixels.role_key` added to entity + repository (`findPixelIdByRole`, `findCapiTokenByRole`)
+- [x] `ValueFormulaService` + `tenants.value_coeffs` JSONB (V95); `k_accr` (yes=1.0, no=0.0), `k_ticket` (LT25K=0.3...GT250K=3.0)
+- [ ] ⚠️ Verify with Meta CAPI docs: value update for already-sent event_id
+- [ ] Onboarding step: CAPI live on client's pixel; EMQ check; dedup confirmed in Events Manager
+
+### 8-3. Reward Ladder + Gates on Held Calls (vision §19.3, §19.5; arch §16.6) — changes 2-3/2-6, 3-4, 2-12
+
+- [ ] `tenants.settings.reward_levels` (`L1 SLOT_SELECTED`, `L2 FORM_SUBMIT`, weights, `corrector CALL_HELD`) replaces the global `REWARD_ON_FORM_SUBMIT` flag (Audit F1) for tenants that define it; `/decide/reward` resolves via `stage_key`
+- [ ] Weekly **show-rate corrector** job: `CALL_HELD / BOOKED` per landing variant and per creative with Beta shrinkage → multiplicative weight on the L1/L2 combination (clipped 0.5–1.5); never an α/β increment
+- [ ] Gates (3-4): Gate 2 += `booking_rate`; Gate 3 = **cost per CALL_HELD vs anchor** + `P(show_rate < anchor) > 0.9` kill; `GateEvaluationService` reads the quality stage from `funnel_stages.is_quality_key`
+- [ ] Quality Score (2-12): `show_rate` component, highest default weight when the quality key is an appointment stage
+- [ ] **No-show attribution model** (3-1 extension): `logit(show_rate) = Σ β_j·atom_j + γ·booking_distance + δ·tz_known + segment`; β exported to brief (4-4) and clickbait detector (3-14)
+- [ ] Weekly report line: no-show rate with credible interval vs the client's target < 30 %
+
+### 8-4. Follow-up Sequence Optimisation — new module (vision §19.6; arch §16.5)
+
+- [x] `followup_variants` (cadence JSONB, channels, audience BOOKED/NO_SHOW/FORM_NO_SLOT, is_control, lifecycle_state, alpha/beta) + `followup_assignments` (appointment UNIQUE, context_key, outcome) with RLS (V97)
+- [x] FastAPI `POST /decide/followup`: Thompson sampling, classify_context() {intl/domestic} × {high/low ticket}, exploration_rate 15%
+- [x] `POST /decide/followup/auto-pause`: Monte Carlo 2000 trials, P(worse)>0.95 AND ESS≥100
+- [x] `POST /decide/followup/show-rate-posterior`: Beta posterior, 90% CI
+- [x] `FollowupController.java`: CRUD variants, submit/approve lifecycle, assignFollowup(), recordOutcome(), GET /report
+- [x] `FollowupAutoPauseScheduler.java`: hourly auto-pause check; control arm NEVER paused
+- [ ] Spring: on BOOKED set the variant's `ghl_tag` on contact → GHL workflow executes
+- [ ] Initial variant set with the client: agenda confirmation, WhatsApp for intl, 48h/24h/2h/15m cadence
+- [ ] Templates pass text compliance (2-11 + 8-7 rulebases) before ACTIVE
+
+### 8-5. Form Self-Qualification + Value Calibration (vision §19.7, §19.14; arch §16.4) — extends 3-21
+
+- [ ] Weekly self-report calibration: P(ACCRED_VERIFIED | self_accredited = yes) per creative and ticket bucket; below-threshold creatives → `k_accr` scaled down via the 6-7 retrospective mechanism (cap 30 %)
+- [ ] Weekly stage-value refresh: `expected_value_usd` per stage from closed cohorts (min 20) replacing the §19.2 seeds
+- [ ] `capi_value_mode = AB` run for client #1: value vs fixed, compared on cost per CALL_HELD and verified share
+- [ ] Landing: browser-timezone capture (`SLOT_SELECTED.browser_tz`) + one-click confirmation; `lead_tz` written to the appointment so the coordinator call stops being a timezone check
+
+### 8-6. Landing Atoms for the Booking Funnel (vision §19.8) — content for 2-2 / 2-3
+
+- [ ] Variants over: calendar window (2 / 4 / 7 days), qualification order (before / after calendar / two-step), timezone field, proof type (adoption speed / field footage / founder / round structure), CTA wording (compliance-approved set), pre-call page on/off, form length (7 / 5 fields)
+- [ ] Reward L1 = `SLOT_SELECTED`, L2 = `FORM_SUBMIT`, corrector `CALL_HELD` (8-3) — optimum is bookings that **show up**, not bookings
+- [ ] Message match (2-9): landing headline generated from the source creative's hook; `match_score` calibrated on CALL_HELD, not only bookings
+- [ ] The client's two prepared A/B landing versions enter as the first two Thompson variants; their "what convinces people" answer ([уточню]) becomes atom hypotheses when it arrives
+
+### 8-7. Securities-Marketing Compliance (vision §19.9; arch §16.7) — extends 2-11, 2-9, 2-10, 6-5
+
+- [x] `compliance_rulebases` (platform-wide, no RLS) + `approved_phrases` (RLS) tables (V96); seeded META_FINANCIAL (5 rules), META_PERSONAL_ATTR (5 rules), SEC_506C (3 rules), CLIENT_LEGAL (2 rules)
+- [x] `META_PERSONAL_ATTR` rule set: "Are you an accredited investor?" → FAIL; "Open to accredited investors" → PASS
+- [x] `check_text_against_rules()`, `run_compliance_check()`, `check_meta_personal_attr()`, `is_from_approved_phrases()` in compliance_service.py
+- [x] `POST /compliance/check`, `/check/personal-attr`, `/check/approved-phrases` in ML service
+- [x] `ComplianceController`: GET/GET rulebases, GET/POST approved-phrases, POST pre-check (proxy to ML service)
+- [ ] SEC_506C rule set to be reviewed with client's counsel; ⚠️ Meta financial-services ad requirements per country of delivery
+- [ ] `approved_phrases` seeded from CEO + lawyer-approved texts; content generation (2-9) integration
+
+### 8-8. Investor Offer Atom Schema (vision §19.11; arch §16.8) — changes 2-2 `variant_offers`, 3-19
+
+- [ ] `offer_atom_schemas` per tenant/vertical; `variant_offers.atoms JSONB`; legacy B2B columns kept
+- [ ] `INVESTOR_RAISE` schema: first-touch format (call / webinar / event / video presentation), entry threshold shown (none / from $25K / from $50K), proof type, urgency (none / round close date / allocation left — must be real), founder presence, follow-up offer (agenda / round materials before call / none)
+- [ ] `OfferValidator` validates against the tenant schema; for `INVESTOR_RAISE` the margin-floor rule is replaced by **compliance PASS on the offer text**; Dynamic Offer Explorer (3-19) generates over the schema
+
+### 8-9. Attribution Across GHL Sub-Accounts and Agencies (vision §19.12; arch §16.9) — changes 0-5 linking, 3-2
+
+- [ ] `ghl_subaccounts(location_id, role MAIN/AGENCY/WEBINAR/MAILING, webhook_secret)`; webhooks registered on every sub-account; opportunities read from MAIN only
+- [ ] On FORM_SUBMIT write `mai_event_id` + `mai_session_id` into GHL contact custom fields (P1) **before** any transfer; linking order custom fields → email/phone hash → UTM last
+- [ ] Agency accounts as test contours: `meta_pixels` TEST role per agency; winner → client primary via confirmation run (3-2)
+- [ ] Dashboard: creative attribution extended past CALL_HELD to ACCRED_VERIFIED and FUNDS_RECEIVED; `creative_aliases` for legacy creative names (events)
+- [ ] Daily funnel integrity check: BOOKED (GHL) vs `Schedule` (Meta) vs FORM_SUBMIT (first-party); delta > 10 % → alert
+
+### 8-10. External Signals Role per Funnel (vision §19.13; arch §16.10) — config on 3-12
+
+- [ ] `tenants.settings.funnels` with `weather_role` (`NARRATIVE` for investor, `DEMAND` for grower events/webinar) and `news_tags` (`drought`, `water_policy`, `agtech_funding`); sessions tagged `funnel_key` from the landing
+- [ ] GLM uses `weather_bucket` only for DEMAND funnels; NARRATIVE funnels take drought/news via topic tags + sentiment
+- [ ] Calendar: `round_close_date`, PTI (Illinois) and Missouri event dates, webinar dates
+- [ ] Test contour for client #1 launches with **2 anchors** (evergreen UGC scripts with compliant voice-over) + 3–5 cells — enforced by the 3-2 placement rule
+
+### 8-11. Creative Production & Exploration Set-up (vision §19.10) — uses 1-2, 4-2, 4-4, 6-5, 3-17
+
+- [ ] Creative DNA of the client's evergreen winners (UGC Script 1/3/5, "The speed of adoption") and of blocked/disabled creatives → informed priors (3-6) and graveyard entries with reasons
+- [ ] Import the client dashboard's winner / loser / questionable labels as expert ratings (3-17)
+- [ ] Variation stream from the 12 OMM videos + evergreen footage: hook × body × CTA, new voice-over, final lines + CTA (4-2); Voice-as-Atom (5-6) enabled for voice-over variants now, not Phase 5+
+- [ ] VoC (1-7): import the client's 220 analysed inbound messages as the objection taxonomy; brief (4-4) gains "objections to address" + approved-phrase constraints
+
+### 8-12. Month-1 Deliverables for Client #1 (vision §19.15) — dashboard
+
+- [ ] Widget: leads **not** sent to the investor pixel this week (non-accredited routed to `future_regcf`; no-shows withheld) — the first measurable pixel protection
+- [ ] Widget: cost per CALL_HELD per creative with CI vs anchor (what the CPTO does by hand today)
+- [ ] Widget: no-show rate per follow-up variant vs control, with date-to-significance
+- [ ] Compliance pre-check available in admin for every new text before upload
+
+### 8-13. Open Items to Resolve with the Client (vision §19.16)
+
+- [ ] Deal cycle first touch → funds (sets 6-7 window and holdout horizon)
+- [ ] Fall-through rate after INVEST_COMMITTED and its timing (churn-penalty input)
+- [ ] Counsel's answer on marketing to the non-accredited segment before a Reg CF round is announced
+- [ ] Which funnel first: investor or grower-facing (changes weather role and offer schema defaults)
+- [ ] GHL data availability: booking distance vs show, show by timezone/country, show by slot time of day
+- [ ] ⚠️ Meta: `value` update by `event_id`; `CompleteRegistration` vs custom event for held call; financial-services ad rules per delivery country
+- [ ] Universal Model vertical (0.5a): client #1's niche is "investor lead-gen / high-ticket financial offers", not "B2B manufacturing" — decide the first flywheel vertical
+
+### 8-14 … 8-21. Beyond the Client's Current Capabilities (vision §19.18; arch §16.13–16.21) **[v1.3 — added]**
+
+> Additive only: new tables, columns with defaults, endpoints, jobs. No existing contract, migration or ✅ item changes. Order = priority from vision §19.18.
+
+### 8-14. Funnel Path as a Thompson Arm (vision §19.18.1; arch §16.14) — extends 2-1, 2-2, 2-3
+
+- [ ] `funnel_paths` table + `landing_variants.funnel_path_id` (nullable; NULL = current path A, so all existing variants behave as before)
+- [ ] Path definitions for client #1: A `CALL_4D` (current), B `MATERIALS_FIRST` (founder video + data-room-light → engagement gate → invite to call), C `TIERED_BY_TICKET` (< $50K webinar / ≥ $50K 1:1 / ≥ $250K founder call), D `CALL_24H` (coordinator slot within 24 h, then team call)
+- [ ] New block components `MaterialsBlock`, `DataRoomBlock`, `WebinarRegBlock`; events `MATERIAL_VIEW`, `DATAROOM_OPEN` (+ existing `VIDEO_PROGRESS`) registered in `event_schemas`
+- [ ] `PathGateService`: evaluates path B's engagement gate on ingest → GHL tag triggers the booking-invitation workflow (reuses 8-4 tag → workflow mechanism)
+- [ ] Path reward arms: `thompson_arms` rows with `reward_event = CALL_HELD` and `INVEST_COMMITTED`, normalised per 1 000 `PAGE_VIEW` by the existing recalc; landing-content arms (8-3) untouched
+- [ ] `GET/POST/PUT /api/v1/funnel-paths`, `POST …/{id}/approve`; dashboard: CALL_HELD and INVEST_COMMITTED per 1 000 LPV by path with P(best) and date-to-significance
+
+### 8-15. No-Show Propensity, Risk-Tiered Handling, Slot Overbooking (vision §19.18.2; arch §16.15) — extends 5-2, 8-4, 2-1
+
+- [ ] FastAPI `POST /propensity/noshow` (new router beside `/propensity/score`): target `CALL_HELD` on historical appointments; features = session behaviour + `booking_distance_h`, `lead_tz` known, `ticket_bucket`, `self_accredited`, `creative_id`, device, country; rule-based fallback until holdout AUC ≥ 0.70; model in existing `propensity_models`
+- [ ] `noshow_scores` table; score on `BOOKED`; `risk_tier` written into `followup_assignments.context` so `/decide/followup` conditions on it — add HIGH-risk arms: "coordinator call ≤ 15 min + nearer slot", "offer path-B materials instead of call"
+- [ ] `slot_capacity_policies` + `SlotCapacityService`: per-slot `P(no one shows) = Π(1 − p_show)`; keep slot open while above `1 − target_fill` and bookings < `max_overbook`; GHL workflow for double-show (coordinator takes second lead, priority reschedule); default `enabled = false`, per calendar
+- [ ] `GET /api/v1/booking/window?session_id=` → dynamic calendar window from pre-booking score (LOW risk → nearest slots; HIGH → warm-up day); widget falls back to variant's configured window
+- [ ] Report: show rate by risk tier; team-slot fill rate; AUC on rolling holdout
+
+### 8-16. Predicted Lead Value at Day 0 (vision §19.18.3; arch §16.16) — extends 8-2 `value_formula`, 3-21
+
+- [ ] FastAPI `POST /predict/lead-value`: `p_show (8-15) × p_verified|show (8-5 calibration) × p_invest|verified (segment constant, seed 0.21 until ≥ 20 outcomes) × E[ticket|bucket]`; returns value + components + `model_version`
+- [ ] `ValueFormulaService` token `predicted_value` (additive; existing `base·k_accr·k_ticket` formulas unaffected); client #1 `FORM_SUBMIT → Lead` row switches to `predicted_value` after calibration passes
+- [ ] `lead_value_predictions` table; `ProxyCalibrationJob` fills `realised` and reports predicted-vs-realised by decile; weekly refit
+- [ ] Acceptance: calibration slope 0.8–1.2 on ≥ 200 realised leads before `predicted_value` is the live formula; actual-event sends (8-2) continue unchanged
+
+### 8-17. Compliance by Construction + Staged Moderation Probe + Reviewer Persona (vision §19.18.4; arch §16.17) — extends 2-9, 8-7, 3-2, 3-22
+
+- [ ] `POST /content/generate` flag `compose_from_approved = true`: sentences only from `approved_phrases` (by context) + slot fills; anything outside returned as `new_phrases[]` flagged `needs_legal`; legal review UI shows only `new_phrases`; free-form mode stays default
+- [ ] `launchTestBatch(..., moderationProbe = true)` (new optional parameter, default false): $5–10/day probe ad set per new creative; Meta sync (P2) polls review status → `moderation_results`; REJECTED → graveyard `blocked_by_meta` + recovery job (8-7) **before** real budget
+- [ ] Persona `META_REVIEWER` in `personas` with rulebases as traits; `POST /persona/score` for `AD_TEXT` → pre-verdict; weekly accuracy vs `moderation_results`; never blocks a launch
+- [ ] KPIs: ads shipped/week (target 20), Meta block rate before/after, brief-to-launch time, share of phrases needing legal review
+
+### 8-18. Post-Call Intelligence (vision §19.18.5; arch §16.18) — extends 4-1 Whisper, 1-7 VoC, 8-4 follow-up
+
+- [ ] `call_recordings` (with `consent_recorded`, required true) + `call_objections`; `POST /api/v1/calls/recordings` webhook (GHL / Zoom cloud recording / upload); ⚠️ recording-consent rules per US state — client's counsel
+- [ ] Whisper transcription (existing client) + PII redaction (1-7); `POST /voc/extract-objections` with `source_type = CALL`; objections linked to source creative, `ticket_bucket`, `stage_after`
+- [ ] Follow-up audience `HELD`: material-sequence variants after the call; reward `INVEST_COMMITTED` with intermediate `DATAROOM_OPEN` / second appointment as early rewards (same arm structure as 8-4)
+- [ ] Outputs: objection frequency by creative/segment widget; brief (4-4) section "asked on calls"; path-B materials (8-14) seeded from top objections
+- [ ] Report: held → commit conversion by cohort before/after; objection coverage by pre-call materials
+
+### 8-19. Investor Archetypes (vision §19.18.6; arch §16.19) — extends 5-1, 5-4, 5-5, 5-8
+
+- [ ] `fit_clusters` optional features: `ticket_bucket`, `self_accredited`, `MATERIAL_VIEW`/`DATAROOM_OPEN` dwell, return-visit count; seeded labels (ag insider / HNW generalist / family-office analyst / impulsive); stored in existing `behavior_clusters`
+- [ ] `archetype_policies(cluster_label → funnel_path_id, first_touch_format, followup_audience_override, brief_segment)`; read by `/decide/landing` (path eligibility), `/decide/followup`, `brief/generate-data-driven`
+- [ ] Custom Audiences per archetype via existing 5-5 sync; 7.5 % control group unchanged
+- [ ] Report: CALL_HELD and INVEST_COMMITTED lift, personalised vs control, per archetype
+
+### 8-20. Agency Measurability (vision §19.18.7; arch §16.20) — extends 3-2, 3-4, 4-4
+
+- [ ] `creative_sources(kind AGENCY/INHOUSE/CREATOR)` + `creatives.source_id` (nullable); creator random effect (4-4) groups by `source_id` when `creator_id` is null
+- [ ] Gate summary (3-4) and weekly report: per-source cost per `CALL_HELD`, verified share, show rate with credible intervals; agency ad sets enter the unified test contour via 8-9
+- [ ] Contractor report for the client's PM: P(source A better than B on cost per held call)
+
+### 8-21. Reg CF Waitlist as an Asset (vision §19.18.8; arch §16.20) — extends 8-2 `future_regcf`, 8-4, 5-5
+
+- [ ] Follow-up audience `REGCF_WAITLIST` for `self_accredited = false` leads; intermediate rewards `EMAIL_OPEN`, `REPLY`, `INTEREST_CONFIRMED`; `max_touches` cap; content and cadence gated on counsel's answer (8-13 item 3)
+- [ ] `waitlist_value_estimates` weekly: `n_leads × p_convert_regcf × avg_ticket_regcf` with CI from tenant-set priors until a Reg CF round provides outcomes
+- [ ] Dashboard widget "waitlist value"; `GET /api/v1/waitlist/value`
+
+**Phase 8 exit criteria**: client #1's funnel runs from `funnel_stages`; CAPI sends Lead/Schedule/CompleteRegistration/Purchase with values and routes non-accredited leads away from the investor pixel; Thompson on landings rewards `SLOT_SELECTED`/`FORM_SUBMIT` with the `CALL_HELD` corrector; at least two follow-up variants run against the client's current cadence with show-rate reported; every new creative text passes the securities rulebases before upload; the dashboard attributes creatives to held calls and funds. **[v1.3 — added]** Beyond-capability set (8-14 … 8-21): at least two funnel paths run against path A with CALL_HELD per 1 000 LPV reported; no-show score has holdout AUC ≥ 0.70 and drives follow-up arms; `predicted_value` is calibrated (slope 0.8–1.2) and live on `Lead`; new creatives pass a moderation probe before real budget; call objections appear in the brief.
+
+---
+
 ## Bug List
 
 _(empty — project not started)_
@@ -1010,8 +1190,9 @@ _(empty — project not started)_
 | Phase 6   | **COMPLETE**    | 6-1 ✅ 6-2 ✅ 6-3 ✅ 6-4 ✅ 6-5 ✅ 6-6 ✅ **6-7 ✅ 6-8 ✅**                                                    | 6-1 survival model; 6-4 coherence/GLM ranking/interactions; 6-5 re-review; **6-6 release blocked on 3-17/3-18**; **6-9** marketplace skeleton; entropy diversity penalty wiring to 6-4 deferred |
 | Phase 0.5 | **IN PROGRESS** | 0.5a not started (needs 5+ clients); 0.5b: feature store ✅ hierarchy ✅ red flags ✅ (Block D)                  | first-party-only benchmarks ✅, client-level A/B (deferred), Meta terms check (0.5a) |
 | Phase 7   | **COMPLETE**    | 7-1 Google ✅ 7-2 TikTok ✅ 7-3 Decision graph ✅ 7-4 MMM ✅ 7-5 Attribution ✅                                   | — |
+| **[v1.2 — added]** Phase 8 | **NOT STARTED** | Client #1 adaptation (vision §19, arch §16) | pre-onboarding: **8-1** funnel config, **8-2** CAPI v2 + pixel routing, **8-3** reward ladder + gates on held calls, **8-4** follow-up bandit, **8-7** securities compliance; then 8-5, 8-6, 8-8 … 8-13. **[v1.3 — added]** Beyond-capability: **8-14** funnel paths, **8-15** no-show propensity + overbooking, **8-16** predicted lead value, **8-17** compliance by construction + moderation probe, **8-18** post-call intelligence, **8-19** archetypes, **8-20** agency measurability, **8-21** Reg CF waitlist |
 
-**Immediate priority**: ~~Phase 7 (Multi-Channel) or Phase 0.5 (Universal Cross-Niche Model) — Phase 6 complete~~ **[v1.1 — changed]** Before onboarding client #1 on anything above ADVISOR: the Phase 0 items (0-11, 0-12, 0-13), then Phase 2 content path (2-9 → 2-10 → 2-11, 2-12), then the Phase 3 protective set in this order — 3-15 queue → 3-13 Site Health → 3-14 anchors → 3-12 external signals → 3-16 recovery → 3-17/3-18 autonomy + OPE (unlocks 6-6). Phase 7 and 0.5 after that.
+**Immediate priority**: ~~Phase 7 (Multi-Channel) or Phase 0.5 (Universal Cross-Niche Model) — Phase 6 complete~~ **[v1.1 — changed]** Before onboarding client #1 on anything above ADVISOR: the Phase 0 items (0-11, 0-12, 0-13), then Phase 2 content path (2-9 → 2-10 → 2-11, 2-12), then the Phase 3 protective set in this order — 3-15 queue → 3-13 Site Health → 3-14 anchors → 3-12 external signals → 3-16 recovery → 3-17/3-18 autonomy + OPE (unlocks 6-6). Phase 7 and 0.5 after that. **[v1.2 — changed]** With all v1.1 items ✅, the immediate priority is **Phase 8 pre-onboarding set (8-1 → 8-2 → 8-3 → 8-7 → 8-4)**: the implemented CAPI gate, reward map and gates are coded on the wrong funnel for client #1, and nothing should go live on their account until they read the configured funnel.
 
 ---
 
@@ -1056,3 +1237,21 @@ _(empty — project not started)_
 | G33 | §3.1, §15.6 | Profit-per-impression reward | 3-23 | §15.17 |
 | G34 | §7.3 st.5 | Segment → retargeting creative map | 5-5 | §15.21 |
 | G35 | §24 v1.9.9 | Month-1 client view (Quality-Gate savings, date-to-significance) | 2-14 | §15.21 |
+| **[v1.2 — added]** G36 | §19.1–19.4 | Funnel as configuration; client #1 funnel; CAPI chain v2 + pixel routing | 8-1, 8-2 | §16.1–16.3 |
+| **[v1.2 — added]** G37 | §19.3, §19.5 | Reward ladder L1–L6; show-rate corrector; gates on cost per held call; no-show attribution | 8-3 | §16.6 |
+| **[v1.2 — added]** G38 | §19.6 | Follow-up Sequence Optimisation (new module) | 8-4 | §16.5 |
+| **[v1.2 — added]** G39 | §19.7, §19.14 | Self-qualification value, calibration, timezone capture | 8-5 | §16.4 |
+| **[v1.2 — added]** G40 | §19.8 | Booking-funnel landing atoms | 8-6 | — |
+| **[v1.2 — added]** G41 | §19.9 | Securities compliance rulebases, approved phrases, blocked-creative recovery | 8-7 | §16.7 |
+| **[v1.2 — added]** G42 | §19.11 | Investor offer atom schema | 8-8 | §16.8 |
+| **[v1.2 — added]** G43 | §19.12 | Attribution across GHL sub-accounts / agency pixels; dashboard to funds | 8-9 | §16.9 |
+| **[v1.2 — added]** G44 | §19.13 | External-signal role per funnel; 2 anchors at launch | 8-10 | §16.10 |
+| **[v1.2 — added]** G45 | §19.10, §19.15, §19.16 | Creative set-up, month-1 widgets, open client items | 8-11, 8-12, 8-13 | — |
+| **[v1.3 — added]** G46 | §19.18.1 | Funnel path as Thompson arm | 8-14 | §16.14 |
+| **[v1.3 — added]** G47 | §19.18.2 | No-show propensity, risk-tiered handling, slot overbooking, dynamic window | 8-15 | §16.15 |
+| **[v1.3 — added]** G48 | §19.18.3 | Predicted lead value at day 0 | 8-16 | §16.16 |
+| **[v1.3 — added]** G49 | §19.18.4 | Compliance by construction, moderation probe, reviewer persona | 8-17 | §16.17 |
+| **[v1.3 — added]** G50 | §19.18.5 | Post-call intelligence; follow-up for HELD stage | 8-18 | §16.18 |
+| **[v1.3 — added]** G51 | §19.18.6 | Investor archetypes → path / touch / brief | 8-19 | §16.19 |
+| **[v1.3 — added]** G52 | §19.18.7 | Agency measurability (creative sources) | 8-20 | §16.20 |
+| **[v1.3 — added]** G53 | §19.18.8 | Reg CF waitlist value | 8-21 | §16.20 |
