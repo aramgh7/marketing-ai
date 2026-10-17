@@ -515,3 +515,29 @@ class CalibrationRequest(BaseModel):
 def form_calibrate_value(req: CalibrationRequest):
     from app.services.form_qualification_service import calibrate_value_coefficients
     return calibrate_value_coefficients(req.calibration_log, req.min_samples)
+
+
+# ── Experiment stopping rules (8-8) ───────────────────────────────────────────
+
+class ExperimentCheckRequest(BaseModel):
+    arms: list[dict]
+    min_ess: int = 200
+    auto_stop_p: float = 0.95
+
+
+@router.post("/experiment/should-conclude")
+def experiment_should_conclude(req: ExperimentCheckRequest):
+    from app.services.experiment_service import should_conclude
+    return should_conclude(req.arms, req.min_ess, req.auto_stop_p)
+
+
+@router.post("/experiment/check-pause")
+def experiment_check_pause(req: ExperimentCheckRequest):
+    from app.services.experiment_service import check_auto_pause
+    return check_auto_pause(req.arms, min_ess_pause=50, p_threshold=0.95)
+
+
+@router.post("/experiment/ranked-arms")
+def experiment_ranked_arms(req: ExperimentCheckRequest):
+    from app.services.experiment_service import thompson_best_arm
+    return thompson_best_arm(req.arms)

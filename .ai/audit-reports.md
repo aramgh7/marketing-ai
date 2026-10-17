@@ -4181,3 +4181,38 @@ SAFETY RULES (19.6):
 - `self_accredited=false` → `future_regcf` pixel only (enforced by `capi_event_map.send_condition`)
 - Thompson reward = binary 1.0 on quality gate ONLY; micro_reward_weight for analytics calibration only
 - `quality_gate_log` has UNIQUE index on (session_id, variant_id, stage_key) — prevents double-rewarding
+
+## Audit 033 — Phase 8: A/B Lifecycle + Niche Benchmarks + Attribution
+**Date:** 2026-10-17
+**Scope:** 8-8, 8-9, 8-10
+
+### 8-8 A/B Experiment Lifecycle
+- [x] V101: experiments + experiment_events (RLS), landing_variants.experiment_id + is_control
+- [x] experiment_service.py: thompson_best_arm (MC 5000), should_conclude (P>0.95 ESS≥200), check_auto_pause (P>0.95 ESS≥50)
+- [x] ExperimentService.java: full lifecycle DRAFT→CONCLUDED; auto-stop/pause via FastAPI /decide/experiment/...
+- [x] ExperimentController: GET/POST /experiments, /submit, /approve, /start, /{id}/results, /{id}/events
+- [x] ExperimentMonitorScheduler: hourly, all ACTIVE experiments checked
+
+### 8-9 Niche Benchmarks
+- [x] V102: niche_benchmarks (no RLS — aggregate), tenants.niche_key
+- [x] niche_benchmark_service.py: aggregate floor ≥5 tenants enforced, show_rate p50/p75, form_to_booked_p50, booking_distance_h_p50
+- [x] NicheBenchmarkScheduler: daily 03:00 UTC, ONLY first-party events — no Meta Platform data (§25 p.19)
+- [x] NicheBenchmarkController: GET /benchmarks/niche/{key}, GET /benchmarks/my-performance
+- [x] Benchmark routes added to attribution.py router (/attribution/benchmarks/compute, /attribution/benchmarks/compare)
+
+### 8-10 Attribution
+- [x] V103: touchpoints + attribution_credits (RLS)
+- [x] attribution_service.py: last_touch, linear, time_decay, data_driven added (non-destructive append to existing Markov/Shapley service)
+- [x] attribution.py router: POST /attribution/run, POST /attribution/mta (preserved)
+- [x] AttributionController: POST /attribution/touchpoint, GET /attribution/session/{id}, GET /attribution/channel-report
+
+### Security & Compliance
+- Aggregate floor enforced: value=NULL if tenant_count < 5 (§25 p.19)
+- Niche benchmarks: ONLY first-party events from appointments/reward_events/form_submissions
+- Auto-conclude: only by Bayesian P>0.95 AND ESS≥200 — no premature winner declaration (§9.1)
+- Control arm never auto-paused in experiment lifecycle
+- thompson_arms sole-writer rule preserved: FastAPI notified via /decide/experiment/... endpoints
+
+### Test Results
+- Python: 761 PASS, 0 FAIL (new: 23 tests across 3 files)
+- Java: BUILD SUCCESSFUL
