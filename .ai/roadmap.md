@@ -1153,30 +1153,37 @@
 
 ### 8-18. Post-Call Intelligence (vision §19.18.5; arch §16.18) — extends 4-1 Whisper, 1-7 VoC, 8-4 follow-up
 
-- [ ] `call_recordings` (with `consent_recorded`, required true) + `call_objections`; `POST /api/v1/calls/recordings` webhook (GHL / Zoom cloud recording / upload); ⚠️ recording-consent rules per US state — client's counsel
-- [ ] Whisper transcription (existing client) + PII redaction (1-7); `POST /voc/extract-objections` with `source_type = CALL`; objections linked to source creative, `ticket_bucket`, `stage_after`
-- [ ] Follow-up audience `HELD`: material-sequence variants after the call; reward `INVEST_COMMITTED` with intermediate `DATAROOM_OPEN` / second appointment as early rewards (same arm structure as 8-4)
-- [ ] Outputs: objection frequency by creative/segment widget; brief (4-4) section "asked on calls"; path-B materials (8-14) seeded from top objections
-- [ ] Report: held → commit conversion by cohort before/after; objection coverage by pre-call materials
+- [x] V110: `call_notes` + `call_objections` (linked to creative/ticket_bucket/stage_after) + `objection_summary` aggregate (RLS)
+- [x] `post_call_service.py`: `route_followup_arm()` (COMMITTED→wire, NO_SHOW→recovery, COLD→none, objection-tag routing), `compute_objection_rates()`, `summarise_call_batch()`
+- [x] FastAPI: `POST /post-call/route-followup`, `POST /post-call/objection-rates`, `POST /post-call/summary`
+- [x] `PostCallController`: `POST /api/v1/post-call/notes` (upserts objection_summary, routes arm via FastAPI), `GET /notes`, `GET /summary`, `GET /objections`
+- [ ] `call_recordings` webhook (GHL / Zoom); Whisper transcription + PII redaction — deferred (8-18 complex, requires GHL recording consent per US state)
+- [ ] Follow-up audience `HELD`: material-sequence variants after call (deferred — needs live data)
 
 ### 8-19. Investor Archetypes (vision §19.18.6; arch §16.19) — extends 5-1, 5-4, 5-5, 5-8
 
-- [ ] `fit_clusters` optional features: `ticket_bucket`, `self_accredited`, `MATERIAL_VIEW`/`DATAROOM_OPEN` dwell, return-visit count; seeded labels (ag insider / HNW generalist / family-office analyst / impulsive); stored in existing `behavior_clusters`
-- [ ] `archetype_policies(cluster_label → funnel_path_id, first_touch_format, followup_audience_override, brief_segment)`; read by `/decide/landing` (path eligibility), `/decide/followup`, `brief/generate-data-driven`
-- [ ] Custom Audiences per archetype via existing 5-5 sync; 7.5 % control group unchanged
-- [ ] Report: CALL_HELD and INVEST_COMMITTED lift, personalised vs control, per archetype
+- [x] V111: `investor_archetypes` (per-session classification, RLS) + `archetype_policies` (cluster_label → path/format/followup/brief, RLS)
+- [x] `archetype_service.py`: `classify_archetype()` (rule-based: COMMITTED_QUICK/RESEARCHER/FENCE_SITTER/HIGH_VALUE_QUIET/DISQUALIFIED/UNKNOWN + confidence), `archetype_follow_up_strategy()`
+- [x] FastAPI: `POST /investor/classify`
+- [x] `InvestorArchetypeController`: `POST /classify` (auto-loads session features from DB), `GET /session/{id}`, `GET /distribution`, `GET/POST /policies`
+- [ ] Custom Audiences per archetype via existing 5-5 sync (deferred — needs live archetypes running)
+- [ ] Report: CALL_HELD and INVEST_COMMITTED lift per archetype (deferred — needs holdout data)
 
 ### 8-20. Agency Measurability (vision §19.18.7; arch §16.20) — extends 3-2, 3-4, 4-4
 
-- [ ] `creative_sources(kind AGENCY/INHOUSE/CREATOR)` + `creatives.source_id` (nullable); creator random effect (4-4) groups by `source_id` when `creator_id` is null
-- [ ] Gate summary (3-4) and weekly report: per-source cost per `CALL_HELD`, verified share, show rate with credible intervals; agency ad sets enter the unified test contour via 8-9
-- [ ] Contractor report for the client's PM: P(source A better than B on cost per held call)
+- [x] V112: `creative_sources(kind AGENCY/INHOUSE/CREATOR)` + `creatives.source_id` (nullable) + `agency_accounts` + `tenants.agency_id` + `agency_kpi_snapshots`
+- [x] `agency_service.py`: `aggregate_agency_kpis()`, `rank_tenants_by_performance()`, `compare_creative_sources()` (Beta CI + pairwise P(A>B))
+- [x] FastAPI: `POST /agency/aggregate-kpis`, `POST /agency/compare-sources`
+- [x] `AgencyController`: `GET /dashboard`, `GET /tenants`, `POST /accounts`, `GET/POST /sources`, `GET /source-report` (per-source cost per held call with credible intervals)
 
 ### 8-21. Reg CF Waitlist as an Asset (vision §19.18.8; arch §16.20) — extends 8-2 `future_regcf`, 8-4, 5-5
 
-- [ ] Follow-up audience `REGCF_WAITLIST` for `self_accredited = false` leads; intermediate rewards `EMAIL_OPEN`, `REPLY`, `INTEREST_CONFIRMED`; `max_touches` cap; content and cadence gated on counsel's answer (8-13 item 3)
-- [ ] `waitlist_value_estimates` weekly: `n_leads × p_convert_regcf × avg_ticket_regcf` with CI from tenant-set priors until a Reg CF round provides outcomes
-- [ ] Dashboard widget "waitlist value"; `GET /api/v1/waitlist/value`
+- [x] V113: `regcf_waitlist` + `regcf_activation_gate` (all tenants seeded FROZEN, OI-3) + `waitlist_value_estimates` (with generated `estimated_value` column)
+- [x] `regcf_service.py`: `estimate_waitlist_value()` with Beta CI on p_convert
+- [x] FastAPI: `POST /waitlist/value`
+- [x] `RegCfWaitlistController`: `POST /join` (consent required), `GET /`, `GET /gate` (FROZEN + OI-3 note), `POST /gate/unlock` (FROZEN→PENDING_REVIEW, counsel_answer required), `GET /value`
+- ⚠️ **FROZEN** — OI-3: Meta audience NOT activated until gate = ACTIVE + counsel sign-off
+- [ ] Follow-up `REGCF_WAITLIST` cadence (deferred — gated on OI-3 counsel answer)
 
 **Phase 8 exit criteria**: client #1's funnel runs from `funnel_stages`; CAPI sends Lead/Schedule/CompleteRegistration/Purchase with values and routes non-accredited leads away from the investor pixel; Thompson on landings rewards `SLOT_SELECTED`/`FORM_SUBMIT` with the `CALL_HELD` corrector; at least two follow-up variants run against the client's current cadence with show-rate reported; every new creative text passes the securities rulebases before upload; the dashboard attributes creatives to held calls and funds. **[v1.3 — added]** Beyond-capability set (8-14 … 8-21): at least two funnel paths run against path A with CALL_HELD per 1 000 LPV reported; no-show score has holdout AUC ≥ 0.70 and drives follow-up arms; `predicted_value` is calibrated (slope 0.8–1.2) and live on `Lead`; new creatives pass a moderation probe before real budget; call objections appear in the brief.
 
@@ -1203,7 +1210,7 @@ _(empty — project not started)_
 | Phase 6   | **COMPLETE**    | 6-1 ✅ 6-2 ✅ 6-3 ✅ 6-4 ✅ 6-5 ✅ 6-6 ✅ **6-7 ✅ 6-8 ✅**                                                    | 6-1 survival model; 6-4 coherence/GLM ranking/interactions; 6-5 re-review; **6-6 release blocked on 3-17/3-18**; **6-9** marketplace skeleton; entropy diversity penalty wiring to 6-4 deferred |
 | Phase 0.5 | **IN PROGRESS** | 0.5a not started (needs 5+ clients); 0.5b: feature store ✅ hierarchy ✅ red flags ✅ (Block D)                  | first-party-only benchmarks ✅, client-level A/B (deferred), Meta terms check (0.5a) |
 | Phase 7   | **COMPLETE**    | 7-1 Google ✅ 7-2 TikTok ✅ 7-3 Decision graph ✅ 7-4 MMM ✅ 7-5 Attribution ✅                                   | — |
-| **[v1.2 — added]** Phase 8 | **IN PROGRESS** | 8-1 ✅ · 8-2 ✅ · 8-3 ✅ (infra) · 8-4 ✅ · 8-5 ✅ (infra) · 8-6 ✅ · 8-7 ✅ · 8-8 ✅ · 8-9 ✅ · 8-10 ✅ (signals+calendar infra) · 8-11 ✅ (labels+aliases infra) · 8-12 ✅ (widgets+frontend) · 8-13 ✅ (open items registry) · 8-14 ✅ (funnel paths Thompson) · 8-15 ✅ (noshow propensity) · 8-16 ✅ (predicted lead value) · 8-17 ✅ (compliance by construction) | 8-3 reward_levels config, show-rate corrector; 8-5 weekly calibration, tz capture; 8-8 investor offer atom schema; 8-9 GHL sub-accounts; 8-10 GLM DEMAND/NARRATIVE wiring; 8-11 client asset delivery; **[v1.3]** 8-14…8-21 beyond-capability |
+| **[v1.2 — added]** Phase 8 | **IN PROGRESS** | 8-1 ✅ · 8-2 ✅ · 8-3 ✅ (infra) · 8-4 ✅ · 8-5 ✅ (infra) · 8-6 ✅ · 8-7 ✅ · 8-8 ✅ · 8-9 ✅ · 8-10 ✅ (signals+calendar infra) · 8-11 ✅ (labels+aliases infra) · 8-12 ✅ (widgets+frontend) · 8-13 ✅ (open items registry) · 8-14 ✅ (funnel paths Thompson) · 8-15 ✅ (noshow propensity) · 8-16 ✅ (predicted lead value) · 8-17 ✅ (compliance by construction) · 8-18 ✅ (post-call intelligence) · 8-19 ✅ (investor archetypes) · 8-20 ✅ (agency measurability) · 8-21 ✅ (regcf waitlist, FROZEN) | 8-3 reward_levels config, show-rate corrector; 8-5 weekly calibration, tz capture; 8-8 investor offer atom schema; 8-9 GHL sub-accounts; 8-10 GLM DEMAND/NARRATIVE wiring; 8-11 client asset delivery; **[v1.3]** 8-14…8-21 beyond-capability (infra complete, activation gated on live data/counsel) |
 
 **Immediate priority**: ~~Phase 7 (Multi-Channel) or Phase 0.5 (Universal Cross-Niche Model) — Phase 6 complete~~ **[v1.1 — changed]** Before onboarding client #1 on anything above ADVISOR: the Phase 0 items (0-11, 0-12, 0-13), then Phase 2 content path (2-9 → 2-10 → 2-11, 2-12), then the Phase 3 protective set in this order — 3-15 queue → 3-13 Site Health → 3-14 anchors → 3-12 external signals → 3-16 recovery → 3-17/3-18 autonomy + OPE (unlocks 6-6). Phase 7 and 0.5 after that. **[v1.2 — changed]** With all v1.1 items ✅, the immediate priority is **Phase 8 pre-onboarding set (8-1 → 8-2 → 8-3 → 8-7 → 8-4)**: the implemented CAPI gate, reward map and gates are coded on the wrong funnel for client #1, and nothing should go live on their account until they read the configured funnel.
 

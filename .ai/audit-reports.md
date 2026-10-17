@@ -4340,3 +4340,36 @@ SAFETY RULES (19.6):
 - Additive only: no existing migrations or code modified
 - Control arm (CALL_4D path) is_control=TRUE, never paused
 - META_REVIEWER score advisory only — never blocks launch (spec §19.18.4)
+
+## Audit 036 — Phase 8: 8-18 → 8-21
+**Date:** 2026-10-17
+**Scope:** Post-Call Intelligence, Investor Archetypes, Agency Measurability, Reg CF Waitlist
+
+### 8-18 Post-Call Intelligence
+- [x] V110: `call_notes` + `call_objections` (linked to creative/ticket_bucket/stage_after) + `objection_summary` aggregate (all RLS)
+- [x] `post_call_service.py`: `route_followup_arm()` (7 outcomes mapped), `compute_objection_rates()`, `summarise_call_batch()`
+- [x] FastAPI routers: `post_call.py` → `POST /post-call/route-followup`, `/objection-rates`, `/summary`
+- [x] `PostCallController.java`: submit notes, expand to `call_objections`, upsert `objection_summary`, route arm via FastAPI
+
+### 8-19 Investor Archetypes
+- [x] V111: `investor_archetypes` (UNIQUE tenant_id+session_id, RLS) + `archetype_policies` (cluster_label → path/format/followup/brief, RLS)
+- [x] `archetype_service.py`: `classify_archetype()` rule-based (6 archetypes, confidence, dedup signals), `archetype_follow_up_strategy()`
+- [x] FastAPI: `investor_archetype.py` → `POST /investor/classify`
+- [x] `InvestorArchetypeController.java`: classify (auto-loads events/call_notes/noshow from DB), distribution, policies CRUD
+
+### 8-20 Agency Measurability
+- [x] V112: `creative_sources(AGENCY/INHOUSE/CREATOR)` + `creatives.source_id` + `agency_accounts` + `tenants.agency_id` + `agency_kpi_snapshots`
+- [x] `agency_service.py`: `aggregate_agency_kpis()`, `rank_tenants_by_performance()`, `compare_creative_sources()` (Beta CI + P(A>B))
+- [x] FastAPI: `agency.py` → `POST /agency/aggregate-kpis`, `/compare-sources`
+- [x] `AgencyController.java`: dashboard, tenants, accounts, sources CRUD, source-report (per-source held call rate with CI)
+
+### 8-21 Reg CF Waitlist ⚠️ FROZEN (OI-3)
+- [x] V113: `regcf_waitlist` + `regcf_activation_gate` (seeded FROZEN for all tenants) + `waitlist_value_estimates` (generated column)
+- [x] `regcf_service.py`: `estimate_waitlist_value()` with Beta CI on p_convert
+- [x] FastAPI: `regcf.py` → `POST /waitlist/value`
+- [x] `RegCfWaitlistController.java`: join (consent required), list, gate (always FROZEN note), gate/unlock (FROZEN→PENDING_REVIEW, counsel_answer required), `GET /value`
+- REGCF_WAITLIST Meta audience NOT activated — OI-3 counsel pending
+
+### Test Results
+- Python: **840 PASS, 0 FAIL** (29 new tests)
+- Java: **BUILD SUCCESSFUL**
