@@ -26,6 +26,7 @@ public class GhlWebhookService {
     private final AppointmentService appointmentService;
     private final FunnelService funnelService;
     private final ValueFormulaService valueFormulaService;
+    private final RewardService rewardService;
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Transactional
@@ -72,6 +73,19 @@ public class GhlWebhookService {
                     selfAccredited, ticketBucket,
                     payload.getDealValue(), null,
                     valueFormulaService);
+            // Reward ladder: notify RewardService of reached stage (8-3)
+            if (sessionId != null) {
+                try {
+                    UUID sid = UUID.fromString(sessionId);
+                    // variant_id from session (best-effort — may be null for old sessions)
+                    String variantIdStr = lookupVariantId(sessionId, tenantId);
+                    if (variantIdStr != null) {
+                        rewardService.onStageReached(tenantId, sid, UUID.fromString(variantIdStr), stageKey);
+                    }
+                } catch (Exception e) {
+                    log.warn("Reward stage notification failed: {}", e.getMessage());
+                }
+            }
         } else {
             // Legacy B2B quality gate fallback
             String capiKey = CAPIForwardingService.resolveGhlKey(
@@ -203,6 +217,17 @@ public class GhlWebhookService {
         try {
             return jdbc.queryForObject(
                     "SELECT ticket_bucket FROM sessions WHERE id = ?::uuid AND tenant_id = ? LIMIT 1",
+                    String.class, sessionId, tenantId);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String lookupVariantId(String sessionId, UUID tenantId) {
+        if (sessionId == null) return null;
+        try {
+            return jdbc.queryForObject(
+                    "SELECT variant_id::text FROM sessions WHERE id = ?::uuid AND tenant_id = ? LIMIT 1",
                     String.class, sessionId, tenantId);
         } catch (Exception e) {
             return null;

@@ -4142,3 +4142,42 @@ SAFETY RULES (19.6):
 - MetaPixel.role_key добавлен через Hibernate entity (не через отдельную миграцию — колонка уже создана в V94)
 
 Следующий блок: 8-3 (Accreditation Verification) -> 8-5 (Show-Rate Dashboard) -> 8-6 (No-Show Recovery)
+
+## Audit 032 — Phase 8: Reward Ladder + Form Qualification + Landing Atoms
+**Date:** 2026-10-17
+**Scope:** 8-3, 8-5, 8-6
+
+### 8-3 Reward Ladder
+- [x] V98: `reward_events` + `quality_gate_log` (RLS + FORCE + GRANT mai_app)
+- [x] `funnel_stages.reward_weight` + `micro_reward_weight` columns (analytics only — NOT for thompson_arms)
+- [x] `reward_service.py`: `compute_stage_reward` (binary 1.0 on quality stage only), `compute_funnel_progress_score`, `estimate_quality_rate`
+- [x] `RewardService.java`: `onStageReached()` → writes `reward_events` → notifies FastAPI `/thompson/reward` (sole writer, binary increment)
+- [x] `RewardController.java`: `GET /api/v1/reward/ladder`, `POST /api/v1/reward/stage-reached`
+- [x] `GhlWebhookService.java`: `rewardService.onStageReached()` wired after `capiService.forwardByStage()`
+
+### 8-5 Form Self-Qualification
+- [x] V99: `form_submissions` + `value_calibration_log` (RLS)
+- [x] `form_qualification_service.py`: `validate_form_payload`, `classify_ticket_bucket`, `compute_lead_score`, `calibrate_value_coefficients`
+- [x] FastAPI: `POST /form/lead-score`, `POST /form/validate`, `POST /form/calibrate-value`
+- [x] `FormSubmissionController.java`: `POST /api/v1/form/submit` (updates sessions.self_accredited + ticket_bucket), `GET /api/v1/form/calibration-report`
+- [x] Value calibration log populated at FORM_SUBMIT using formula from `capi_event_map`
+
+### 8-6 Landing Atoms
+- [x] V100: 5 new atom types inserted into `atom_registry` (booking_calendar, accreditation_checkbox, ticket_selector, social_proof_investors, disclaimer_506c)
+- [x] `BookingCalendar.tsx`: iframe + CALENDAR_OPEN (onLoad) + SLOT_SELECTED (postMessage) first-party events
+- [x] `AccreditationCheckbox.tsx`: "I confirm I am an accredited investor" — self-assertion (NOT "Are you accredited?" — FORBIDDEN per META_PERSONAL_ATTR)
+- [x] `TicketSelector.tsx`: 5 buckets LT25K…GT250K
+- [x] `Disclaimer506c.tsx`: Reg D 506(c) mandatory legal text
+- [x] `SocialProofInvestors.tsx`: approved-phrases compliant blockquotes
+- [x] `LandingRenderer.tsx`: all 5 new atom types wired; `useState formData` tracks self_accredited + ticket_bucket
+
+### Test Results
+- Python: **738 PASS**, 0 FAIL (154s)
+- Java: **BUILD SUCCESSFUL**
+
+### Security & Compliance
+- META_PERSONAL_ATTR enforced in AccreditationCheckbox: "I confirm I am an accredited investor" (self-assertion) NOT "Are you accredited?" (FORBIDDEN)
+- Disclaimer506c mandatory component for investor-funnel landings
+- `self_accredited=false` → `future_regcf` pixel only (enforced by `capi_event_map.send_condition`)
+- Thompson reward = binary 1.0 on quality gate ONLY; micro_reward_weight for analytics calibration only
+- `quality_gate_log` has UNIQUE index on (session_id, variant_id, stage_key) — prevents double-rewarding

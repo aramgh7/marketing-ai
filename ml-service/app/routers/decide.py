@@ -443,3 +443,75 @@ def followup_show_rate_posterior(req: ShowRatePosteriorRequest):
             req.showed, req.total, req.prior_alpha, req.prior_beta)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+# ─── Reward Ladder endpoints (8-3) ────────────────────────────────────────────
+
+class StageRewardRequest(BaseModel):
+    stage_key: str
+    is_quality_stage: bool = False
+    funnel_stages: list[dict] = []
+
+
+@router.post("/reward/compute-stage")
+def reward_compute_stage(req: StageRewardRequest):
+    from app.services.reward_service import compute_stage_reward
+    return compute_stage_reward(req.stage_key, req.is_quality_stage, req.funnel_stages)
+
+
+class FunnelProgressRequest(BaseModel):
+    reached_stages: list[str]
+    funnel_stages: list[dict]
+
+
+@router.post("/reward/funnel-progress")
+def reward_funnel_progress(req: FunnelProgressRequest):
+    from app.services.reward_service import compute_funnel_progress_score
+    return compute_funnel_progress_score(req.reached_stages, req.funnel_stages)
+
+
+class QualityRateRequest(BaseModel):
+    reward_events: list[dict]
+    variant_id: str
+    days: int = 30
+
+
+@router.post("/reward/quality-rate")
+def reward_quality_rate(req: QualityRateRequest):
+    from app.services.reward_service import estimate_quality_rate
+    return estimate_quality_rate(req.reward_events, req.variant_id, req.days)
+
+
+# ─── Form Self-Qualification endpoints (8-5) ──────────────────────────────────
+
+class LeadScoreRequest(BaseModel):
+    self_accredited: Optional[bool] = None
+    ticket_bucket: Optional[str] = None
+    k_ticket: Optional[dict] = None
+
+
+@router.post("/form/lead-score")
+def form_lead_score(req: LeadScoreRequest):
+    from app.services.form_qualification_service import compute_lead_score
+    return compute_lead_score(req.self_accredited, req.ticket_bucket, req.k_ticket)
+
+
+class ValidateFormRequest(BaseModel):
+    payload: dict
+
+
+@router.post("/form/validate")
+def form_validate(req: ValidateFormRequest):
+    from app.services.form_qualification_service import validate_form_payload
+    return validate_form_payload(req.payload)
+
+
+class CalibrationRequest(BaseModel):
+    calibration_log: list[dict]
+    min_samples: int = 20
+
+
+@router.post("/form/calibrate-value")
+def form_calibrate_value(req: CalibrationRequest):
+    from app.services.form_qualification_service import calibrate_value_coefficients
+    return calibrate_value_coefficients(req.calibration_log, req.min_samples)
