@@ -7,9 +7,12 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -19,6 +22,7 @@ import java.util.UUID;
 public class TenantController {
 
     private final TenantService tenantService;
+    private final JdbcTemplate  jdbc;
 
     /**
      * Store Meta Marketing API credentials for the current tenant.
@@ -40,6 +44,37 @@ public class TenantController {
     public ResponseEntity<Void> updateSettings(@RequestBody Map<String, String> body) {
         tenantService.updateSettings(currentTenant(), body);
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Record OAuth scopes granted by the current tenant (vision §12.7).
+     * Called after successful OAuth callback to log what scopes were actually granted.
+     */
+    @PutMapping("/me/oauth-scopes")
+    public ResponseEntity<Void> recordOAuthScopes(
+            @RequestParam String provider,
+            @RequestBody List<String> scopes) {
+        UUID tenantId = currentTenant();
+        String[] scopeArr = scopes.toArray(new String[0]);
+        jdbc.update("""
+            INSERT INTO tenant_oauth_scopes (tenant_id, provider, scopes)
+            VALUES (?, ?, ?)
+            ON CONFLICT (tenant_id, provider)
+            DO UPDATE SET scopes = EXCLUDED.scopes, granted_at = now(), revoked_at = NULL
+            """, tenantId, provider.toUpperCase(), scopeArr);
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Get recorded OAuth scopes for this tenant.
+     */
+    @GetMapping("/me/oauth-scopes")
+    public ResponseEntity<List<Map<String, Object>>> getOAuthScopes() {
+        UUID tenantId = currentTenant();
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT provider, scopes, granted_at FROM tenant_oauth_scopes WHERE tenant_id = ?",
+            tenantId);
+        return ResponseEntity.ok(rows);
     }
 
     private UUID currentTenant() {

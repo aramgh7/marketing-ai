@@ -8,9 +8,12 @@ from typing import Optional
 
 from app.models import creative_dna
 from app.services import db_client, job_store
-from app.services.fraud_l2_service import run_layer2_checks, compute_suspicious_share
+from app.services.fraud_l2_service import run_layer2_checks, compute_suspicious_share, check_night_hour_burst
 from app.services.diagnostics_service import run_diagnostics, compute_lpv_click_gap
 from app.services.calibration_service import compute_calibration_report
+from app.services.segment_re_service import rank_atoms_by_segment
+from app.services.ope_service import compute_ope, passes_ope_gate
+from app.services.form_check_service import check_form_health
 
 _ML_BASE = os.getenv("ML_SERVICE_URL", "http://localhost:8000")
 _INTERNAL_KEY = os.getenv("INTERNAL_API_KEY", "")
@@ -205,3 +208,57 @@ async def _run_analysis(job_id: str, req: AnalyzeCreativeRequest) -> None:
             "creative_id": req.creative_id,
             "error": str(exc),
         })
+
+
+# ── Segment Random Effects ────────────────────────────────────────────────────
+
+class SegmentEffectsRequest(BaseModel):
+    atom_segment_data: list[dict]
+    global_mean: float = 0.05
+
+
+@router.post("/segment-effects")
+def segment_effects(req: SegmentEffectsRequest):
+    return {"ranked": rank_atoms_by_segment(req.atom_segment_data, req.global_mean)}
+
+
+# ── OPE / IPS ─────────────────────────────────────────────────────────────────
+
+class OpeRequest(BaseModel):
+    decisions: list[dict]
+    current_policy_probs: dict = {}
+    w_max: float = 10.0
+    min_ess: float = 200.0
+
+
+@router.post("/ope/ips")
+def ope_ips(req: OpeRequest):
+    result = compute_ope(req.decisions, req.current_policy_probs, req.w_max, req.min_ess)
+    result["passes_gate"] = passes_ope_gate(result, req.min_ess)
+    return result
+
+
+# ── Night-Hour Burst ──────────────────────────────────────────────────────────
+
+class NightBurstRequest(BaseModel):
+    events: list[dict]
+    burst_threshold: int = 10
+    window_minutes: int = 15
+
+
+@router.post("/fraud/night-burst")
+def night_burst(req: NightBurstRequest):
+    return check_night_hour_burst(req.events, req.burst_threshold, req.window_minutes)
+
+
+# ── Form Health ───────────────────────────────────────────────────────────────
+
+class FormHealthRequest(BaseModel):
+    form_endpoint_url: str
+    test_payload: Optional[dict] = None
+    timeout_seconds: float = 5.0
+
+
+@router.post("/form-health")
+def form_health(req: FormHealthRequest):
+    return check_form_health(req.form_endpoint_url, req.test_payload, req.timeout_seconds)

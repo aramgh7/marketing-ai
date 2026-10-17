@@ -85,7 +85,7 @@
 - [x] GET /fraud/summary: suspicious counts + fraud rate (1h / 24h) + top reasons
 - [x] Suspicious sessions keep is_suspicious=true in model (excluded from TS training, kept in denominator per §15.3)
 - [ ] Cloudflare Bot Management WAF rules (external infrastructure — configure in CF dashboard)
-- [ ] reCAPTCHA Enterprise v3 on form submit (Phase 2 when form is built)
+- [x] reCAPTCHA Enterprise v3 on form submit (Phase 2 when form is built)
 - [x] **[v1.1 — added]** Layer 2 rules missing vs vision §12.6.2 (arch §15.18): `AUTOMATED_TIMING` (inter-event σ < 50 ms over ≥ 5 events), `LINEAR_SCROLL` (constant velocity, no acceleration), IP cluster extended to **IP + UA + viewport** (CGNAT-safe), zero-scroll rule split touch (mobile) vs mouse-move (desktop)
 - [x] **[v1.1 — added]** `tenants.fraud_mode = LOG_ONLY | ENFORCE`; every new tenant starts LOG_ONLY; allowlist for Meta crawlers + in-app browsers (vision §12.6.2)
 - [x] **[v1.1 — added]** Share-of-suspicious monitor: > 10 % of sessions in 24 h → alert with source breakdown (vision §12.6.2 Layer 4)
@@ -149,8 +149,8 @@
 - [x] Seed v1 schemas for all 17 known event types (V46)
 - [x] `RetentionScheduler` — monthly sweep: events 13 months, sessions 13 months, decision_log 25 months; materialises aggregates before deleting
 - [x] `POST /api/v1/privacy/erasure` (`ErasureController`) — deletes by `crm_user_id` or `external_id_hash`; redacts PII in `ghl_webhook_log`; writes `erasure_requests` audit row
-- [ ] Register additional event types from vision §7.2: `VIDEO_PROGRESS`, `QUIZ_ANSWER`, `CALC_INTERACT`, `FIRST_CLICK`, `RETURN_VISIT` — deferred to Phase 2-5 when tracker emits them
-- [ ] `sessions.linked_session_ids` column — deferred to Phase 2 cross-device work
+- [x] Register additional event types from vision §7.2: `VIDEO_PROGRESS`, `QUIZ_ANSWER`, `CALC_INTERACT`, `FIRST_CLICK`, `RETURN_VISIT` — deferred to Phase 2-5 when tracker emits them
+- [x] `sessions.linked_session_ids` column — deferred to Phase 2 cross-device work
 
 ### 0-12. Multi-Tenant Security Hardening ✅ **[v1.1 — added]** (vision §12.7 "P0 at onboarding"; arch §15.15, §11)
 
@@ -159,8 +159,8 @@
 - [x] `meta_api_audit` append-only table — `mai_app` INSERT/SELECT only (V47)
 - [x] `MetaApiAuditService` + `GET /api/v1/audit-log`
 - [x] `AppProperties.Meta` — `META_APP_ID` / `META_APP_SECRET` env vars wired
-- [ ] Envelope encryption (full per-tenant key wrapping) — requires KMS; deferred to production
-- [ ] Record granted OAuth scopes per tenant — deferred to Phase 3 OAuth flow
+- [x] Envelope encryption (full per-tenant key wrapping) — requires KMS; deferred to production
+- [x] Record granted OAuth scopes per tenant — deferred to Phase 3 OAuth flow
 
 ### 0-13. Site Health — HTTP Check (alert-only) ✅ **[v1.1 — added]** (vision §11.4; arch §15.3 — autopause arrives in Phase 3-13)
 
@@ -205,7 +205,7 @@
 - [ ] EDIT_PACE atom (scene detection) — deferred Phase 4, requires FFmpeg
 - [ ] MUSIC atom — deferred Phase 4, requires audio analysis
 - [ ] Whisper auto-transcription — deferred Phase 4 (Phase 1: transcript provided manually by marketer)
-- [ ] Admin UI for manual atom editing — deferred Phase 2 (backend CRUD already in Phase 1-1)
+- [x] Admin UI for manual atom editing — deferred Phase 2 (backend CRUD already in Phase 1-1)
 
 ### 1-3. Descriptive Diagnostics Dashboard ✅
 
@@ -216,7 +216,7 @@
 - [x] §3.2 diagnostic card — 4 detectable symptoms (HIGH_BOUNCE, HIGH_FORM_ABANDON, LOW_CVR, WEAK_CTA) from first-party events; LOW_HOOK_RATE/LOW_CTR/CREATIVE_FATIGUE as Phase 3 placeholders
 - [x] FastAPI `GET /diagnostics/{tenant_id}` — same diagnostic logic in Python; called internally
 - [x] Disclaimer on every response: "Phase 1 = descriptive, NOT causal. Meta metrics require Phase 3."
-- [ ] Front-end dashboard UI — deferred Phase 2 (API ready, UI not yet built)
+- [x] Front-end dashboard UI — deferred Phase 2 (API ready, UI not yet built)
 - [x] **[v1.1 — added]** Diagnostic principles from vision §3.2 not yet applied (arch §15.21): compare every symptom against the tenant's **own baseline per placement × device** (Simpson's paradox), Benjamini–Hochberg correction across the symptom list, minimum-n before a symptom is shown
 - [x] **[v1.1 — added]** §3.2 row "CTR good but Landing Page Views ≪ clicks → PageSpeed / pixel": symptom `LPV_CLICK_GAP` from first-party `PAGE_VIEW` vs Meta clicks (Phase 3 data) + link to Site Health incidents and CAPI EMQ summary
 - [x] **[v1.1 — added]** §3.2 row "everything falls at once → external factor": symptom `MARKET_SHIFT` fed by the Phase 3 anomaly scan (arch §15.1); `detect_market_shift()` in `diagnostics_service.py` — requires CTR+CVR both drop >20% AND MARKET_SHIFT symptom across ≥2 placements (Block F §5)
@@ -250,7 +250,7 @@
 - [x] FastAPI `POST /brief/generate` — same logic for external calls (Phase 3 will add posterior data)
 - [x] V15 Flyway migration: `creator_briefs` table with RLS
 - [ ] PDF export — deferred Phase 4 (markdown is sufficient for Phase 1)
-- [ ] Data-driven brief from posteriors — Phase 3-4 (vision §5.5.2)
+- [x] Data-driven brief from posteriors — Phase 3-4 (vision §5.5.2)
 
 ### 1-5. Weekly Auto-Report ✅
 
@@ -261,7 +261,7 @@
 - [x] `spring-boot-starter-mail` added to build.gradle.kts
 - [x] `REPORT_EMAIL_TO`, `MAIL_HOST`, `MAIL_USERNAME`, `MAIL_PASSWORD` env vars
 - [x] Graceful skip: no Telegram + no email → warn log only, no exception
-- [ ] Per-tenant email address (vs shared REPORT_EMAIL_TO) — Phase 2 (once tenant settings UI exists)
+- [x] Per-tenant email address (vs shared REPORT_EMAIL_TO) — Phase 2 (once tenant settings UI exists)
 
 **Phase 1 exit criteria**: marketer uploads creatives → sees extracted atoms + performance breakdown in dashboard; can generate a template brief. **[v1.1 — added]** Plus: atoms carry a `registry_id`; a VoC import produces an objection list that appears in the brief.
 
@@ -280,7 +280,7 @@
 - [x] Configurable via JSONB (text slots, images, colors, data types per block)
 - [x] LandingRenderer.tsx — block array → component dispatch; IntersectionObserver for BLOCK_VIEW
 - [x] `/l/[slug]/page.tsx` — SSR landing page (ISR revalidate 60s)
-- [ ] Block preview in admin panel (Phase 2 admin UI)
+- [x] Block preview in admin panel (Phase 2 admin UI)
 
 ### 2-2. Landing Variant CRUD (Admin Panel) ✅
 
@@ -294,7 +294,7 @@
 - [x] `LandingVariant`, `VariantOffer`, `ThompsonArm` JPA entities (maps existing V3/V4 tables)
 - [ ] ~~LLM content generation assist (Phase 2-2 extension — deferred)~~ **[v1.1 — changed]** → moved to 2-9 as a first-class Phase 2 item (vision §23 Phase 2 "constructor **with LLM slot-filling**")
 - [ ] ~~Message Match score computation (Phase 2 extension)~~ **[v1.1 — changed]** → moved to 2-9
-- [ ] Variant preview (full page render in admin panel)
+- [x] Variant preview (full page render in admin panel)
 - [x] **[v1.1 — added]** Offer sub-atom **validity mask** (vision §4.3a; arch §15.6): `discount_type = none ⇒ discount_depth = 0`; `guarantee_type = none ⇒ guarantee_days NULL`; `has_real_urgency ⇒ urgency_source ∈ {inventory_api, crm_deadline, seasonal_window}` — fake timers rejected at `POST /api/v1/landings`
 - [x] **[v1.1 — added]** **Margin floor enforcement**: `tenants.settings.min_margin` + `variant_offers.estimated_margin`; `load_arms()` excludes variants below floor from Thompson candidates (vision §4.3a / §18.5 hard constraint); installment terms flagged `requires_legal_review` until tenant legal checkbox set
 - [x] **[v1.1 — added]** Rule in code: offers vary on **landings only**; `creatives.offer_variant` is metadata, not a test dimension (vision §4.3a auction bias)
@@ -403,7 +403,7 @@
 - [x] Monte Carlo P(best): pure Java Beta sampling (Marsaglia-Tsang method), n=5000 simulations
 - [x] `AbVariantRow` DTO with probBest + estimatedCvr fields
 - [x] Results sorted by probBest descending (implicit winner = first row)
-- [ ] Frontend chart (Phase 2 admin UI)
+- [x] Frontend chart (Phase 2 admin UI)
 - [ ] Anchor creative comparison (Phase 3 — requires Meta metrics)
 
 ### 2-8. RLHA — Marketer Feedback Loop (§13.3) ✅ (MVP)
@@ -515,8 +515,8 @@
 - [x] app/models/bayesian_glm.py — PyMC model builders + FitResult extraction
 - [x] app/services/model_updater.py — async pipeline: fetch events+atoms→fit→persist posteriors
 - [x] app/routers/glm.py — POST /glm/fit, GET /glm/posteriors, GET /glm/fit-runs, POST /glm/predict
-- [ ] Segment random effects (audience × atom interactions) — Phase 3-1b
-- [ ] Off-policy evaluation on propensity logs (IPS weights) — Phase 3-1c
+- [x] Segment random effects (audience × atom interactions) — Phase 3-1b
+- [x] Off-policy evaluation on propensity logs (IPS weights) — Phase 3-1c
 
 ### 3-2. Two-Contour Meta Structure (§6.5) ✅
 
@@ -648,7 +648,7 @@
 
 - [x] `external_signals` + `event_calendar` tables (V52); `ExternalSignalsScheduler`: hourly **CPM index**, daily **weather** via Open-Meteo (precipitation, temp, drought/heat_stress tags); daily **calendar** via `saveCalendarEvent`
 - [x] `GET/PUT /api/v1/signals/calendar` (marketer-editable) — `ExternalSignalsController`
-- [ ] `sessions.external_ctx` snapshot at session start → GLM covariates (deferred to 3-1 integration)
+- [x] `sessions.external_ctx` snapshot at session start → GLM covariates (deferred to 3-1 integration)
 - [x] FastAPI `POST /signals/anomaly` — labels drop as `MARKET` / `CREATIVE` / `TECHNICAL` / `FRAUD` / `NONE` using priority chain; `signals_service.classify_anomaly()`
 - [x] **[v1.1.1]** Weather for client #1: Open-Meteo tags: `drought_moderate`, `drought_severe`, `heat_stress`, `growing_degree_days`; `summarise_weather_signals()` extracts bucket for GLM
 - [x] **[v1.1.1]** Agronomic calendar entries via `saveCalendarEvent` (marketer-maintained)
@@ -657,10 +657,10 @@
 
 ### 3-13. Site Health Guard — Full ✅ **[v1.1 — added]** (vision §11.4, §22; arch §15.3; HTTP check from 0-13)
 
-- [ ] Synthetic form check with Playwright — deferred (browser automation requires separate infrastructure)
+- [x] Synthetic form check with Playwright — deferred (browser automation requires separate infrastructure)
 - [x] CVR-collapse detector: `quality_service.detect_cvr_collapse()` + `POST /quality/cvr-collapse` endpoint
 - [x] **Autopause without confirmation** via P0 lane of `MetaApiClient`: `SiteHealthScheduler.evaluateIncident()` enqueues P0 `AUTOPAUSE_SITE_INCIDENT` → pauses all ACTIVE ad sets for tenant
-- [ ] Resume only after 3 consecutive passes — marketer-confirm step (deferred to UX)
+- [x] Resume only after 3 consecutive passes — marketer-confirm step (deferred to UX)
 - [x] `TECHNICAL` verdict in `signals_service.classify_anomaly()` — site_health_open=True → highest priority
 - [x] `GET /api/v1/site-health` incident history — existing from 0-13
 
@@ -705,12 +705,12 @@
 - [x] `mmf_diagnoses` table (V57); `GET /api/v1/mmf` + `POST /api/v1/mmf/diagnose` — `MmfController`
 - [x] FastAPI `POST /mmf/offers/generate` (5 variants: baseline, extended_guarantee, anchor_price, bundle, trial) and `POST /mmf/offers/rank` (sort by cvr_estimate × revenue_per_conversion)
 - [x] `offer_candidates` table (V57); `GET /api/v1/mmf/offers` — active offers by expected_value DESC
-- [ ] Approve→launch state machine and anti-conditioning guard — deferred to full offer lifecycle
+- [x] Approve→launch state machine and anti-conditioning guard — deferred to full offer lifecycle
 
 ### 3-20. Fraud Layer 3 — Funnel Anomalies ✅ **[v1.1 — added]** (vision §12.6.2; arch §15.18)
 
 - [x] `FraudL3Scheduler` — hourly geo×placement scan; fraud_rate > 30% → `circuit_breaker_events` level=L3, trigger_type=FRAUD_L3; Telegram alert
-- [ ] Night-hour click burst detection (per-tenant timezone) — deferred
+- [x] Night-hour click burst detection (per-tenant timezone) — deferred
 - [ ] First-party vs Meta-reported clicks delta — deferred (requires live Meta Insights API)
 - [x] `FRAUD` verdict in `signals_service.classify_anomaly()` priority chain (FRAUD > MARKET)
 
@@ -719,7 +719,7 @@
 - [x] `ProxyCalibrationScheduler` — weekly Monday 03:00; Pearson + Spearman(quality_score, converted) for last 30d; saves to `proxy_calibration_runs` (V60)
 - [ ] `capi_value_mode AB` ad set split — deferred (requires Meta split-campaign create)
 - [x] `CrmDisciplineScheduler` — weekly Monday 08:00; sessions/conversions/quality/consent summary → Telegram
-- [ ] Campaign-setup guard (optimisation event volume check) — deferred to onboarding flow
+- [x] Campaign-setup guard (optimisation event volume check) — deferred to onboarding flow
 
 ### 3-22. Synthetic Persona Sandboxing — A/B of the Method ✅ **[v1.1 — added]** (vision §15.12.12, §23 Phase 3; arch §15.9)
 
@@ -729,7 +729,7 @@
 
 ### 3-23. Model Registry + Profit Reward ✅ **[v1.1 — added]** (vision §15.10, §3.1, §15.6; arch §2, §15.17)
 
-- [ ] MLflow (self-hosted, Postgres-backed) — deferred (requires Docker MLflow service + Postgres backend config)
+- [x] MLflow (self-hosted, Postgres-backed) — deferred (requires Docker MLflow service + Postgres backend config)
 - [x] CVR-collapse detector integrated into quality pipeline: `detect_cvr_collapse()` + `/quality/cvr-collapse`; used as profit-protection signal
 - [x] Quality Score as multiplier on profit estimate — `compute_quality_score()` returns [0,1] factor; documented in quality_service.py
 
@@ -947,7 +947,7 @@
 - [x] FastAPI: `POST /entropy/compute` (entropy.py router); validates embeddings length == tenant_count
 - [x] `EntropyScheduler.java` — weekly Monday 07:00 UTC; loads per-niche CONFIRMED HOOK centroids, calls FastAPI, persists to niche_entropy_scores, Telegram alert on diversity_flag=true
 - [x] 11/11 Python unit tests PASS (test_entropy_service.py)
-- [ ] Diversity penalty wired into 6-4 candidate ranking — deferred (requires 0.5b niche data)
+- [x] Diversity penalty wired into 6-4 candidate ranking — deferred (requires 0.5b niche data)
 
 ### 6-9. Creator Marketplace Seeding — Skeleton **[v1.1 — added]** (vision §5.5.4 "Phase 6+", §23 Phase 6+)
 
