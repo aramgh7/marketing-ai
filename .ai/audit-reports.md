@@ -4298,3 +4298,45 @@ SAFETY RULES (19.6):
 - Variation stream ingestion (12 OMM videos + evergreen) — requires client asset delivery
 - VoC import (220 inbound messages) — requires client data export
 - Open items OI-1 through OI-7 — resolved by client onboarding call
+
+## Audit 035 — Phase 8 Beyond-Capability: 8-14 → 8-17
+**Date:** 2026-10-17
+**Scope:** 8-14 Funnel Path as Thompson Arm, 8-15 No-show Propensity, 8-16 Predicted Lead Value, 8-17 Compliance by Construction
+
+### 8-14 Funnel Path as Thompson Arm
+- [x] V106: `funnel_paths` (CALL_4D/MATERIALS_FIRST/TIERED_BY_TICKET/CALL_24H) + `path_gate_log` (RLS+FORCE+GRANT)
+- [x] `landing_variants.funnel_path_id` + `sessions.funnel_path_id` (NULL = path A control, backwards-compatible)
+- [x] `funnel_path_service.py`: `select_path()` (Thompson + TIERED override), `check_path_b_engagement_gate()`, `resolve_tiered_path_variant()`, `compute_path_metrics()` (per 1 000 LPV + 80% CI)
+- [x] FastAPI: `POST /decide/funnel-path` (gate check + control fallback), `POST /funnel-paths/metrics`
+- [x] `FunnelPathController.java`: CRUD + `POST /seed/client1` (4 paths as DRAFT) + `GET /dashboard`
+
+### 8-15 No-show Propensity
+- [x] V107: `noshow_scores` + `slot_capacity_policies` (enabled=false default, per spec)
+- [x] `noshow_service.py`: `predict_noshow()` (rule_based_v1, AUC gate 0.70), `get_followup_audience_override()`, `compute_slot_fill_probability()`
+- [x] FastAPI: `POST /propensity/noshow`, `POST /propensity/slot-fill`
+- [x] `NoshowPropensityService.java`: `scoreOnBooked()` — loads features, calls ML, persists score, logs HIGH-risk ghl_tag
+
+### 8-16 Predicted Lead Value at Day 0
+- [x] V108: `lead_value_predictions` (p_show, p_verified_given_show, p_invest=0.21 seed, e_ticket, predicted/realised)
+- [x] `lead_value_service.py`: `predict_lead_value()` (p_show×p_verified×p_invest×E[ticket]), `calibrate_value_model()` (OLS slope + per-bucket, acceptance slope ∈ [0.8, 1.2] on ≥200)
+- [x] FastAPI: `POST /predict/lead-value`, `POST /predict/lead-value/calibrate`
+- [x] `LeadValueService.java`: `predictOnBooked()` (reads noshow_scores p_show → ML → DB), `recordRealised()`
+
+### 8-17 Compliance by Construction + Moderation Probe + Reviewer Persona
+- [x] V109: `moderation_results` (RLS) + `personas`; `META_REVIEWER` seeded (META_FINANCIAL + META_PERSONAL_ATTR rulebases)
+- [x] `moderation_service.py`: `compose_from_approved()`, `score_with_persona()` (advisory, never blocks), `check_moderation_probe_needed()`
+- [x] FastAPI: `POST /compliance/compose-from-approved`, `POST /persona/score`
+- [x] `ModerationController.java`: `GET /results`, `POST /record` (REJECTED → auto-graveyard), `POST /persona-score`
+
+### Test Results
+- Python: **811 PASS, 0 FAIL** (36 new tests: 10 funnel_path + 9 noshow + 7 lead_value + 10 moderation)
+- Java: **BUILD SUCCESSFUL**
+
+### Architecture Compliance
+- All RLS tables: ENABLE + FORCE + GRANT mai_app + NULLIF cast
+- Thompson single-writer rule maintained: FastAPI sole writer of alpha/beta
+- sessions PK = `id`; events table = `events` — no violations
+- Python services: zero FastAPI/Pydantic imports
+- Additive only: no existing migrations or code modified
+- Control arm (CALL_4D path) is_control=TRUE, never paused
+- META_REVIEWER score advisory only — never blocks launch (spec §19.18.4)

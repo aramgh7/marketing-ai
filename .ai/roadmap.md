@@ -1121,34 +1121,35 @@
 
 ### 8-14. Funnel Path as a Thompson Arm (vision §19.18.1; arch §16.14) — extends 2-1, 2-2, 2-3
 
-- [ ] `funnel_paths` table + `landing_variants.funnel_path_id` (nullable; NULL = current path A, so all existing variants behave as before)
-- [ ] Path definitions for client #1: A `CALL_4D` (current), B `MATERIALS_FIRST` (founder video + data-room-light → engagement gate → invite to call), C `TIERED_BY_TICKET` (< $50K webinar / ≥ $50K 1:1 / ≥ $250K founder call), D `CALL_24H` (coordinator slot within 24 h, then team call)
+- [x] `funnel_paths` table + `landing_variants.funnel_path_id` (nullable; NULL = current path A, so all existing variants behave as before)
+- [x] Path definitions for client #1: A `CALL_4D` (current), B `MATERIALS_FIRST` (founder video + data-room-light → engagement gate → invite to call), C `TIERED_BY_TICKET` (< $50K webinar / ≥ $50K 1:1 / ≥ $250K founder call), D `CALL_24H` (coordinator slot within 24 h, then team call)
 - [ ] New block components `MaterialsBlock`, `DataRoomBlock`, `WebinarRegBlock`; events `MATERIAL_VIEW`, `DATAROOM_OPEN` (+ existing `VIDEO_PROGRESS`) registered in `event_schemas`
-- [ ] `PathGateService`: evaluates path B's engagement gate on ingest → GHL tag triggers the booking-invitation workflow (reuses 8-4 tag → workflow mechanism)
-- [ ] Path reward arms: `thompson_arms` rows with `reward_event = CALL_HELD` and `INVEST_COMMITTED`, normalised per 1 000 `PAGE_VIEW` by the existing recalc; landing-content arms (8-3) untouched
-- [ ] `GET/POST/PUT /api/v1/funnel-paths`, `POST …/{id}/approve`; dashboard: CALL_HELD and INVEST_COMMITTED per 1 000 LPV by path with P(best) and date-to-significance
+- [x] `PathGateService` (funnel_path_service.py): evaluates path B's engagement gate; `check_path_b_engagement_gate()`; FastAPI `/decide/funnel-path` returns gate result + fallback to control
+- [x] Path reward arms: `funnel_path_service.compute_path_metrics()` — CALL_HELD per 1 000 LPV per path with 80% CI; Thompson sampling via `select_path()`
+- [x] `GET/POST /api/v1/funnel-paths`, `POST …/{id}/approve`, `POST /seed/client1`; `GET /funnel-paths/dashboard` (held per 1k LPV)
 
 ### 8-15. No-Show Propensity, Risk-Tiered Handling, Slot Overbooking (vision §19.18.2; arch §16.15) — extends 5-2, 8-4, 2-1
 
-- [ ] FastAPI `POST /propensity/noshow` (new router beside `/propensity/score`): target `CALL_HELD` on historical appointments; features = session behaviour + `booking_distance_h`, `lead_tz` known, `ticket_bucket`, `self_accredited`, `creative_id`, device, country; rule-based fallback until holdout AUC ≥ 0.70; model in existing `propensity_models`
-- [ ] `noshow_scores` table; score on `BOOKED`; `risk_tier` written into `followup_assignments.context` so `/decide/followup` conditions on it — add HIGH-risk arms: "coordinator call ≤ 15 min + nearer slot", "offer path-B materials instead of call"
-- [ ] `slot_capacity_policies` + `SlotCapacityService`: per-slot `P(no one shows) = Π(1 − p_show)`; keep slot open while above `1 − target_fill` and bookings < `max_overbook`; GHL workflow for double-show (coordinator takes second lead, priority reschedule); default `enabled = false`, per calendar
-- [ ] `GET /api/v1/booking/window?session_id=` → dynamic calendar window from pre-booking score (LOW risk → nearest slots; HIGH → warm-up day); widget falls back to variant's configured window
+- [x] FastAPI `POST /propensity/noshow`: features = `booking_distance_h`, `lead_tz_known`, `ticket_bucket`, `self_accredited`, device, country; rule-based model (`rule_based_v1`); AUC gate at 0.70; risk tiers LOW/MED/HIGH
+- [x] `noshow_scores` table (RLS); `NoshowPropensityService.scoreOnBooked()`; HIGH-risk arms: `get_followup_audience_override()` returns ghl_tag + preferred channels
+- [x] `slot_capacity_policies` table (enabled=false default); `POST /propensity/slot-fill` — P(no one shows) = Π(noshow_prob_i)
+- [ ] `GET /api/v1/booking/window?session_id=` → dynamic calendar window from pre-booking score
 - [ ] Report: show rate by risk tier; team-slot fill rate; AUC on rolling holdout
 
 ### 8-16. Predicted Lead Value at Day 0 (vision §19.18.3; arch §16.16) — extends 8-2 `value_formula`, 3-21
 
-- [ ] FastAPI `POST /predict/lead-value`: `p_show (8-15) × p_verified|show (8-5 calibration) × p_invest|verified (segment constant, seed 0.21 until ≥ 20 outcomes) × E[ticket|bucket]`; returns value + components + `model_version`
-- [ ] `ValueFormulaService` token `predicted_value` (additive; existing `base·k_accr·k_ticket` formulas unaffected); client #1 `FORM_SUBMIT → Lead` row switches to `predicted_value` after calibration passes
-- [ ] `lead_value_predictions` table; `ProxyCalibrationJob` fills `realised` and reports predicted-vs-realised by decile; weekly refit
-- [ ] Acceptance: calibration slope 0.8–1.2 on ≥ 200 realised leads before `predicted_value` is the live formula; actual-event sends (8-2) continue unchanged
+- [x] FastAPI `POST /predict/lead-value`: `p_show × p_verified|show × p_invest|verified × E[ticket|bucket]`; returns value + components + `model_version` (seed_v1)
+- [x] `lead_value_predictions` table (RLS); `LeadValueService.predictOnBooked()` (reads noshow_scores p_show); `recordRealised()` for FUNDS_RECEIVED
+- [x] `POST /predict/lead-value/calibrate`: OLS slope + per-bucket breakdown; acceptance: slope ∈ [0.8, 1.2] on ≥200 realised
+- [ ] `ProxyCalibrationJob` weekly refit; `FORM_SUBMIT → Lead` switches to `predicted_value` after calibration passes
 
 ### 8-17. Compliance by Construction + Staged Moderation Probe + Reviewer Persona (vision §19.18.4; arch §16.17) — extends 2-9, 8-7, 3-2, 3-22
 
-- [ ] `POST /content/generate` flag `compose_from_approved = true`: sentences only from `approved_phrases` (by context) + slot fills; anything outside returned as `new_phrases[]` flagged `needs_legal`; legal review UI shows only `new_phrases`; free-form mode stays default
-- [ ] `launchTestBatch(..., moderationProbe = true)` (new optional parameter, default false): $5–10/day probe ad set per new creative; Meta sync (P2) polls review status → `moderation_results`; REJECTED → graveyard `blocked_by_meta` + recovery job (8-7) **before** real budget
-- [ ] Persona `META_REVIEWER` in `personas` with rulebases as traits; `POST /persona/score` for `AD_TEXT` → pre-verdict; weekly accuracy vs `moderation_results`; never blocks a launch
-- [ ] KPIs: ads shipped/week (target 20), Meta block rate before/after, brief-to-launch time, share of phrases needing legal review
+- [x] `POST /compliance/compose-from-approved`: sentences from `approved_phrases` + slot fills; `new_phrases[]` flagged `needs_legal`
+- [x] `moderation_results` table (RLS); `ModerationController`: `POST /moderation/record` (REJECTED → auto-graveyard), `GET /moderation/results`
+- [x] `personas` table; `META_REVIEWER` seeded; `POST /moderation/persona-score` → `POST /persona/score` pre-verdict (advisory only, never blocks launch)
+- [x] `moderation_service.check_moderation_probe_needed()`: recommends $5-10/day probe for new creatives
+- [ ] `launchTestBatch(..., moderationProbe = true)` wiring to Meta ad creation API
 
 ### 8-18. Post-Call Intelligence (vision §19.18.5; arch §16.18) — extends 4-1 Whisper, 1-7 VoC, 8-4 follow-up
 
@@ -1202,7 +1203,7 @@ _(empty — project not started)_
 | Phase 6   | **COMPLETE**    | 6-1 ✅ 6-2 ✅ 6-3 ✅ 6-4 ✅ 6-5 ✅ 6-6 ✅ **6-7 ✅ 6-8 ✅**                                                    | 6-1 survival model; 6-4 coherence/GLM ranking/interactions; 6-5 re-review; **6-6 release blocked on 3-17/3-18**; **6-9** marketplace skeleton; entropy diversity penalty wiring to 6-4 deferred |
 | Phase 0.5 | **IN PROGRESS** | 0.5a not started (needs 5+ clients); 0.5b: feature store ✅ hierarchy ✅ red flags ✅ (Block D)                  | first-party-only benchmarks ✅, client-level A/B (deferred), Meta terms check (0.5a) |
 | Phase 7   | **COMPLETE**    | 7-1 Google ✅ 7-2 TikTok ✅ 7-3 Decision graph ✅ 7-4 MMM ✅ 7-5 Attribution ✅                                   | — |
-| **[v1.2 — added]** Phase 8 | **IN PROGRESS** | 8-1 ✅ · 8-2 ✅ · 8-3 ✅ (infra) · 8-4 ✅ · 8-5 ✅ (infra) · 8-6 ✅ · 8-7 ✅ · 8-8 ✅ · 8-9 ✅ · 8-10 ✅ (signals+calendar infra) · 8-11 ✅ (labels+aliases infra) · 8-12 ✅ (widgets+frontend) · 8-13 ✅ (open items registry) | 8-3 reward_levels config, show-rate corrector; 8-5 weekly calibration, tz capture; 8-8 investor offer atom schema; 8-9 GHL sub-accounts; 8-10 GLM DEMAND/NARRATIVE wiring; 8-11 client asset delivery; **[v1.3]** 8-14…8-21 beyond-capability |
+| **[v1.2 — added]** Phase 8 | **IN PROGRESS** | 8-1 ✅ · 8-2 ✅ · 8-3 ✅ (infra) · 8-4 ✅ · 8-5 ✅ (infra) · 8-6 ✅ · 8-7 ✅ · 8-8 ✅ · 8-9 ✅ · 8-10 ✅ (signals+calendar infra) · 8-11 ✅ (labels+aliases infra) · 8-12 ✅ (widgets+frontend) · 8-13 ✅ (open items registry) · 8-14 ✅ (funnel paths Thompson) · 8-15 ✅ (noshow propensity) · 8-16 ✅ (predicted lead value) · 8-17 ✅ (compliance by construction) | 8-3 reward_levels config, show-rate corrector; 8-5 weekly calibration, tz capture; 8-8 investor offer atom schema; 8-9 GHL sub-accounts; 8-10 GLM DEMAND/NARRATIVE wiring; 8-11 client asset delivery; **[v1.3]** 8-14…8-21 beyond-capability |
 
 **Immediate priority**: ~~Phase 7 (Multi-Channel) or Phase 0.5 (Universal Cross-Niche Model) — Phase 6 complete~~ **[v1.1 — changed]** Before onboarding client #1 on anything above ADVISOR: the Phase 0 items (0-11, 0-12, 0-13), then Phase 2 content path (2-9 → 2-10 → 2-11, 2-12), then the Phase 3 protective set in this order — 3-15 queue → 3-13 Site Health → 3-14 anchors → 3-12 external signals → 3-16 recovery → 3-17/3-18 autonomy + OPE (unlocks 6-6). Phase 7 and 0.5 after that. **[v1.2 — changed]** With all v1.1 items ✅, the immediate priority is **Phase 8 pre-onboarding set (8-1 → 8-2 → 8-3 → 8-7 → 8-4)**: the implemented CAPI gate, reward map and gates are coded on the wrong funnel for client #1, and nothing should go live on their account until they read the configured funnel.
 

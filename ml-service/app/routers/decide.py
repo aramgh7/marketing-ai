@@ -541,3 +541,122 @@ def experiment_check_pause(req: ExperimentCheckRequest):
 def experiment_ranked_arms(req: ExperimentCheckRequest):
     from app.services.experiment_service import thompson_best_arm
     return thompson_best_arm(req.arms)
+
+
+# ── Funnel Path selection (8-14) ───────────────────────────────────────────
+
+class FunnelPathRequest(BaseModel):
+    paths: list[dict]
+    ticket_bucket: Optional[str] = None
+    session_events: list[dict] = []
+
+class PathMetricsRequest(BaseModel):
+    reward_events: list[dict]
+    page_views: dict
+
+@router.post("/decide/funnel-path")
+def decide_funnel_path(req: FunnelPathRequest):
+    from app.services.funnel_path_service import select_path, check_path_b_engagement_gate
+    selected = select_path(req.paths, req.ticket_bucket)
+    if selected is None:
+        raise HTTPException(status_code=422, detail="No active funnel paths")
+
+    result: dict = {"path_id": selected["path_id"], "path_key": selected["path_key"]}
+
+    if selected.get("path_key") == "MATERIALS_FIRST" and req.session_events:
+        gate = check_path_b_engagement_gate(req.session_events)
+        result["gate"] = gate
+        if not gate["gate_passed"]:
+            control = next((p for p in req.paths if p.get("is_control")), None)
+            if control:
+                result["path_id"]     = control["path_id"]
+                result["path_key"]    = control["path_key"]
+                result["gate_fallback"] = True
+
+    return result
+
+
+@router.post("/funnel-paths/metrics")
+def funnel_path_metrics(req: PathMetricsRequest):
+    from app.services.funnel_path_service import compute_path_metrics
+    return compute_path_metrics(req.reward_events, req.page_views)
+
+
+# ── No-show propensity (8-15) ──────────────────────────────────────────────
+
+class NoshowScoreRequest(BaseModel):
+    booking_distance_h: Optional[float] = None
+    lead_tz_known:      bool = False
+    ticket_bucket:      Optional[str] = None
+    self_accredited:    Optional[bool] = None
+    device_type:        Optional[str] = None
+    is_international:   bool = False
+
+class SlotFillRequest(BaseModel):
+    booked_count: int
+    noshow_probs: list[float]
+
+@router.post("/propensity/noshow")
+def noshow_propensity(req: NoshowScoreRequest):
+    from app.services.noshow_service import predict_noshow, get_followup_audience_override
+    result = predict_noshow(
+        req.booking_distance_h, req.lead_tz_known, req.ticket_bucket,
+        req.self_accredited, req.device_type, req.is_international,
+    )
+    result["followup_override"] = get_followup_audience_override(result["risk_tier"])
+    return result
+
+@router.post("/propensity/slot-fill")
+def slot_fill_probability(req: SlotFillRequest):
+    from app.services.noshow_service import compute_slot_fill_probability
+    return compute_slot_fill_probability(req.booked_count, req.noshow_probs)
+
+
+# ── Predicted Lead Value (8-16) ────────────────────────────────────────────
+
+class LeadValueRequest(BaseModel):
+    p_show:                   float
+    ticket_bucket:            Optional[str] = None
+    p_verified_given_show:    float = 0.65
+    p_invest_given_verified:  float = 0.21
+    e_ticket_override:        Optional[float] = None
+
+class ValueCalibrationRequest(BaseModel):
+    predictions: list[dict]
+    min_samples: int = 200
+
+@router.post("/predict/lead-value")
+def predict_lead_value_endpoint(req: LeadValueRequest):
+    from app.services.lead_value_service import predict_lead_value
+    return predict_lead_value(
+        req.p_show, req.ticket_bucket,
+        req.p_verified_given_show, req.p_invest_given_verified, req.e_ticket_override,
+    )
+
+@router.post("/predict/lead-value/calibrate")
+def calibrate_lead_value(req: ValueCalibrationRequest):
+    from app.services.lead_value_service import calibrate_value_model
+    return calibrate_value_model(req.predictions, req.min_samples)
+
+
+# ── Compliance by Construction + Persona (8-17) ────────────────────────────
+
+class ComposeRequest(BaseModel):
+    slots: dict
+    approved_phrases: list[dict]
+    context_filter: Optional[str] = None
+
+class PersonaScoreRequest(BaseModel):
+    text: str
+    persona: dict
+    compliance_results: dict
+
+@router.post("/compliance/compose-from-approved")
+def compose_from_approved_endpoint(req: ComposeRequest):
+    from app.services.moderation_service import compose_from_approved
+    return compose_from_approved(req.slots, req.approved_phrases, req.context_filter)
+
+@router.post("/persona/score")
+def persona_score(req: PersonaScoreRequest):
+    from app.services.moderation_service import score_with_persona
+    return score_with_persona(req.text, req.persona, req.compliance_results)
