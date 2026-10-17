@@ -4373,3 +4373,145 @@ SAFETY RULES (19.6):
 ### Test Results
 - Python: **840 PASS, 0 FAIL** (29 new tests)
 - Java: **BUILD SUCCESSFUL**
+
+
+---
+
+## Аудит 037 — Phase 8: Полная проверка соответствия архитектуре и vision
+**Дата:** 2026-10-17
+**Область:** Phase 8 (8-1 → 8-21), миграции V94–V113, Python-сервисы, Java-контроллеры
+**Аудитор:** Claude Sonnet 4.6
+
+---
+
+### RLS — проверка таблиц Phase 8
+
+| Миграция | Таблицы | ENABLE | FORCE | NULLIF | GRANT mai_app | Итог |
+|----------|---------|--------|-------|--------|---------------|------|
+| V94 funnel_config | funnel_stages, capi_event_map | OK | OK | OK | OK | OK |
+| V95 capi_v2 | ALTER TABLE tenants (ADD COLUMN только) | N/A | N/A | N/A | N/A | OK N/A |
+| V96 compliance_rulebases | compliance_rulebases (платформенная), approved_phrases (RLS) | OK | OK | OK | OK | OK |
+| V97 followup | followup_variants, followup_assignments | OK | OK | OK | OK | OK |
+| V98 reward_ladder | reward_events, quality_gate_log | OK | OK | OK | OK | OK |
+| V99 form_qualification | form_submissions, value_calibration_log | OK | OK | OK | OK | OK |
+| V100 landing_atoms | INSERT в atom_registry (существующая таблица) | N/A | N/A | N/A | N/A | OK N/A |
+| V101 experiment_lifecycle | experiments, experiment_events | OK | OK | OK | OK | OK |
+| V102 niche_benchmarks | niche_benchmarks (платформенная, NO RLS по spec) | N/A | N/A | N/A | GRANT OK | OK N/A |
+| V103 attribution | touchpoints, attribution_credits | OK | OK | OK | OK | OK |
+| V104 funnel_signals | funnel_calendar_events, ALTER tenants | OK | OK | OK | OK | OK |
+| V105 creative_setup | creative_aliases (RLS) | OK | OK | OK | OK | OK |
+| V106 funnel_paths | funnel_paths, path_gate_log | OK | OK | OK | OK | OK |
+| V107 noshow | noshow_scores, slot_capacity_policies | OK | OK | OK | OK | OK |
+| V108 lead_value | lead_value_predictions | OK | OK | OK | OK | OK |
+| V109 moderation | moderation_results (RLS), personas (NO tenant RLS — платформенная) | OK | OK | OK | OK | OK |
+| V110 post_call | call_notes, call_objections, objection_summary | OK | OK | OK | OK | OK |
+| V111 investor_archetypes | investor_archetypes, archetype_policies | OK | OK | OK | OK | OK |
+| V112 agency | creative_sources (RLS), agency_accounts (NO RLS), agency_kpi_snapshots (NO RLS) | OK | OK | OK | OK | OK |
+| V113 regcf | regcf_waitlist, regcf_activation_gate, waitlist_value_estimates | OK | OK | OK | OK | OK |
+
+**Итого по RLS: 20/20 миграций соответствуют требованиям.** Все таблицы с tenant-данными имеют ENABLE + FORCE + NULLIF POLICY + GRANT. Платформенные агрегаты (niche_benchmarks, agency_accounts, personas) корректно исключены.
+
+---
+
+### Архитектурные правила — проверка
+
+| Правило | Статус | Детали |
+|---------|--------|--------|
+| thompson_arms единственный писатель — FastAPI | OK | Spring Boot содержит только READ-запросы + комментарии NEVER writes alpha/beta. thompson_service.py подтверждён как единственный источник UPDATE. |
+| sessions PK = id | OK | Нарушений sessions.session_id в Java/Python не найдено. |
+| Таблица событий = events (не session_events) | OK | session_events встречается только как поле Pydantic Request Body в decide.py, не как имя таблицы. |
+| Python services: ноль FastAPI/Pydantic импортов | OK | Grep по services/*.py не выявил ни одного импорта FastAPI/Pydantic/BaseModel/APIRouter. |
+| META_PERSONAL_ATTR: описываем оффер, не зрителя | OK | AccreditationCheckbox: "I confirm that I am an accredited investor" (самоутверждение). SocialProofInvestors: нет личных атрибутов. |
+| REGCF_WAITLIST заморожен (OI-3) | OK | regcf_activation_gate seeded FROZEN для всех tenants. unlock требует counsel_answer. Meta-аудитория не активируется. |
+| Auto-deploy competitive intel — ЗАПРЕЩЁН | OK | Нарушений auto-deploy без human approval не найдено. |
+| Niche benchmarks: только first-party данные | OK | NicheBenchmarkScheduler использует только events (first-party). |
+| Follow-up контрольный арм никогда не паузируется | OK | FollowupAutoPauseScheduler: is_control = true -> skip; SQL WHERE is_control = false. |
+| Informed priors: winner Beta(5,1), loser Beta(1,5) | OK | CreativeSetupController применяет informed_prior_alpha/beta через POST /import-labels. |
+| Behavioral data только с consent_level=full | OK | cluster.py и propensity.py документируют требование consent_level=full. |
+| Aggregate floor: >=5 tenants в niche cell | OK | niche_benchmark_service.py фильтрует ячейки с < 5 tenants. |
+
+---
+
+### Соответствие Vision §19 — 8-1 до 8-21
+
+| Пункт | Название | Vision ref | Статус |
+|-------|----------|-----------|--------|
+| 8-1 | Funnel as Configuration | §19.1–19.2 | OK |
+| 8-2 | CAPI Chain v2 | §19.4 | OK |
+| 8-3 | Reward Ladder | §19.3, §19.5 | OK |
+| 8-4 | Follow-up Bandit | §19.6 | OK |
+| 8-5 | Form Self-Qualification | §19.7, §19.14 | OK |
+| 8-6 | Landing Atoms | §19.8 | OK |
+| 8-7 | Securities Compliance | §19.9 | OK |
+| 8-8 | A/B Experiment Lifecycle | §19.11 | OK |
+| 8-9 | Niche Benchmarks | §19.12 | OK |
+| 8-10 | External Signals per Funnel | §19.13 | OK |
+| 8-11 | Creative Setup | §19.10 | OK |
+| 8-12 | Month-1 Deliverables | §19.15 | OK |
+| 8-13 | Open Items | §19.16 | OK |
+| 8-14 | Funnel Path Thompson Arm | §19.18.1 | OK |
+| 8-15 | No-show Propensity | §19.18.2 | OK |
+| 8-16 | Predicted Lead Value | §19.18.3 | OK |
+| 8-17 | Compliance by Construction | §19.18.4 | OK |
+| 8-18 | Post-Call Intelligence | §19.18.5 | OK |
+| 8-19 | Investor Archetypes | §19.18.6 | OK |
+| 8-20 | Agency Measurability | §19.18.7 | OK |
+| 8-21 | Reg CF Waitlist | §19.18.8 | OK |
+
+**Итого: 21/21 пунктов Phase 8 реализованы. Отклонений от Vision §19 и Architecture §16 не найдено.**
+
+---
+
+### Тесты
+
+- **Python:** 840 PASS, 0 FAIL, 23 warnings (BLAS/NaN — только в bayesian_glm, не в Phase 8 коде)
+- **Java:** BUILD SUCCESSFUL (3 секунды, 5 задач)
+
+---
+
+### Замечания и открытые пункты
+
+1. ЗАМЕЧАНИЕ: session_events как поле Pydantic (decide.py:551) — это поле Request Body, НЕ имя таблицы. Нарушения нет, но потенциальный источник путаницы. Рекомендуется переименовать в path_events при рефакторинге.
+2. ИНФОРМАЦИЯ: slot_capacity_policies.enabled = FALSE по умолчанию — корректно по spec §19.18.2. Овербукинг не активен до накопления данных.
+3. ИНФОРМАЦИЯ: lead_value_predictions.model_version = seed_v1. Автообновление при slope [0.8, 1.2] на >=200 реализованных лидов реализовано в calibrate_value_model().
+4. ОТЛОЖЕНО (не дефекты, по roadmap): Whisper-транскрипция звонков (8-18); ML-кластеры для архетипов (8-19, сейчас rule-based); GHL sub-account routing (8-9); offer_atom_schemas / INVESTOR_RAISE schema (8-8).
+
+---
+
+## Что умеет наш проект (бизнес-язык, октябрь 2026)
+
+### Для клиента — Инвестиционная воронка Reg D 506(c)
+
+**Привлечение инвестора:**
+Система запускает рекламу в Meta (Facebook/Instagram) строго по законодательству о ценных бумагах. Перед публикацией любого рекламного объявления автоматически проверяется соответствие четырём наборам правил: политике Meta по финансовым продуктам, запрету на описание личных характеристик зрителя, требованиям SEC/Reg D 506(c) и юридическим стандартам конкретного клиента. Объявления, не прошедшие проверку, блокируются на этапе создания. Для каждого нового текста система предлагает замену из библиотеки заранее одобренных юристом формулировок.
+
+**Квалификация и запись на звонок:**
+Когда потенциальный инвестор переходит на лендинг, система в реальном времени выбирает лучший путь воронки из четырёх вариантов: стандартный звонок через 4 дня, звонок через 24 часа, просмотр материалов с последующим приглашением, или разные форматы в зависимости от заявленного размера инвестиции. Форма самоквалификации собирает статус аккредитации и планируемую сумму — это позволяет рассчитать ожидаемую ценность лида ещё до звонка и передать её в Meta для улучшения таргетинга. При записи система оценивает вероятность неявки и для высокорисковых лидов запускает усиленный протокол: немедленный звонок координатора и предложение более раннего слота.
+
+**После звонка:**
+Координатор фиксирует итог каждого звонка: принял решение, заинтересован, холодный контакт или не пришёл. К каждому итогу привязываются конкретные возражения (цена, требования к аккредитации, не подходит время, нужно согласовать с супругом и т.д.). Система автоматически выбирает подходящую последовательность дальнейших касаний. Все лиды классифицируются по архетипу инвестора: быстро принимающий решение, исследователь, нерешительный, крупный но пассивный, не квалифицирован — каждый архетип получает индивидуальную стратегию follow-up.
+
+**Аналитика и оптимизация:**
+Каждые несколько часов система автоматически сравнивает варианты лендингов, последовательностей follow-up и рекламных текстов. Статистически слабые варианты приостанавливаются без участия человека; победители масштабируются. Дашборд первого месяца отображает три ключевых показателя: сколько лидов защищено от попадания в не тот пиксель, реальная стоимость одного проведённого звонка (не просто записи), и динамика неявок. Система сравнивает показатели клиента со средними по нише (только первичные данные).
+
+**Безопасность и compliance:**
+Лиды без подтверждённой аккредитации не попадают в основную рекламную аудиторию — они направляются в отдельный пул для будущего раунда Reg CF (сейчас заморожен до ответа юриста по вопросу OI-3). Поведенческие данные используются только при наличии полного согласия пользователя. Любые изменения в конкурентном анализе требуют одобрения человека — автоматическое применение запрещено. Финансовый предохранитель останавливает расходы при аномалиях.
+
+---
+
+### Для маркетингового агентства
+
+Агентство управляет несколькими клиентами через одну платформу. Для каждого клиента — изолированное хранилище данных (строгое разграничение на уровне базы данных). Агентский дашборд показывает агрегированные показатели по всем клиентам: количество проведённых звонков, средняя стоимость звонка, процент конверсии в инвестицию. Система отслеживает источник каждого креатива (агентство, внутренняя команда, UGC-автор) и сравнивает их эффективность со статистическим доверительным интервалом. Для каждого источника рассчитывается байесовская вероятность превосходства над другим — без ложных выводов из маленьких выборок.
+
+---
+
+### Технические показатели на октябрь 2026
+
+- Автотестов Python: 840 PASS, 0 FAIL
+- Java сборка: BUILD SUCCESSFUL
+- Миграций БД: 113 (V1–V113)
+- Python-сервисов (чистая логика): 62
+- Java-контроллеров: 77
+- Phase 8 миграций: V94–V113 (20 файлов)
+- Phase 8 пунктов реализовано: 21/21 (8-1 до 8-21)
+- Архитектурных нарушений найдено: 0
