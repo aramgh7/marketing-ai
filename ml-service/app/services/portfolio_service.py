@@ -153,3 +153,112 @@ def _apply_floor(weights: list[float], floor: float) -> list[float]:
             break
 
     return w
+
+
+# ─── Markowitz mean-variance (roadmap 9-12; vision §8.5) ─────────────────────────────────────────
+
+def _roas_samples(asset: dict, n_samples: int, rng) -> "np.ndarray":
+    """Posterior ROAS samples for one asset.
+
+    Accepts either raw samples {roas_samples: [...]} or a Beta-scaled posterior
+    {roas_alpha, roas_beta, roas_scale?}: ROAS = scale × Beta(α, β) (scale defaults to the
+    tenant's max plausible ROAS, 10). Raw samples are resampled with replacement to n_samples.
+    """
+    import numpy as np
+    samples = asset.get("roas_samples")
+    if samples:
+        arr = np.asarray(samples, dtype=float)
+        if arr.size == 0:
+            return np.zeros(n_samples)
+        return rng.choice(arr, size=n_samples, replace=True) if arr.size != n_samples else arr
+    a = float(asset.get("roas_alpha", 1.0))
+    b = float(asset.get("roas_beta", 1.0) or 1.0)
+    scale = float(asset.get("roas_scale", 10.0))
+    return scale * rng.beta(max(a, 1e-6), max(b, 1e-6), size=n_samples)
+
+
+def compute_markowitz(
+    assets: list[dict],
+    risk_aversion: float = 3.0,
+    floor: float = _MIN_WEIGHT_FLOOR,
+    n_samples: int = 2000,
+    rng=None,
+    n_iter: int = 2000,
+) -> dict:
+    """Long-only mean-variance allocation with a per-asset floor.
+
+    maximise  μᵀw − λ·wᵀΣw   s.t. Σw = 1, w ≥ floor
+    solved by projected gradient ascent (projection onto the floored simplex). μ and Σ come from
+    posterior ROAS samples, so the covariance carries the *uncertainty* of each campaign, not only
+    its historical volatility. Output is a recommendation only (never inside CBO).
+    """
+    import numpy as np
+    g = rng if rng is not None else np.random.default_rng()
+    assets = [a for a in assets if not a.get("is_cbo")]
+    n = len(assets)
+    if n == 0:
+        return {"weights": {}, "expected_roas": 0.0, "variance": 0.0, "method": "markowitz",
+                "is_recommendation_only": True, "warnings": ["no eligible assets"]}
+    if n == 1:
+        return {"weights": {assets[0]["id"]: 1.0}, "expected_roas": float(np.mean(_roas_samples(assets[0], n_samples, g))),
+                "variance": 0.0, "method": "markowitz", "is_recommendation_only": True, "warnings": []}
+
+    S = np.column_stack([_roas_samples(a, n_samples, g) for a in assets])   # n_samples × n
+    mu = S.mean(axis=0)
+    cov = np.cov(S, rowvar=False) + np.eye(n) * 1e-9
+    floor = min(max(float(floor), 0.0), 1.0 / n)
+
+    def project(w):
+        """Project onto {w ≥ floor, Σw = 1}: shift by the floor, project the rest onto the simplex."""
+        v = w - floor
+        budget = 1.0 - floor * n
+        u = np.sort(v)[::-1]
+        css = np.cumsum(u)
+        k = np.nonzero(u * np.arange(1, n + 1) > (css - budget))[0]
+        rho = k[-1] if k.size else 0
+        theta = (css[rho] - budget) / (rho + 1)
+        return np.maximum(v - theta, 0.0) + floor
+
+    w = np.full(n, 1.0 / n)
+    lam = float(risk_aversion)
+    step = 1.0 / (2.0 * lam * float(np.linalg.eigvalsh(cov).max()) + float(np.abs(mu).max()) + 1e-9)
+    for _ in range(n_iter):
+        grad = mu - 2.0 * lam * cov @ w
+        w_new = project(w + step * grad)
+        if np.abs(w_new - w).max() < 1e-9:
+            w = w_new
+            break
+        w = w_new
+
+    weights = {a["id"]: round(float(x), 4) for a, x in zip(assets, w)}
+    return {
+        "weights": weights,
+        "expected_roas": round(float(mu @ w), 6),
+        "variance": round(float(w @ cov @ w), 6),
+        "mu": {a["id"]: round(float(m), 6) for a, m in zip(assets, mu)},
+        "risk_aversion": lam,
+        "floor": floor,
+        "method": "markowitz",
+        "is_recommendation_only": True,
+        "warnings": [],
+    }
+
+
+def allocate(
+    assets: list[dict],
+    history_ok: bool,
+    total_budget: float = 0.0,
+    risk_aversion: float = 3.0,
+    rng=None,
+) -> dict:
+    """Markowitz when ≥ 6 months of history (`history_ok`), otherwise the Sharpe allocation."""
+    if history_ok:
+        res = compute_markowitz(assets, risk_aversion=risk_aversion, rng=rng)
+        res["allocations"] = [
+            {"id": k, "weight": v, "budget": round(v * total_budget, 2)} for k, v in res["weights"].items()
+        ]
+        return res
+    res = compute_portfolio_allocation(assets, total_budget)
+    res["method"] = "sharpe"
+    res["weights"] = {a["id"]: a["weight"] for a in res["allocations"]}
+    return res

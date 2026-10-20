@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from app.services.db_client import get_pool
 from app.services.model_updater import run_fit
 from app.services.glm_interactions_service import rank_interactions_by_bf
+from app.services.glm_prior_service import prior_for_variant, blend_with_hierarchy
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["Bayesian GLM"])
@@ -253,3 +254,39 @@ async def rank_interactions(req: InteractionsRequest) -> dict:
     """
     result = rank_interactions_by_bf([c.model_dump() for c in req.candidates])
     return {"ranked_interactions": result}
+
+
+# ─── Roadmap 9-10 / 9-11: GLM-informed prior for a new Thompson arm ─────────────────────────────
+
+class AtomPosteriorIn(BaseModel):
+    atom_type: str
+    atom_value: str
+    mean: float
+    sd: float = 0.0
+
+
+class VariantAtomIn(BaseModel):
+    atom_type: str
+    atom_value: str
+
+
+class PriorForVariantRequest(BaseModel):
+    atom_posteriors: list[AtomPosteriorIn] = []
+    variant_atoms: list[VariantAtomIn] = []
+    base_rate: float = 0.03
+    base_sd: float = 0.02
+    hierarchy_prior: Optional[dict] = None   # output of hierarchy_prior_service.get_effective_prior
+    n0_max: float = 20.0
+
+
+@router.post("/prior-for-variant")
+async def prior_for_variant_route(req: PriorForVariantRequest) -> dict:
+    """Beta(α0, β0) for a new arm from its atoms' GLM posteriors, optionally shrunk to the niche prior."""
+    prior = prior_for_variant(
+        [a.model_dump() for a in req.atom_posteriors],
+        [a.model_dump() for a in req.variant_atoms],
+        req.base_rate, req.base_sd, n0_max=req.n0_max,
+    )
+    if req.hierarchy_prior:
+        prior = blend_with_hierarchy(prior, req.hierarchy_prior, n0_max=req.n0_max)
+    return prior

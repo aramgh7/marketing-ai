@@ -17,6 +17,7 @@ from app.routers import niche_store, hierarchy, red_flags
 from app.routers import model_quality
 from app.routers import post_call, investor_archetype, agency, regcf
 from app.routers import reward
+from app.routers import evi
 
 
 @asynccontextmanager
@@ -82,3 +83,4 @@ app.include_router(investor_archetype.router, prefix="/investor", dependencies=_
 app.include_router(agency.router, prefix="/agency", dependencies=_internal)
 app.include_router(regcf.router, dependencies=_internal)
 app.include_router(reward.router, prefix="/reward", dependencies=_internal)
+app.include_router(evi.router, prefix="/decide/evi", dependencies=_internal)   # roadmap 9-10

@@ -9,6 +9,8 @@ from pydantic import BaseModel
 from app.services.portfolio_service import (
     compute_portfolio_allocation,
     check_sufficient_history,
+    compute_markowitz,
+    allocate,
 )
 from app.config import settings
 
@@ -60,3 +62,44 @@ async def optimize(
 
     campaigns = [c.model_dump() for c in req.campaigns]
     return compute_portfolio_allocation(campaigns, req.total_budget)
+
+
+class MarkowitzAsset(BaseModel):
+    id: str
+    is_cbo: bool = False
+    roas_alpha: Optional[float] = None
+    roas_beta: Optional[float] = None
+    roas_scale: Optional[float] = None
+    roas_samples: Optional[list[float]] = None
+    name: str = ""
+    daily_returns: list[float] = []
+
+
+class MarkowitzRequest(BaseModel):
+    assets: list[MarkowitzAsset]
+    total_budget: float = 0.0
+    risk_aversion: float = 3.0
+    earliest_date: Optional[str] = None
+    latest_date: Optional[str] = None
+
+
+@router.post("/markowitz")
+async def markowitz(
+    req: MarkowitzRequest,
+    x_internal_api_key: Optional[str] = Header(None),
+):
+    """
+    Roadmap 9-12: mean-variance allocation from posterior ROAS samples (covariance = uncertainty).
+    With < 6 months history (dates given) falls back to the Sharpe allocation. Recommendation only.
+    """
+    _auth(x_internal_api_key)
+    assets = [a.model_dump(exclude_none=True) for a in req.assets]
+    history_ok = True
+    if req.earliest_date and req.latest_date:
+        history_ok = bool(check_sufficient_history(req.earliest_date, req.latest_date).get("sufficient"))
+    if history_ok:
+        res = compute_markowitz(assets, risk_aversion=req.risk_aversion)
+        res["allocations"] = [{"id": k, "weight": v, "budget": round(v * req.total_budget, 2)}
+                              for k, v in res["weights"].items()]
+        return res
+    return allocate(assets, history_ok=False, total_budget=req.total_budget)
