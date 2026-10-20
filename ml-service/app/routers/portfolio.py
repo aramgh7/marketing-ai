@@ -10,9 +10,10 @@ from app.services.portfolio_service import (
     compute_portfolio_allocation,
     check_sufficient_history,
 )
+from app.config import settings
 
 router = APIRouter()
-_INTERNAL_KEY = os.getenv("INTERNAL_API_KEY", "")
+_INTERNAL_KEY = settings.internal_api_key  # single source of truth (reads .env); router-level dependency enforces it
 
 
 def _auth(key: str | None) -> None:

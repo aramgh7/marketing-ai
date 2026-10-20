@@ -35,6 +35,11 @@ public class EventIngestionService {
     // Requests from SiteHealthScheduler must not create sessions or events
     private static final String SENTINEL_UA = "MarketingAI-HealthCheck/1.0";
 
+    /** Audit §3.4: only CRM/webhook/server paths may record these; the browser cannot. */
+    static final Set<String> SERVER_ONLY_TYPES = Set.of(
+            "CONVERSION", "PURCHASE", "LEAD", "IMPRESSION",
+            "CRM_CALL_ANSWERED", "CRM_MEETING_ATTENDED", "CRM_NO_SHOW", "CRM_DEAL_WON", "CRM_DEAL_LOST");
+
     public EventBatchResponse ingest(List<EventDto> events,
                                       String ipAddress,
                                       String userAgent,
@@ -48,7 +53,20 @@ public class EventIngestionService {
 
         List<EventDto> toWrite = new ArrayList<>(events.size());
 
+        // Audit §3.4: tenant_id/variant_id/creative_id/revenue used to be trusted verbatim from the
+        // tracker payload. Resolve ownership server-side once per batch and reject mismatches.
+        Map<UUID, UUID> variantTenants  = lookupOwners("landing_variants", events.stream().map(EventDto::getVariantId).toList());
+        Map<UUID, UUID> creativeTenants = lookupOwners("creatives", events.stream().map(EventDto::getCreativeId).toList());
+        Set<UUID> knownTenants = lookupTenants(events.stream().map(EventDto::getTenantId).toList());
+
         for (EventDto e : events) {
+            String reject = rejectReason(e, variantTenants, creativeTenants, knownTenants);
+            if (reject != null) {
+                log.debug("event rejected ({}): tenant={} variant={} type={}", reject, e.getTenantId(), e.getVariantId(), e.getEventType());
+                skipped++;
+                continue;
+            }
+            sanitize(e);
             if (!allowedByConsent(e)) { skipped++; continue; }
             if (isDuplicate(e))        { skipped++; continue; }
             markSeen(e);
@@ -63,6 +81,51 @@ public class EventIngestionService {
         }
 
         return new EventBatchResponse(accepted, skipped, "ok");
+    }
+
+    // ─── Server-side ownership validation ────────────────────────────────────
+
+    /** Null = accepted; otherwise a short reason. Pure, unit-tested. */
+    static String rejectReason(EventDto e, Map<UUID, UUID> variantTenants,
+                               Map<UUID, UUID> creativeTenants, Set<UUID> knownTenants) {
+        if (e.getTenantId() == null) return "missing_tenant";
+        if (e.getEventType() != null && SERVER_ONLY_TYPES.contains(e.getEventType())) return "server_only_event_type";
+        if (e.getVariantId() != null) {
+            UUID owner = variantTenants.get(e.getVariantId());
+            if (owner == null) return "unknown_variant";
+            return owner.equals(e.getTenantId()) ? null : "variant_tenant_mismatch";
+        }
+        if (e.getCreativeId() != null) {
+            UUID owner = creativeTenants.get(e.getCreativeId());
+            if (owner == null) return "unknown_creative";
+            return owner.equals(e.getTenantId()) ? null : "creative_tenant_mismatch";
+        }
+        return knownTenants.contains(e.getTenantId()) ? null : "unknown_tenant";
+    }
+
+    /** Client-supplied monetary values are never trusted; revenue comes from the CRM webhook. */
+    static void sanitize(EventDto e) {
+        e.setRevenue(null);
+    }
+
+    private Map<UUID, UUID> lookupOwners(String table, List<UUID> ids) {
+        List<UUID> distinct = ids.stream().filter(Objects::nonNull).distinct().toList();
+        if (distinct.isEmpty()) return Map.of();
+        Map<UUID, UUID> out = new HashMap<>();
+        jdbc.query("SELECT id, tenant_id FROM " + table + " WHERE id = ANY(?)",
+                ps -> ps.setArray(1, ps.getConnection().createArrayOf("uuid", distinct.toArray())),
+                rs -> { out.put((UUID) rs.getObject("id"), (UUID) rs.getObject("tenant_id")); });
+        return out;
+    }
+
+    private Set<UUID> lookupTenants(List<UUID> ids) {
+        List<UUID> distinct = ids.stream().filter(Objects::nonNull).distinct().toList();
+        if (distinct.isEmpty()) return Set.of();
+        Set<UUID> out = new HashSet<>();
+        jdbc.query("SELECT id FROM tenants WHERE id = ANY(?)",
+                ps -> ps.setArray(1, ps.getConnection().createArrayOf("uuid", distinct.toArray())),
+                rs -> { out.add((UUID) rs.getObject("id")); });
+        return out;
     }
 
     // ─── Consent filter ──────────────────────────────────────────────────────

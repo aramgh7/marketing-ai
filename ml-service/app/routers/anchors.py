@@ -8,15 +8,14 @@ from typing import Optional
 import os
 
 from app.services.anchors_service import compute_divergence, run_divergence_scan
+from app.security import check_internal_key
 
 router = APIRouter()
 
-_INTERNAL_KEY = os.getenv("INTERNAL_API_KEY", "dev-internal-key")
 
 
 def _check_key(x_internal_api_key: Optional[str]) -> None:
-    if x_internal_api_key != _INTERNAL_KEY:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    check_internal_key(x_internal_api_key)
 
 
 class ArmStat(BaseModel):

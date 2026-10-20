@@ -23,13 +23,13 @@ from pydantic import BaseModel, Field
 
 from app.config import settings
 from app.services.thompson_service import load_arms
+from app.security import check_internal_key
 
 router = APIRouter(tags=["What-If Simulator"])
 
 
 def _require_internal_key(x_internal_api_key: str) -> None:
-    if x_internal_api_key != settings.internal_api_key:
-        raise HTTPException(status_code=401, detail="Invalid or missing X-Internal-API-Key")
+    check_internal_key(x_internal_api_key)
 
 
 # ─── Request / Response models ────────────────────────────────────────────────

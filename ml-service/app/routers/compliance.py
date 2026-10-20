@@ -13,9 +13,10 @@ from app.services.compliance_service import (
     is_from_approved_phrases,
 )
 from app.services.llm_client import LLMClient
+from app.config import settings
 
 router = APIRouter()
-_INTERNAL_KEY = os.getenv("INTERNAL_API_KEY", "")
+_INTERNAL_KEY = settings.internal_api_key  # single source of truth (reads .env); router-level dependency enforces it
 
 
 def _auth(key: str | None) -> None:

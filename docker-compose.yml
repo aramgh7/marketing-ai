@@ -62,7 +62,7 @@ services:
       dockerfile: Dockerfile
     container_name: mai-ml-service
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"   # internal service: loopback only (audit §3.4 — was published on all interfaces)
     environment:
       DATABASE_URL: postgresql://mai:mai_local@postgres:5432/marketingai
       REDIS_URL: redis://redis:6379/0

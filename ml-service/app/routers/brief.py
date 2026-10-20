@@ -17,15 +17,14 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.services.db_client import get_pool  # shared pool — P1-1 fix
+from app.security import check_internal_key
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Brief"])
 
 
 def _require_internal_key(x_internal_api_key: str) -> None:
-    """P1-3 hardening: validate internal service key."""
-    if x_internal_api_key != settings.internal_api_key:
-        raise HTTPException(status_code=401, detail="Invalid or missing X-Internal-API-Key")
+    check_internal_key(x_internal_api_key)
 
 
 class GenerateBriefRequest(BaseModel):

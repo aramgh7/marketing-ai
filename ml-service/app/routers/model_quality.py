@@ -9,13 +9,13 @@ from app.services.model_quality_service import (
     assess_model_health,
     MIN_SAMPLE_FOR_QUALITY,
 )
+from app.security import check_internal_key
 
 router = APIRouter(tags=["Model Quality"])
 
 
 def _require_internal_key(x_internal_api_key: str) -> None:
-    if x_internal_api_key != settings.internal_api_key:
-        raise HTTPException(status_code=401, detail="Invalid or missing X-Internal-API-Key")
+    check_internal_key(x_internal_api_key)
 
 
 class ThompsonQualityRequest(BaseModel):

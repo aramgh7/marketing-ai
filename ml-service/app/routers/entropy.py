@@ -7,9 +7,10 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from app.services.entropy_service import build_entropy_report
+from app.config import settings
 
 router = APIRouter()
-_INTERNAL_KEY = os.getenv("INTERNAL_API_KEY", "")
+_INTERNAL_KEY = settings.internal_api_key  # single source of truth (reads .env); router-level dependency enforces it
 
 
 def _auth(key: str | None) -> None:

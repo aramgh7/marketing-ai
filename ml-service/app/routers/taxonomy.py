@@ -18,16 +18,15 @@ from app.services.taxonomy_service import (
     parse_pgvector, centroid_to_pgvector,
 )
 from app.services.db_client import get_pool
+from app.security import check_internal_key
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["taxonomy"])
 
-INTERNAL_KEY = os.getenv("INTERNAL_API_KEY", "")
 
 
 def _check_key(key: Optional[str]) -> None:
-    if INTERNAL_KEY and key != INTERNAL_KEY:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    check_internal_key(key)
 
 
 class AlignRequest(BaseModel):

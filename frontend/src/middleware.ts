@@ -75,7 +75,11 @@ export async function middleware(request: NextRequest) {
 
           const decideRes = await fetch(`${ML_SERVICE_URL}/decide/landing`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              // every ML router requires the internal key (server-side only — never exposed to the browser)
+              "X-Internal-API-Key": process.env.INTERNAL_API_KEY ?? "",
+            },
             body: JSON.stringify({
               tenant_id: variant.tenantId,
               session_id: hasTracking ? sessionId : null,

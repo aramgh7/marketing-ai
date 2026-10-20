@@ -12,15 +12,14 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from app.services.persona_service import build_persona, score_session_against_persona
+from app.security import check_internal_key
 
 router = APIRouter()
 
-_INTERNAL_KEY = os.getenv("INTERNAL_API_KEY", "dev-internal-key")
 
 
 def _check_key(key: Optional[str]) -> None:
-    if key != _INTERNAL_KEY:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    check_internal_key(key)
 
 
 class BuildPersonaRequest(BaseModel):

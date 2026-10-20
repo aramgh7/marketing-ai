@@ -11,6 +11,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from app.security import sign_model_bytes, verify_model_signature
 from app.services.cluster_service import extract_features, FEATURE_NAMES
 from app.services.propensity_service import (
     extract_propensity_features,
@@ -33,6 +34,7 @@ class ScoreRequest(BaseModel):
     events:          list[dict[str, Any]] = []
     cluster_id:      int = -1
     model_b64:       str | None = None   # base64-encoded joblib bytes (optional)
+    model_sig:       str | None = None   # HMAC from /fit — required when model_b64 is given
 
 
 class ScoreResponse(BaseModel):
@@ -54,6 +56,7 @@ class FitResponse(BaseModel):
     n_samples:      int
     n_positives:    int
     model_b64:      str                  # base64-encoded joblib bytes for storage
+    model_sig:      str                  # HMAC-SHA256(internal key, bytes) — store next to model_b64
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -70,6 +73,9 @@ def score(req: ScoreRequest) -> ScoreResponse:
     if req.model_b64:
         import base64
         model_bytes = base64.b64decode(req.model_b64)
+        # Audit §3.4: unpickling caller-supplied bytes is RCE — accept only bytes this service signed.
+        if not verify_model_signature(model_bytes, req.model_sig):
+            raise HTTPException(status_code=400, detail="model_b64 requires a valid model_sig from /propensity/fit")
 
     result = score_session(prop_feats, model_bytes)
 
@@ -120,4 +126,5 @@ def fit(req: FitRequest) -> FitResponse:
         n_samples=len(y),
         n_positives=int(y.sum()),
         model_b64=base64.b64encode(model_bytes).decode(),
+        model_sig=sign_model_bytes(model_bytes),
     )

@@ -3,14 +3,13 @@ from pydantic import BaseModel
 from typing import Optional
 import os
 from app.services.red_flags_service import check_red_flag
+from app.security import check_internal_key
 
 router = APIRouter(prefix="/red-flags", tags=["red-flags"])
-INTERNAL_KEY = os.getenv("INTERNAL_API_KEY", "")
 
 
 def _check_key(key: Optional[str]):
-    if INTERNAL_KEY and key != INTERNAL_KEY:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    check_internal_key(key)
 
 
 class RedFlagRequest(BaseModel):

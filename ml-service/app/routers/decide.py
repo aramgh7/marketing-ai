@@ -28,6 +28,7 @@ from app.services.followup_service import (
     should_auto_pause,
     compute_show_rate_posterior,
 )
+from app.security import check_internal_key
 
 router = APIRouter(tags=["Thompson Sampling"])
 
@@ -270,8 +271,7 @@ class ChurnPenaltyResponse(BaseModel):
 
 
 def _require_internal_key(x_internal_api_key: str = Header(default="")) -> None:
-    if x_internal_api_key != settings.internal_api_key:
-        raise HTTPException(status_code=401, detail="Invalid or missing X-Internal-API-Key")
+    check_internal_key(x_internal_api_key)
 
 
 @router.post("/churn-penalty", response_model=ChurnPenaltyResponse)

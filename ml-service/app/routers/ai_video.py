@@ -12,9 +12,10 @@ from app.services.ai_video_service import (
     extract_voice_atoms,
     compute_ab_acceptance,
 )
+from app.config import settings
 
 router = APIRouter()
-_INTERNAL_KEY = os.getenv("INTERNAL_API_KEY", "")
+_INTERNAL_KEY = settings.internal_api_key  # single source of truth (reads .env); router-level dependency enforces it
 
 
 def _auth(key: str | None) -> None:

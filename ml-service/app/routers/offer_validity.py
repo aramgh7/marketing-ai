@@ -4,14 +4,13 @@ from typing import Optional
 import os
 
 from app.services.offer_validity_service import run_offer_validity_checks
+from app.security import check_internal_key
 
 router = APIRouter(prefix="/offer", tags=["offer-validity"])
-INTERNAL_KEY = os.getenv("INTERNAL_API_KEY", "")
 
 
 def _check_key(key: Optional[str]) -> None:
-    if INTERNAL_KEY and key != INTERNAL_KEY:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    check_internal_key(key)
 
 
 class OfferValidateRequest(BaseModel):

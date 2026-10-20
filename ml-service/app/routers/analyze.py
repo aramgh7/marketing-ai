@@ -14,9 +14,10 @@ from app.services.calibration_service import compute_calibration_report
 from app.services.segment_re_service import rank_atoms_by_segment
 from app.services.ope_service import compute_ope, passes_ope_gate
 from app.services.form_check_service import check_form_health
+from app.security import assert_public_http_url
+from app.security import check_internal_key
 
 _ML_BASE = os.getenv("ML_SERVICE_URL", "http://localhost:8000")
-_INTERNAL_KEY = os.getenv("INTERNAL_API_KEY", "")
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Analysis"])
@@ -44,8 +45,7 @@ class FraudShareRequest(BaseModel):
 
 
 def _check_key(key: Optional[str]) -> None:
-    if _INTERNAL_KEY and key != _INTERNAL_KEY:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    check_internal_key(key)
 
 
 @router.post("/fraud/layer2")
@@ -261,4 +261,5 @@ class FormHealthRequest(BaseModel):
 
 @router.post("/form-health")
 def form_health(req: FormHealthRequest):
+    assert_public_http_url(req.form_endpoint_url)  # audit §3.4: no POSTs to metadata/redis/postgres
     return check_form_health(req.form_endpoint_url, req.test_payload, req.timeout_seconds)

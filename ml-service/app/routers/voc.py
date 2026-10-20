@@ -15,16 +15,15 @@ from app.services.voc_service import (
     redact_pii, build_extraction_prompt, parse_extraction_response,
     fallback_extract, CATEGORIES,
 )
+from app.security import check_internal_key
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["voc"])
 
-INTERNAL_KEY = os.getenv("INTERNAL_API_KEY", "")
 
 
 def _check_key(key: Optional[str]) -> None:
-    if INTERNAL_KEY and key != INTERNAL_KEY:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    check_internal_key(key)
 
 
 class ExtractRequest(BaseModel):

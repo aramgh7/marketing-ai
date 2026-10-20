@@ -8,14 +8,13 @@ from typing import Optional
 import os
 
 from app.services.cb_bayesian_service import l1_combined_check, compute_cpa_exceedance_probability
+from app.security import check_internal_key
 
 router = APIRouter(prefix="/cb", tags=["circuit-breaker"])
-_INTERNAL_KEY = os.getenv("INTERNAL_API_KEY", "")
 
 
 def _check_key(key: Optional[str]) -> None:
-    if _INTERNAL_KEY and key != _INTERNAL_KEY:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    check_internal_key(key)
 
 
 class L1CheckRequest(BaseModel):

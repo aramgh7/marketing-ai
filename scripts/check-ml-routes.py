@@ -19,8 +19,10 @@ JAVA = os.path.join(ROOT, "platform-api", "src", "main", "java")
 def ml_routes() -> set[str]:
     main = io.open(os.path.join(ML, "main.py"), encoding="utf-8").read()
     routes = set()
-    for m in re.finditer(r'app\.include_router\((\w+)\.router(?:,\s*prefix="([^"]*)")?\)', main):
-        mod, pre = m.group(1), m.group(2) or ""
+    for m in re.finditer(r'app\.include_router\((\w+)\.router([^)]*)\)', main):
+        mod = m.group(1)
+        pm = re.search(r'prefix="([^"]*)"', m.group(2))
+        pre = pm.group(1) if pm else ""
         src = io.open(os.path.join(ML, "app", "routers", f"{mod}.py"), encoding="utf-8").read()
         rp = re.search(r'router\s*=\s*APIRouter\((?:[^)]*prefix="([^"]*)")?', src)
         rpre = rp.group(1) if rp and rp.group(1) else ""

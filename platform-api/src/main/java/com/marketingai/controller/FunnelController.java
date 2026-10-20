@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.security.TenantContext;
 import com.marketingai.service.FunnelService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -22,8 +23,9 @@ public class FunnelController {
     private final FunnelService funnelService;
     private final JdbcTemplate  jdbc;
 
+    /** Audit §3.4: this used the JWT subject (user id) as the tenant id; TenantContext holds the tenant claim. */
     private UUID currentTenant() {
-        return UUID.fromString(SecurityContextHolder.getContext().getAuthentication().getName());
+        return UUID.fromString(TenantContext.get());
     }
 
     @GetMapping

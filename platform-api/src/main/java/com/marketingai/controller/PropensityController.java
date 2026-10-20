@@ -74,15 +74,20 @@ public class PropensityController {
             if (cid != null) clusterId = cid;
         } catch (Exception ignored) {}
 
-        // Load stored model bytes for tenant (base64 encoded, stored in propensity_models if exists)
-        String modelB64 = loadModelB64(tenantId);
+        // Load stored model bytes + HMAC for tenant (propensity_models); unsigned bytes are refused by ML
+        Map<String, Object> model = loadModel(tenantId);
+        String modelB64 = model == null ? null : (String) model.get("model_b64");
+        String modelSig = model == null ? null : (String) model.get("model_sig");
 
         Map<String, Object> mlBody = new HashMap<>();
         mlBody.put("tenant_id",  tenantId.toString());
         mlBody.put("session",    body.getOrDefault("session", Map.of()));
         mlBody.put("events",     body.getOrDefault("events", List.of()));
         mlBody.put("cluster_id", clusterId);
-        if (modelB64 != null) mlBody.put("model_b64", modelB64);
+        if (modelB64 != null && modelSig != null) {
+            mlBody.put("model_b64", modelB64);
+            mlBody.put("model_sig", modelSig);
+        }
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
@@ -157,13 +162,13 @@ public class PropensityController {
     }
 
     /** Load base64-encoded model bytes from DB if a trained model exists. */
-    private String loadModelB64(UUID tenantId) {
+    private Map<String, Object> loadModel(UUID tenantId) {
         try {
-            return jdbc.queryForObject("""
-                    SELECT model_b64 FROM propensity_models
+            return jdbc.queryForMap("""
+                    SELECT model_b64, model_sig FROM propensity_models
                     WHERE tenant_id = ?
                     ORDER BY fitted_at DESC LIMIT 1
-                    """, String.class, tenantId);
+                    """, tenantId);
         } catch (Exception e) {
             return null;  // No model yet — FastAPI will use rule-based scoring
         }

@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.security.TenantContext;
 import com.marketingai.service.MlServiceClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,8 +27,9 @@ public class FollowupController {
     private final JdbcTemplate jdbc;
     private final MlServiceClient mlClient;
 
+    /** Audit §3.4: this used the JWT subject (user id) as the tenant id; TenantContext holds the tenant claim. */
     private UUID currentTenant() {
-        return UUID.fromString(SecurityContextHolder.getContext().getAuthentication().getName());
+        return UUID.fromString(TenantContext.get());
     }
 
     // ─── Variant CRUD ─────────────────────────────────────────────────────────

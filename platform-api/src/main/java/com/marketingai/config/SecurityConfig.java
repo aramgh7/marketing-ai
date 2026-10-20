@@ -4,6 +4,8 @@ import com.marketingai.security.JwtFilter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -19,11 +21,15 @@ import java.util.List;
 
 @Configuration
 @EnableWebSecurity
+@EnableMethodSecurity
 @RequiredArgsConstructor
 public class SecurityConfig {
 
     private final JwtFilter jwtFilter;
     private final AppProperties props;
+
+    /** Roles allowed to mutate state (JwtFilter grants ROLE_<role>; VIEWER is read-only). */
+    static final String[] WRITE_ROLES = {"ADMIN", "OWNER", "MARKETER", "EDITOR"};
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
@@ -33,6 +39,16 @@ public class SecurityConfig {
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/auth/**", "/events", "/webhooks/**", "/health", "/actuator/health", "/error", "/files/**", "/public/**").permitAll()
+                // Audit §3.4: no role enforcement existed — a VIEWER could set Meta credentials or approve variants.
+                // Tenant settings / credentials / agency accounts: ADMIN only. Any other write: not VIEWER.
+                .requestMatchers(HttpMethod.PATCH,  "/tenants/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.PUT,    "/tenants/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.POST,   "/tenants/**", "/agency/**", "/erasure/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.DELETE, "/tenants/**", "/agency/**").hasRole("ADMIN")
+                .requestMatchers(HttpMethod.POST,   "/**").hasAnyRole(WRITE_ROLES)
+                .requestMatchers(HttpMethod.PUT,    "/**").hasAnyRole(WRITE_ROLES)
+                .requestMatchers(HttpMethod.PATCH,  "/**").hasAnyRole(WRITE_ROLES)
+                .requestMatchers(HttpMethod.DELETE, "/**").hasAnyRole(WRITE_ROLES)
                 .anyRequest().authenticated()
             )
             .exceptionHandling(ex -> ex

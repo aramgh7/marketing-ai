@@ -8,9 +8,10 @@ from pydantic import BaseModel
 
 from app.services.explain_service import build_explanation_context, format_explanation
 from app.services.llm_client import LLMClient
+from app.config import settings
 
 router = APIRouter()
-_INTERNAL_KEY = os.getenv("INTERNAL_API_KEY", "")
+_INTERNAL_KEY = settings.internal_api_key  # single source of truth (reads .env); router-level dependency enforces it
 
 _ALLOWED_TYPES = {"variant", "creative", "campaign"}
 

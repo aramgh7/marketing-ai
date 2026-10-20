@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.security.TenantContext;
 import com.marketingai.entity.ComplianceCheck;
 import com.marketingai.service.ComplianceService;
 import com.marketingai.service.MlServiceClient;
@@ -24,8 +25,9 @@ public class ComplianceController {
     private final MlServiceClient mlClient;
     private final JdbcTemplate jdbc;
 
+    /** Audit §3.4: this used the JWT subject (user id) as the tenant id; TenantContext holds the tenant claim. */
     private UUID currentTenant() {
-        return UUID.fromString(SecurityContextHolder.getContext().getAuthentication().getName());
+        return UUID.fromString(TenantContext.get());
     }
 
     // ─── Generic text compliance ─────────────────────────────────────────────
