@@ -119,15 +119,20 @@ def start_container(port: int) -> str:
     name = f"mai-sql-check-{uuid.uuid4().hex[:6]}"
     subprocess.run(["docker", "run", "-d", "--name", name, "-e", "POSTGRES_USER=mai", "-e", "POSTGRES_PASSWORD=mai_local",
                     "-e", "POSTGRES_DB=marketingai", "-p", f"{port}:5432", "pgvector/pgvector:pg16"], check=True, capture_output=True)
-    for _ in range(40):
+    ready = 0
+    for _ in range(60):
         if subprocess.run(["docker", "exec", name, "pg_isready", "-U", "mai", "-d", "marketingai"], capture_output=True).returncode == 0:
-            break
+            ready += 1
+            if ready >= 2:   # initdb restarts the server once; wait for two consecutive ready probes
+                break
+        else:
+            ready = 0
         time.sleep(2)
     mig = MIG.replace("\\", "/")
     env = dict(os.environ, MSYS_NO_PATHCONV="1")
     r = subprocess.run(["docker", "run", "--rm", "-v", f"{mig}:/flyway/sql", "flyway/flyway:10",
                         f"-url=jdbc:postgresql://host.docker.internal:{port}/marketingai", "-user=mai", "-password=mai_local",
-                        "-placeholders.app_role_password=mai_app_local", "migrate"], capture_output=True, env=env, text=True)
+                        "-placeholders.app_role_password=mai_app_local", "-placeholders.ml_role_password=mai_ml_local", "migrate"], capture_output=True, env=env, text=True)
     if "Successfully applied" not in r.stdout and "up to date" not in r.stdout:
         print(r.stdout[-2000:], r.stderr[-2000:])
         raise SystemExit("migration failed")

@@ -1,5 +1,7 @@
 package com.marketingai.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpEntity;
@@ -9,6 +11,7 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -34,6 +37,56 @@ public class GhlApiClient {
     public static final String FIELD_EVENT = "mai_event_id";
 
     private final RestTemplate restTemplate;
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    // ─── Roadmap 9-8: polling reads for GhlSyncScheduler ─────────────────────
+
+    /** GET /calendars/events for a location and window. Never throws; empty list on failure. */
+    public List<GhlSyncMath.RemoteAppointment> listAppointments(String apiKey, String locationId, Instant from, Instant to) {
+        List<GhlSyncMath.RemoteAppointment> out = new ArrayList<>();
+        JsonNode root = get(apiKey, BASE_URL + "/calendars/events?locationId=" + locationId
+                + "&startTime=" + from.toEpochMilli() + "&endTime=" + to.toEpochMilli());
+        if (root == null) return out;
+        JsonNode events = root.has("events") ? root.get("events") : root;
+        if (!events.isArray()) return out;
+        for (JsonNode e : events) {
+            Instant start = null;
+            try { start = Instant.parse(e.path("startTime").asText("")); } catch (Exception ignored) { }
+            out.add(new GhlSyncMath.RemoteAppointment(
+                    e.path("id").asText(null), e.path("contactId").asText(null), start,
+                    e.path("appointmentStatus").asText(e.path("status").asText(null))));
+        }
+        return out;
+    }
+
+    /** GET /opportunities/search?status=won for a location. Never throws; empty list on failure. */
+    public List<GhlSyncMath.WonDeal> listWonOpportunities(String apiKey, String locationId) {
+        List<GhlSyncMath.WonDeal> out = new ArrayList<>();
+        JsonNode root = get(apiKey, BASE_URL + "/opportunities/search?location_id=" + locationId + "&status=won&limit=100");
+        if (root == null) return out;
+        JsonNode opps = root.path("opportunities");
+        if (!opps.isArray()) return out;
+        for (JsonNode o : opps) {
+            if (!"won".equalsIgnoreCase(o.path("status").asText(""))) continue;
+            out.add(new GhlSyncMath.WonDeal(o.path("id").asText(null), o.path("contactId").asText(null),
+                    o.path("monetaryValue").asDouble(0.0)));
+        }
+        return out;
+    }
+
+    private JsonNode get(String apiKey, String url) {
+        if (apiKey == null || apiKey.isBlank()) return null;
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(apiKey);
+        headers.set("Version", API_VERSION);
+        try {
+            String body = restTemplate.exchange(url, HttpMethod.GET, new HttpEntity<>(headers), String.class).getBody();
+            return body == null ? null : MAPPER.readTree(body);
+        } catch (Exception e) {
+            log.warn("GHL GET failed ({}): {}", url.substring(0, Math.min(url.length(), 80)), e.getMessage());
+            return null;
+        }
+    }
 
     /**
      * PUT /contacts/{id} with customFields. Returns true when GHL accepted the update.

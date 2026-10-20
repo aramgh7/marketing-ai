@@ -58,6 +58,7 @@ public class TwoContourService {
     private final ExplorationBudgetService explorationService;
     private final JdbcTemplate jdbc;
     private final LearningPhaseService learningPhaseService;
+    private final PersonaModeService personaModeService;   // roadmap 9-9: persona_arm per batch
 
     // ─── 1. Test Batch Launch ─────────────────────────────────────────────
 
@@ -69,6 +70,16 @@ public class TwoContourService {
      */
     @Transactional
     public List<AdSetResponse> launchTestBatch(UUID tenantId, TestBatchRequest req) {
+        return launchTestBatch(tenantId, req, false);
+    }
+
+    /**
+     * Roadmap 9-8 / arch §16.17: {@code moderationProbe = true} launches the same PAUSED batch but flags
+     * every ad set as a probe and opens a PENDING {@code moderation_results} row; the
+     * {@code ModerationProbeScheduler} polls Meta's review verdict before any budget is spent.
+     */
+    @Transactional
+    public List<AdSetResponse> launchTestBatch(UUID tenantId, TestBatchRequest req, boolean moderationProbe) {
         MetaCampaign campaign = requireCampaign(tenantId, req.getCampaignId());
         if (!"TEST".equals(campaign.getContour())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -138,11 +149,25 @@ public class TwoContourService {
             learningPhaseService.logBeforeAction(tenantId, metaAdSetId, "LAUNCH",
                     adSet.getLearningPhase());
 
-            created.add(campaignService.toAdSetResponse(adSetRepo.save(adSet)));
+            MetaAdSet saved = adSetRepo.save(adSet);
+            if (moderationProbe) {
+                jdbc.update("UPDATE meta_ad_sets SET moderation_probe = TRUE WHERE id = ?", saved.getId());
+                jdbc.update("""
+                        INSERT INTO moderation_results (tenant_id, creative_id, ad_set_id, probe_type, result)
+                        VALUES (?, ?, ?, 'meta_review', 'PENDING')
+                        """, tenantId, saved.getCreativeId(), saved.getId());
+            }
+            created.add(campaignService.toAdSetResponse(saved));
         }
 
-        log.info("Launched TEST batch {} with {} ad sets for campaign {} (tenant {})",
-                batchId, created.size(), campaign.getId(), tenantId);
+        try {
+            String personaArm = personaModeService.assignArm(tenantId, batchId);   // roadmap 9-9
+            log.info("Batch {} persona_arm={}", batchId, personaArm);
+        } catch (Exception e) {
+            log.warn("persona_arm assignment skipped for batch {}: {}", batchId, e.getMessage());
+        }
+        log.info("Launched TEST batch {} with {} ad sets for campaign {} (tenant {}, moderationProbe={})",
+                batchId, created.size(), campaign.getId(), tenantId, moderationProbe);
         return created;
     }
 

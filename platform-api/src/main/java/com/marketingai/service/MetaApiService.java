@@ -230,6 +230,32 @@ public class MetaApiService {
         }
     }
 
+    // ─── Moderation probe (roadmap 9-8; arch §16.17) ──────────────────────────
+
+    /**
+     * GET /{ad_id}?fields=effective_status,ad_review_feedback for a probe ad (or ad set).
+     * Returns {"effective_status": ..., "ad_review_feedback": "<json or empty>"}; empty map on failure.
+     */
+    public Map<String, String> getAdReviewStatus(String accessToken, String adId) {
+        String url = UriComponentsBuilder.fromUri(URI.create(BASE_URL))
+                .path("/" + adId)
+                .queryParam("fields", "effective_status,ad_review_feedback")
+                .queryParam("access_token", accessToken)
+                .build()
+                .toUriString();
+        try {
+            JsonNode resp = rest.getForObject(url, JsonNode.class);
+            if (resp == null) return Map.of();
+            String feedback = resp.has("ad_review_feedback") && !resp.get("ad_review_feedback").isNull()
+                    ? resp.get("ad_review_feedback").toString() : "";
+            return Map.of("effective_status", resp.path("effective_status").asText(""),
+                          "ad_review_feedback", feedback);
+        } catch (Exception e) {
+            log.warn("Could not read ad review status for {}: {}", adId, e.getMessage());
+            return Map.of();
+        }
+    }
+
     // ─── Internal helpers ───────────────────────────────────────────────────
 
     private String postAndGetId(String accessToken, String path, ObjectNode body) {

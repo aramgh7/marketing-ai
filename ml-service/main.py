@@ -18,6 +18,7 @@ from app.routers import model_quality
 from app.routers import post_call, investor_archetype, agency, regcf
 from app.routers import reward
 from app.routers import evi
+from app.routers import cvr_collapse
 
 
 @asynccontextmanager
@@ -84,3 +85,4 @@ app.include_router(agency.router, prefix="/agency", dependencies=_internal)
 app.include_router(regcf.router, dependencies=_internal)
 app.include_router(reward.router, prefix="/reward", dependencies=_internal)
 app.include_router(evi.router, prefix="/decide/evi", dependencies=_internal)   # roadmap 9-10
+app.include_router(cvr_collapse.router, prefix="/signals", dependencies=_internal)   # roadmap 9-8
