@@ -13,12 +13,16 @@ import AccreditationCheckbox from "./blocks/AccreditationCheckbox";
 import TicketSelector from "./blocks/TicketSelector";
 import Disclaimer506c from "./blocks/Disclaimer506c";
 import SocialProofInvestors from "./blocks/SocialProofInvestors";
+import MaterialsBlock, { MaterialsBlockData } from "./blocks/MaterialsBlock";
+import DataRoomBlock, { DataRoomBlockData } from "./blocks/DataRoomBlock";
+import WebinarRegBlock, { WebinarRegBlockData } from "./blocks/WebinarRegBlock";
 
 export interface LandingBlock {
   type:
     | "HERO" | "PROBLEM" | "PROOF" | "PRICING" | "CTA" | "FAQ"
     | "booking_calendar" | "accreditation_checkbox" | "ticket_selector"
-    | "disclaimer_506c" | "social_proof_investors";
+    | "disclaimer_506c" | "social_proof_investors"
+    | "materials" | "data_room" | "webinar_reg";   // roadmap 8-14 (paths B / C)
   id: string;
   data: Record<string, unknown>;
 }
@@ -224,6 +228,33 @@ export default function LandingRenderer({
                   version={block.data.version as string | undefined}
                 />
               </div>
+            );
+          case "materials":
+            return (
+              <MaterialsBlock
+                key={block.id}
+                blockId={block.id}
+                data={block.data as unknown as MaterialsBlockData}
+              />
+            );
+          case "data_room":
+            return (
+              <DataRoomBlock
+                key={block.id}
+                blockId={block.id}
+                data={block.data as unknown as DataRoomBlockData}
+              />
+            );
+          case "webinar_reg":
+            return (
+              <WebinarRegBlock
+                key={block.id}
+                blockId={block.id}
+                data={block.data as unknown as WebinarRegBlockData}
+                tenantId={tenantId}
+                sessionId={sessionId}
+                variantId={variantId}
+              />
             );
           case "social_proof_investors":
             return (

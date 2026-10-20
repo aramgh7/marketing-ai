@@ -32,7 +32,7 @@ public class EventIngestionService {
 
     /** These are allowed even with consent = none. */
     private static final Set<String> CONVERSION = Set.of(
-            "FORM_SUBMIT", "CONVERSION", "PURCHASE", "LEAD"
+            "FORM_SUBMIT", "CONVERSION", "PURCHASE", "LEAD", "WEBINAR_REG"
     );
 
     // Requests from SiteHealthScheduler must not create sessions or events

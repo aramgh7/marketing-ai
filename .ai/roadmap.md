@@ -1123,7 +1123,7 @@
 
 - [x] `funnel_paths` table + `landing_variants.funnel_path_id` (nullable; NULL = current path A, so all existing variants behave as before)
 - [x] Path definitions for client #1: A `CALL_4D` (current), B `MATERIALS_FIRST` (founder video + data-room-light → engagement gate → invite to call), C `TIERED_BY_TICKET` (< $50K webinar / ≥ $50K 1:1 / ≥ $250K founder call), D `CALL_24H` (coordinator slot within 24 h, then team call)
-- [ ] New block components `MaterialsBlock`, `DataRoomBlock`, `WebinarRegBlock`; events `MATERIAL_VIEW`, `DATAROOM_OPEN` (+ existing `VIDEO_PROGRESS`) registered in `event_schemas`
+- [x] New block components `MaterialsBlock`, `DataRoomBlock`, `WebinarRegBlock`; events `MATERIAL_VIEW`, `DATAROOM_OPEN` (+ existing `VIDEO_PROGRESS`) registered in `event_schemas` — block types `materials` / `data_room` / `webinar_reg` in `LandingRenderer`, `WEBINAR_REG` event + atom_registry rows (V122); webinar registration goes through `POST /public/form/submit` with `funnel_key = webinar` (2026-10-20)
 - [x] `PathGateService` (funnel_path_service.py): evaluates path B's engagement gate; `check_path_b_engagement_gate()`; FastAPI `/decide/funnel-path` returns gate result + fallback to control
 - [x] Path reward arms: `funnel_path_service.compute_path_metrics()` — CALL_HELD per 1 000 LPV per path with 80% CI; Thompson sampling via `select_path()`
 - [x] `GET/POST /api/v1/funnel-paths`, `POST …/{id}/approve`, `POST /seed/client1`; `GET /funnel-paths/dashboard` (held per 1k LPV)

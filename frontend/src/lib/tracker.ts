@@ -30,6 +30,7 @@ const BEHAVIORAL = new Set([
 const ALWAYS_ALLOWED = new Set([
   "FORM_START",
   "FORM_SUBMIT",
+  "WEBINAR_REG",   // roadmap 8-14: registration = conversion-type signal
   "CONVERSION",
   "PURCHASE",
   "LEAD",
