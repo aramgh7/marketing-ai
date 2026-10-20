@@ -14,6 +14,16 @@ DEFAULT_WEIGHTS = {
     "form_completion": 0.25,
 }
 
+# Roadmap 8-3 (2-12 change): when the tenant's quality key is an appointment stage, whether the
+# booked call was actually held carries the highest weight.
+APPOINTMENT_WEIGHTS = {
+    "match_score": 0.15,
+    "non_bounce": 0.15,
+    "scroll_depth": 0.15,
+    "form_completion": 0.15,
+    "show_rate": 0.40,
+}
+
 
 def compute_quality_score(
     match_score: float | None,
@@ -21,16 +31,20 @@ def compute_quality_score(
     scroll_depth: float,
     form_completion: float,
     weights: dict | None = None,
+    show_rate: float | None = None,
 ) -> float:
     """
     Compute quality score for a session.
     quality_score = w1*match_score + w2*(1-bounce) + w3*scroll_depth_norm + w4*form_completion
-    All inputs normalized to [0, 1].
+                    [+ w5*show_rate when an appointment outcome exists — roadmap 8-3]
+    All inputs normalized to [0, 1]. show_rate: 1.0 held, 0.0 no-show, None = no outcome yet
+    (base weights apply, so unresolved bookings are never penalised).
 
     Quality Score is NOT added to alpha/beta (one binary event per arm, arch §4.4).
     It acts as a protective metric and a multiplier on the Phase 3 profit estimate.
     """
-    w = {**DEFAULT_WEIGHTS, **(weights or {})}
+    base = APPOINTMENT_WEIGHTS if show_rate is not None else DEFAULT_WEIGHTS
+    w = {**base, **(weights or {})}
 
     ms = match_score if match_score is not None else 0.5  # neutral prior if unknown
     nb = 0.0 if bounced else 1.0
@@ -43,6 +57,8 @@ def compute_quality_score(
         + w["scroll_depth"] * sd
         + w["form_completion"] * fc
     )
+    if show_rate is not None:
+        score += w.get("show_rate", 0.0) * max(0.0, min(1.0, show_rate))
     return round(max(0.0, min(1.0, score)), 4)
 
 
@@ -69,25 +85,31 @@ def compute_clickbait_check(
     ctr_n: int,
     cvr_n: int,
     bounce_n: int,
+    noshow_beta: float | None = None,
+    noshow_beta_threshold: float = -0.3,
 ) -> dict:
     """
     Bayesian clickbait detector (vision §15.3 pre-LKJ heuristic).
     Flags CLICKBAIT_SUSPECT if:
       P(creative_ctr > anchor_ctr) > 0.9 AND
-      (P(creative_cvr < anchor_cvr) > 0.9 OR P(creative_bounce > anchor_bounce) > 0.9)
+      (P(creative_cvr < anchor_cvr) > 0.9 OR P(creative_bounce > anchor_bounce) > 0.9
+       OR the creative's hook is a no-show driver: β_noshow <= threshold — roadmap 8-3)
     Uses normal approximation for probabilities.
     """
     p_ctr_higher = _prob_a_greater_b(creative_ctr, ctr_n, anchor_ctr, ctr_n)
     p_cvr_lower = 1.0 - _prob_a_greater_b(creative_cvr, cvr_n, anchor_cvr, cvr_n)
     p_bounce_higher = _prob_a_greater_b(creative_bounce, bounce_n, anchor_bounce, bounce_n)
+    noshow_driver = noshow_beta is not None and noshow_beta <= noshow_beta_threshold
 
-    is_clickbait = p_ctr_higher > 0.9 and (p_cvr_lower > 0.9 or p_bounce_higher > 0.9)
+    is_clickbait = p_ctr_higher > 0.9 and (p_cvr_lower > 0.9 or p_bounce_higher > 0.9 or noshow_driver)
 
     return {
         "suspect": is_clickbait,
         "p_ctr_higher_than_anchor": round(p_ctr_higher, 3),
         "p_cvr_lower_than_anchor": round(p_cvr_lower, 3),
         "p_bounce_higher_than_anchor": round(p_bounce_higher, 3),
+        "noshow_driver": noshow_driver,
+        "noshow_beta": noshow_beta,
         "verdict": "CLICKBAIT_SUSPECT" if is_clickbait else "CLEAN",
     }
 

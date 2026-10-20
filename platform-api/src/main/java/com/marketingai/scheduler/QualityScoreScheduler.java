@@ -1,5 +1,6 @@
 package com.marketingai.scheduler;
 
+import com.marketingai.service.QualityScoreMath;
 import com.marketingai.config.AppProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -42,7 +43,11 @@ public class QualityScoreScheduler {
                            SELECT 1 FROM events e
                            WHERE e.session_id = s.id AND e.tenant_id = s.tenant_id AND e.event_type = 'FORM_START'
                        )) AS form_started,
-                       lv.match_score AS variant_match_score
+                       lv.match_score AS variant_match_score,
+                       (SELECT CASE a.status WHEN 'COMPLETED' THEN 1.0 WHEN 'NO_SHOW' THEN 0.0 END
+                        FROM appointments a
+                        WHERE a.session_id = s.id AND a.tenant_id = s.tenant_id
+                        ORDER BY a.scheduled_at DESC LIMIT 1)                                  AS show_rate
                 FROM sessions s
                 LEFT JOIN landing_variants lv ON lv.id = s.variant_id
                 WHERE s.last_event_at < now() - INTERVAL '30 minutes'   -- session closed
@@ -87,11 +92,11 @@ public class QualityScoreScheduler {
         boolean formStarted = Boolean.TRUE.equals(s.get("form_started"));
         double formCompletion = converted ? 1.0 : formStarted ? 0.3 : 0.0;
 
-        double score = 0.25 * matchScore
-                     + 0.25 * (bounced ? 0.0 : 1.0)
-                     + 0.25 * scroll
-                     + 0.25 * formCompletion;
-        return Math.round(Math.max(0.0, Math.min(1.0, score)) * 10000.0) / 10000.0;
+        // Roadmap 8-3: the appointment outcome (held / no-show) is the heaviest component when present
+        Number showRaw = (Number) s.get("show_rate");
+        Double showRate = showRaw != null ? showRaw.doubleValue() : null;
+
+        return QualityScoreMath.score(matchScoreRaw != null ? matchScore : null, bounced, scroll, formCompletion, showRate);
     }
 
     private void refreshCreativeQuality() {

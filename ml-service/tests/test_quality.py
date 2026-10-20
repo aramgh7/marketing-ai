@@ -84,3 +84,27 @@ def test_aggregate_groups_by_variant():
     assert "v1" in result["by_variant"]
     assert "c1" in result["by_creative"]
     assert 0.0 <= result["by_variant"]["v1"] <= 1.0
+
+
+# ─── Roadmap 8-3: show_rate component + no-show driver in the clickbait detector ───
+
+def test_show_rate_gets_highest_weight_when_present():
+    from app.services.quality_service import APPOINTMENT_WEIGHTS
+    held = compute_quality_score(0.5, False, 0.5, 1.0, show_rate=1.0)
+    noshow = compute_quality_score(0.5, False, 0.5, 1.0, show_rate=0.0)
+    assert abs((held - noshow) - APPOINTMENT_WEIGHTS["show_rate"]) < 1e-6
+    assert APPOINTMENT_WEIGHTS["show_rate"] == max(APPOINTMENT_WEIGHTS.values())
+
+
+def test_unresolved_booking_uses_base_weights():
+    assert compute_quality_score(1.0, False, 1.0, 1.0) == compute_quality_score(1.0, False, 1.0, 1.0, show_rate=None) == 1.0
+
+
+def test_noshow_driver_hook_is_clickbait_even_with_normal_cvr():
+    res = compute_clickbait_check(0.05, 0.02, 0.03, 0.03, 0.4, 0.4, 5000, 5000, 5000, noshow_beta=-0.9)
+    assert res["suspect"] is True and res["noshow_driver"] is True
+
+
+def test_noshow_beta_above_threshold_does_not_flag():
+    res = compute_clickbait_check(0.05, 0.02, 0.03, 0.03, 0.4, 0.4, 5000, 5000, 5000, noshow_beta=0.2)
+    assert res["noshow_driver"] is False and res["suspect"] is False

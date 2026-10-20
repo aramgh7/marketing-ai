@@ -22,6 +22,7 @@ public class EventIngestionService {
     private final JdbcTemplate jdbc;
     private final StringRedisTemplate redis;
     private final FraudScoringService fraudService;
+    private final RewardService rewardService;
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     /** Drop these event types when consent = analytics_only or none. */
@@ -80,10 +81,31 @@ public class EventIngestionService {
             upsertSessions(toWrite, ipAddress, userAgent);
             writeEvents(toWrite);
             fraudService.scoreInline(toWrite, ipAddress, userAgent, cfBotScore);
+            notifyRewardLadder(toWrite);
         }
 
         return new EventBatchResponse(accepted, skipped, "ok");
     }
+
+    // ─── Reward ladder (roadmap 8-3): first-party events that are funnel stages ─
+
+    /** SLOT_SELECTED / FORM_SUBMIT / … mapped via funnel_stages.maps_to_event_type → RewardService. */
+    private void notifyRewardLadder(List<EventDto> events) {
+        for (EventDto e : events) {
+            if (e.getVariantId() == null || e.getEventType() == null || e.getTenantId() == null) continue;
+            if (!STAGE_CANDIDATE_TYPES.contains(e.getEventType())) continue;
+            try {
+                rewardService.onEventIngested(e.getTenantId(), e.getSessionId(), e.getVariantId(), e.getEventType());
+            } catch (Exception ex) {
+                log.debug("reward ladder notification failed for {}: {}", e.getEventType(), ex.getMessage());
+            }
+        }
+    }
+
+    /** First-party event types that a funnel may declare as stages (cheap pre-filter before the DB lookup). */
+    static final Set<String> STAGE_CANDIDATE_TYPES = Set.of(
+            "CALENDAR_OPEN", "SLOT_SELECTED", "FORM_START", "FORM_SUBMIT", "MATERIAL_VIEW",
+            "DATAROOM_OPEN", "WEBINAR_REG", "VIDEO_PROGRESS", "CTA_CLICK");
 
     // ─── Server-side ownership validation ────────────────────────────────────
 

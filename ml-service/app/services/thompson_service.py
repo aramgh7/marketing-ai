@@ -417,19 +417,21 @@ async def _load_decision(decision_id: str) -> Optional[dict]:
     }
 
 
-async def apply_reward(decision_id: str, reward_type: str) -> dict:
+async def apply_reward(decision_id: str, reward_type: str, tenant_configured: bool = False) -> dict:
     """Update the alpha or beta of the arm that was chosen in the given decision.
 
     - Idempotent per (decision_id, reward_type) via thompson_reward_log (audit 2.8).
     - Falls back to decision_log when the Redis key has expired (audit 2.2).
     - A positive reward reverses an earlier NO_RESPONSE_7D sweep for the same decision,
       so every decision stays one Bernoulli observation.
-    - vision §16.1: FORM_SUBMIT reward is disabled when reward_on_form_submit=false.
+    - vision §16.1: FORM_SUBMIT reward is disabled when reward_on_form_submit=false — unless the
+      tenant defines tenants.settings.reward_levels (roadmap 8-3, Audit F1): then the caller has
+      already resolved the stage through that config and passes tenant_configured=True.
     """
     if reward_type not in REWARD_MAP:
         raise ValueError(f"Unknown reward_type '{reward_type}'. Valid: {list(REWARD_MAP)}")
 
-    if reward_type == "FORM_SUBMIT" and not settings.reward_on_form_submit:
+    if reward_type == "FORM_SUBMIT" and not settings.reward_on_form_submit and not tenant_configured:
         return {"arm_id": None, "tenant_id": None, "variant_id": None,
                 "field_updated": None, "delta": 0.0, "skipped": True,
                 "reason": "reward_on_form_submit=false (§16.1 B2B mode)"}

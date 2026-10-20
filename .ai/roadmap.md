@@ -1019,12 +1019,12 @@
 - [x] `reward_service.py`: `compute_stage_reward` (binary 1.0 on quality stage only), `compute_funnel_progress_score`, `estimate_quality_rate`; FastAPI `/thompson/reward` sole writer rule preserved
 - [x] `RewardService.java`: `onStageReached()` → notifies FastAPI `/thompson/reward`; wired into `GhlWebhookService` after `forwardByStage()`
 - [x] `RewardController`: `GET /api/v1/reward/ladder`, `POST /api/v1/reward/stage-reached`
-- [ ] `tenants.settings.reward_levels` (`L1 SLOT_SELECTED`, `L2 FORM_SUBMIT`, weights, `corrector CALL_HELD`) replaces the global `REWARD_ON_FORM_SUBMIT` flag (Audit F1) for tenants that define it; `/decide/reward` resolves via `stage_key`
+- [x] `tenants.settings.reward_levels` (`L1 SLOT_SELECTED`, `L2 FORM_SUBMIT`, weights, `corrector CALL_HELD`) replaces the global `REWARD_ON_FORM_SUBMIT` flag (Audit F1) for tenants that define it; `/decide/reward` resolves via `stage_key` — `RewardService.rewardTypeFor()` + `tenant_configured` flag on `/decide/reward`; first-party stage events reach the ladder through `EventIngestionService.notifyRewardLadder()` → `FunnelService.stageForEventType()` (2026-10-20)
 - [x] Weekly **show-rate corrector** job: `ShowRateCorrectorScheduler` Monday 06:00 UTC; Beta shrinkage posterior → `tenants.settings.show_rate_multiplier` (clipped 0.5–1.5); `POST /reward/show-rate-corrector`; never an α/β increment **[v1.3]**
-- [ ] Gates (3-4): Gate 2 += `booking_rate`; Gate 3 = **cost per CALL_HELD vs anchor** + `P(show_rate < anchor) > 0.9` kill; `GateEvaluationService` reads the quality stage from `funnel_stages.is_quality_key`
-- [ ] Quality Score (2-12): `show_rate` component, highest default weight when the quality key is an appointment stage
-- [ ] **No-show attribution model** (3-1 extension): `logit(show_rate) = Σ β_j·atom_j + γ·booking_distance + δ·tz_known + segment`; β exported to brief (4-4) and clickbait detector (3-14)
-- [ ] Weekly report line: no-show rate with credible interval vs the client's target < 30 %
+- [x] Gates (3-4): Gate 2 += `booking_rate`; Gate 3 = **cost per CALL_HELD vs anchor** + `P(show_rate < anchor) > 0.9` kill; `GateEvaluationService` reads the quality stage from `funnel_stages.is_quality_key` — `HeldCallGate` (pure, 7 tests) wired into `GateEvaluationService`; legacy conversion gate stays for tenants without an appointment quality stage (2026-10-20)
+- [x] Quality Score (2-12): `show_rate` component, highest default weight when the quality key is an appointment stage — `QualityScoreMath` (Java) / `APPOINTMENT_WEIGHTS` (Python), weight 0.40, unresolved bookings keep base weights (2026-10-20)
+- [x] **No-show attribution model** (3-1 extension): `logit(show_rate) = Σ β_j·atom_j + γ·booking_distance + δ·tz_known + segment`; β exported to brief (4-4) and clickbait detector (3-14) — `noshow_attribution_service.py` (ridge IRLS, SE/z, drivers), `POST /analyze/noshow-attribution`, weekly `NoshowAttributionScheduler` → `noshow_attribution_runs` (V121); drivers appended to the brief's avoid list; `compute_clickbait_check(noshow_beta=…)` (2026-10-20)
+- [x] Weekly report line: no-show rate with credible interval vs the client's target < 30 % — `NoshowStats` (Jeffreys 90 % CI, `tenants.settings.noshow_target`) in `WeeklyReportScheduler` (2026-10-20)
 
 ### 8-4. Follow-up Sequence Optimisation — new module (vision §19.6; arch §16.5)
 
@@ -1053,7 +1053,7 @@
 - [x] Frontend booking-funnel atom components: `BookingCalendar` (GHL iframe + `CALENDAR_OPEN`/`SLOT_SELECTED` first-party events), `AccreditationCheckbox` ("I confirm I am an accredited investor" — self-assertion, NOT "Are you accredited?" per META_PERSONAL_ATTR), `TicketSelector` (5 buckets), `Disclaimer506c` (Reg D 506(c)), `SocialProofInvestors`
 - [x] `LandingRenderer.tsx`: new atom cases wired with `formData` state tracking; 5 block types registered in `atom_registry` (V100)
 - [ ] Variants over: calendar window (2 / 4 / 7 days), qualification order (before / after calendar / two-step), timezone field, proof type (adoption speed / field footage / founder / round structure), CTA wording (compliance-approved set), pre-call page on/off, form length (7 / 5 fields)
-- [ ] Reward L1 = `SLOT_SELECTED`, L2 = `FORM_SUBMIT`, corrector `CALL_HELD` (8-3) — optimum is bookings that **show up**, not bookings
+- [x] Reward L1 = `SLOT_SELECTED`, L2 = `FORM_SUBMIT`, corrector `CALL_HELD` (8-3) — optimum is bookings that **show up**, not bookings — set `tenants.settings.reward_levels = {"L1":"SLOT_SELECTED","L2":"FORM_SUBMIT","corrector":"CALL_HELD"}` (2026-10-20)
 - [ ] Message match (2-9): landing headline generated from the source creative's hook; `match_score` calibrated on CALL_HELD, not only bookings
 - [ ] The client's two prepared A/B landing versions enter as the first two Thompson variants; their "what convinces people" answer ([уточню]) becomes atom hypotheses when it arrives
 

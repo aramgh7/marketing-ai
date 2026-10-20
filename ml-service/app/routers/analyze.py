@@ -14,6 +14,7 @@ from app.services.calibration_service import compute_calibration_report
 from app.services.segment_re_service import rank_atoms_by_segment
 from app.services.ope_service import compute_ope, passes_ope_gate
 from app.services.form_check_service import check_form_health
+from app.services.noshow_attribution_service import fit_noshow_attribution
 from app.security import assert_public_http_url
 from app.security import check_internal_key
 
@@ -249,6 +250,20 @@ class NightBurstRequest(BaseModel):
 @router.post("/fraud/night-burst")
 def night_burst(req: NightBurstRequest):
     return check_night_hour_burst(req.events, req.burst_threshold, req.window_minutes)
+
+
+# ── No-show attribution (roadmap 8-3) ─────────────────────────────────────────
+
+class NoshowAttributionRequest(BaseModel):
+    tenant_id: str
+    rows: list[dict]          # {atoms:{TYPE:value}, booking_distance_h, tz_known, segment, showed}
+    l2: float = 1.0
+
+
+@router.post("/noshow-attribution")
+def noshow_attribution(req: NoshowAttributionRequest):
+    """logit(show) = Σ β_j·atom_j + γ·booking_distance + δ·tz_known + segment (ridge IRLS)."""
+    return fit_noshow_attribution(req.rows, l2=req.l2)
 
 
 # ── Form Health ───────────────────────────────────────────────────────────────

@@ -358,6 +358,19 @@ public class BriefService {
                     ))
                     .toList();
 
+            // Roadmap 8-3: atoms that lower P(show) from the latest no-show attribution fit
+            List<Map<String, Object>> avoidAll = new java.util.ArrayList<>(avoid);
+            for (Map<String, Object> d : noShowDrivers(tenantId())) {
+                avoidAll.add(Map.of(
+                        "atomType", String.valueOf(d.get("atom_type")),
+                        "atomValue", String.valueOf(d.get("atom_value")),
+                        "cvr", "n/a",
+                        "creativeCount", 0,
+                        "rationale", String.format("Raises no-show rate: odds ratio %s of showing up (no-show attribution model)",
+                                d.get("odds_ratio"))));
+            }
+            avoid = avoidAll;
+
             // Benchmarks
             double topCvr = recommended.isEmpty() ? 0.0
                     : atoms.stream()
@@ -387,6 +400,24 @@ public class BriefService {
 
         } catch (JsonProcessingException e) {
             log.warn("Failed to serialize atom suggestions: {}", e.getMessage());
+        }
+    }
+
+    /** Latest fitted no-show attribution run → drivers [{atom_type, atom_value, beta, odds_ratio}]. */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> noShowDrivers(UUID tenantId) {
+        try {
+            List<Object> rows = jdbc.queryForList(
+                    "SELECT drivers FROM noshow_attribution_runs WHERE tenant_id = ? AND fitted = TRUE " +
+                    "ORDER BY run_at DESC LIMIT 1", Object.class, tenantId);
+            if (rows.isEmpty()) return List.of();
+            List<Map<String, Object>> out = new java.util.ArrayList<>();
+            for (Object o : com.marketingai.util.Jsonb.asList(rows.get(0))) {
+                if (o instanceof Map<?, ?> m) out.add((Map<String, Object>) m);
+            }
+            return out.size() > 5 ? out.subList(0, 5) : out;
+        } catch (Exception e) {
+            return List.of();
         }
     }
 

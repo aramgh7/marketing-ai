@@ -1,5 +1,7 @@
 package com.marketingai.service;
 
+import java.util.Map;
+import org.springframework.jdbc.core.JdbcTemplate;
 import com.marketingai.entity.MetaAdSet;
 import com.marketingai.entity.MetaCampaign;
 import com.marketingai.repository.MetaAdSetRepository;
@@ -44,6 +46,55 @@ public class GateEvaluationService {
     private final MetaAdSetRepository adSetRepo;
     private final MetaCampaignRepository campaignRepo;
     private final MetaApiService metaApi;
+    private final JdbcTemplate jdbc;
+    private final FunnelService funnelService;
+
+    // ─── Held-call funnel counts (roadmap 8-3; vision §19.5) ─────────────────
+
+    /** Booking + held stage keys for the tenant, or null when the funnel has no appointment quality stage. */
+    record HeldStages(String bookingStage, String heldStage) {}
+
+    private HeldStages heldStages(UUID tenantId) {
+        String held = funnelService.getQualityStageKey(tenantId).orElse(null);
+        if (held == null) return null;
+        List<String> booking = jdbc.queryForList(
+                "SELECT stage_key FROM funnel_stages WHERE tenant_id = ? " +
+                "AND (stage_key = 'BOOKED' OR maps_to_ghl_status LIKE 'AppointmentCreate%') " +
+                "ORDER BY ordinal DESC LIMIT 1", String.class, tenantId);
+        if (booking.isEmpty()) return null;
+        // the quality stage must be an appointment outcome, otherwise the legacy conversion gate applies
+        List<String> ghl = jdbc.queryForList(
+                "SELECT maps_to_ghl_status FROM funnel_stages WHERE tenant_id = ? AND stage_key = ?",
+                String.class, tenantId, held);
+        boolean appointment = !ghl.isEmpty() && ghl.get(0) != null && ghl.get(0).startsWith("AppointmentUpdate");
+        return appointment ? new HeldStages(booking.get(0), held) : null;
+    }
+
+    /** reward_events of sessions attributed to the ad set's creative, for the batch window. */
+    private HeldCallGate.Counts heldCounts(MetaAdSet adSet, HeldStages stages) {
+        if (adSet.getCreativeId() == null) return new HeldCallGate.Counts(safe(adSet.getClicksTotal()), 0, 0, spend(adSet));
+        Map<String, Object> row = jdbc.queryForMap("""
+                SELECT COUNT(DISTINCT re.session_id) FILTER (WHERE re.stage_key = ?) AS bookings,
+                       COUNT(DISTINCT re.session_id) FILTER (WHERE re.stage_key = ?) AS held
+                FROM reward_events re
+                JOIN sessions s ON s.id = re.session_id AND s.tenant_id = re.tenant_id
+                WHERE re.tenant_id = ? AND s.creative_id = ?
+                  AND re.rewarded_at >= COALESCE(?, now() - INTERVAL '90 days')
+                """, stages.bookingStage(), stages.heldStage(), adSet.getTenantId(), adSet.getCreativeId(),
+                adSet.getBatchLaunchedAt() != null ? java.sql.Timestamp.from(adSet.getBatchLaunchedAt()) : null);
+        return new HeldCallGate.Counts(safe(adSet.getClicksTotal()),
+                ((Number) row.get("bookings")).longValue(), ((Number) row.get("held")).longValue(), spend(adSet));
+    }
+
+    private static HeldCallGate.Counts sum(List<HeldCallGate.Counts> list) {
+        long c = 0, b = 0, h = 0; double sp = 0;
+        for (HeldCallGate.Counts x : list) { c += x.clicks(); b += x.bookings(); h += x.held(); sp += x.spend(); }
+        return new HeldCallGate.Counts(c, b, h, sp);
+    }
+
+    private static double spend(MetaAdSet a) {
+        return a.getSpendTotal() == null ? 0.0 : a.getSpendTotal();
+    }
 
     /**
      * Evaluate all eligible TEST campaign ad sets for the given tenant.
@@ -168,6 +219,18 @@ public class GateEvaluationService {
                     pBetter * 100, clicks));
         }
 
+        // Roadmap 8-3: Gate 2 += booking_rate — clicks that never book are not a landing win
+        HeldStages stages = heldStages(adSet.getTenantId());
+        if (stages != null) {
+            HeldCallGate.Counts mine = heldCounts(adSet, stages);
+            HeldCallGate.Counts group = sum(peers.stream().map(p -> heldCounts(p, stages)).toList());
+            Optional<Double> pBook = HeldCallGate.probBookingRateBetter(mine, group);
+            if (pBook.isPresent() && pBook.get() < KILL_THRESHOLD) {
+                return kill(adSet, String.format("Gate 2: P(booking_rate>group)=%.2f%% < 10%% (bookings=%d of %d clicks)",
+                        pBook.get() * 100, mine.bookings(), mine.clicks()));
+            }
+        }
+
         adSet.setGateStatus("GATE_3");
         adSetRepo.save(adSet);
         return true;
@@ -176,6 +239,28 @@ public class GateEvaluationService {
     // ─── Gate 3: Conversion ───────────────────────────────────────────────
 
     private boolean evaluateGate3(MetaAdSet adSet, List<MetaAdSet> peers, MetaAdSet anchor) {
+        // Roadmap 8-3: for an appointment funnel Gate 3 is cost per CALL_HELD vs anchor + show-rate kill
+        HeldStages stages = heldStages(adSet.getTenantId());
+        if (stages != null) {
+            HeldCallGate.Counts mine = heldCounts(adSet, stages);
+            if (!HeldCallGate.hasEnoughData(mine)) return false;
+            HeldCallGate.Counts base = (anchor != null && !anchor.getId().equals(adSet.getId()))
+                    ? heldCounts(anchor, stages)
+                    : sum(peers.stream().filter(p -> !p.getId().equals(adSet.getId())).map(p -> heldCounts(p, stages)).toList());
+            adSet.setGate3EvaluatedAt(Instant.now());
+            Optional<String> killReason = HeldCallGate.evaluateGate3(mine, base);
+            log.info("Gate 3 (held calls) — adSet={} bookings={} held={} cost/held={} kill={}",
+                    adSet.getId(), mine.bookings(), mine.held(), mine.costPerHeld(), killReason.orElse("no"));
+            if (killReason.isPresent()) return kill(adSet, killReason.get());
+            if (mine.held() >= HeldCallGate.MIN_HELD_FOR_COST) {
+                adSet.setGateStatus("PASSED");
+                adSetRepo.save(adSet);
+                log.info("Gate 3 PASSED on held calls: adSet={} is a winner candidate", adSet.getId());
+                return true;
+            }
+            return false;
+        }
+
         long conversions = safe(adSet.getConversionsTotal());
         if (conversions < GATE_3_MIN_CONVERSIONS) return false;
 

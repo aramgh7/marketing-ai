@@ -1,5 +1,8 @@
 package com.marketingai.scheduler;
 
+import java.util.Map;
+import org.springframework.jdbc.core.JdbcTemplate;
+import com.marketingai.service.NoshowStats;
 import com.marketingai.config.AppProperties;
 import com.marketingai.dto.analytics.AtomPerformanceRow;
 import com.marketingai.dto.analytics.CreativePerformanceRow;
@@ -33,6 +36,7 @@ public class WeeklyReportScheduler {
     private final AlertService alertService;
     private final AppProperties appProperties;
     private final RestTemplate restTemplate;
+    private final JdbcTemplate jdbc;
 
     @Autowired(required = false)
     private JavaMailSender mailSender;
@@ -84,6 +88,28 @@ public class WeeklyReportScheduler {
     }
 
     // ─── Report builder ───────────────────────────────────────────────────────
+
+    /** No-show rate over the last 7 days with a 90 % credible interval vs the client's target (< 30 %). */
+    String noShowLine(Tenant tenant) {
+        try {
+            Map<String, Object> row = jdbc.queryForMap("""
+                    SELECT COUNT(*) FILTER (WHERE status = 'NO_SHOW')  AS no_show,
+                           COUNT(*) FILTER (WHERE status = 'COMPLETED') AS held
+                    FROM appointments
+                    WHERE tenant_id = ? AND scheduled_at >= now() - INTERVAL '7 days'
+                    """, tenant.getId());
+            Double target = null;
+            try {
+                Object t = com.marketingai.util.Jsonb.asMap(tenant.getSettings()).get("noshow_target");
+                if (t != null) target = Double.parseDouble(t.toString());
+            } catch (Exception ignored) { /* default target */ }
+            NoshowStats.Summary summary = NoshowStats.summarise(
+                    ((Number) row.get("no_show")).longValue(), ((Number) row.get("held")).longValue(), target);
+            return NoshowStats.reportLine(summary);
+        } catch (Exception e) {
+            return "No-show rate: unavailable (" + e.getMessage() + ")";
+        }
+    }
 
     private String buildReport(Tenant tenant, OverviewResponse ov,
                                 List<CreativePerformanceRow> creatives,
@@ -140,6 +166,9 @@ public class WeeklyReportScheduler {
             sb.append("  ✅ No anomalies detected.\n");
         }
         sb.append("\n");
+
+        sb.append("─── Appointments (roadmap 8-3) ───\n");
+        sb.append(noShowLine(tenant)).append("\n\n");
 
         sb.append("─── Note ───\n");
         sb.append(AnalyticsService.DISCLAIMER).append("\n");

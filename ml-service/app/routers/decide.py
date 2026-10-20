@@ -100,6 +100,7 @@ class DecideResponse(BaseModel):
 class RewardRequest(BaseModel):
     decision_id: str
     reward_type: str
+    tenant_configured: bool = False   # resolved via tenants.settings.reward_levels (8-3)
 
 
 class RewardResponse(BaseModel):
@@ -197,7 +198,7 @@ async def decide_landing(req: DecideRequest):
 async def submit_reward(req: RewardRequest):
     """Submit a reward signal — updates the chosen arm's α or β posterior."""
     try:
-        result = await apply_reward(req.decision_id, req.reward_type)
+        result = await apply_reward(req.decision_id, req.reward_type, req.tenant_configured)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return RewardResponse(

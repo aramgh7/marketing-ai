@@ -63,6 +63,19 @@ public class FunnelService {
         return keys;
     }
 
+    /** Stage reached by a first-party event type (e.g. SLOT_SELECTED), or empty. */
+    public Optional<String> stageForEventType(UUID tenantId, String eventType) {
+        if (eventType == null) return Optional.empty();
+        try {
+            List<String> rows = jdbc.queryForList(
+                    "SELECT stage_key FROM funnel_stages WHERE tenant_id = ? AND maps_to_event_type = ? " +
+                    "ORDER BY ordinal DESC LIMIT 1", String.class, tenantId, eventType);
+            return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
+        } catch (Exception e) {
+            return Optional.empty();
+        }
+    }
+
     /**
      * Returns the stage_key marked is_quality_key=true (first one if multiple).
      * Used by CAPI to identify when to fire the Lead/Schedule events.
