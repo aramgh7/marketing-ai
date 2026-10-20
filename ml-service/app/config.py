@@ -25,6 +25,17 @@ class Settings(BaseSettings):
     r2_secret_access_key: str = ""
     r2_bucket: str = "marketing-ai-assets"
     r2_public_url: str = ""
+    # Roadmap 9-16: AI video providers (empty key → MOCK provider; see services/ai_video_client.py)
+    heygen_api_key: str = ""
+    synthesia_api_key: str = ""
+    runway_api_key: str = ""
+    ai_video_poll_interval_sec: float = 15.0
+    ai_video_max_polls: int = 80          # 80 × 15 s = 20 min before a job is marked FAILED (timeout)
+    # Roadmap 9-14: text-to-speech. Provider "openai" uses openai_api_key (tts-1); "elevenlabs"
+    # needs elevenlabs_api_key; without keys the stub writes a silent WAV.
+    tts_provider: str = "openai"
+    tts_voice: str = "alloy"
+    elevenlabs_api_key: str = ""
 
     class Config:
         env_file = ".env"
