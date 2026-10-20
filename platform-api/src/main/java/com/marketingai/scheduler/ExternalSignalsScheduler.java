@@ -1,5 +1,6 @@
 package com.marketingai.scheduler;
 
+import com.marketingai.service.MlServiceClient;
 import com.marketingai.config.AppProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -24,6 +25,7 @@ import java.util.UUID;
 public class ExternalSignalsScheduler {
 
     private final JdbcTemplate jdbc;
+    private final MlServiceClient mlClient;
     private final RestTemplate restTemplate;
     private final AppProperties appProperties;
 
@@ -108,6 +110,47 @@ public class ExternalSignalsScheduler {
                 log.debug("ExternalSignals: weather signal saved for geo={}", geo);
             } catch (Exception e) {
                 log.warn("ExternalSignals: failed to fetch weather for geo={}: {}", geo, e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Roadmap 3-12: news headline sentiment per tenant (tenants.settings.news_feeds / news_keywords).
+     * One external_signals row per run: signal_type NEWS_SENTIMENT, value_num = mean sentiment,
+     * value_tags = themes (regulation, rates, market_drop, …), raw = top headlines + label.
+     */
+    @Scheduled(cron = "0 30 6 * * *")
+    public void fetchNewsSignals() {
+        List<Map<String, Object>> tenants = jdbc.queryForList("SELECT id, settings FROM tenants");
+        for (Map<String, Object> t : tenants) {
+            UUID tenantId = (UUID) t.get("id");
+            Map<String, Object> settings = com.marketingai.util.Jsonb.asMap(t.get("settings"));
+            List<Object> feeds = settings.get("news_feeds") instanceof List<?> l ? new java.util.ArrayList<>(l) : List.of();
+            if (feeds.isEmpty()) continue;
+            List<Object> keywords = settings.get("news_keywords") instanceof List<?> k ? new java.util.ArrayList<>(k) : List.of();
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> res = mlClient.post("/signals/news-sentiment", Map.of(
+                        "tenant_id", tenantId.toString(), "feeds", feeds, "keywords", keywords, "hours", 24), Map.class);
+                if (res == null || !(res.get("n_items") instanceof Number n) || n.intValue() == 0) continue;
+                List<Object> tags = res.get("tags") instanceof List<?> tl ? new java.util.ArrayList<>(tl) : List.of();
+                String tagsArray = "{" + String.join(",", tags.stream().map(String::valueOf).toList()) + "}";
+                Map<String, Object> raw = new java.util.HashMap<>();
+                raw.put("label", res.get("label"));
+                raw.put("scoring", res.get("scoring"));
+                raw.put("negative_share", res.get("negative_share"));
+                raw.put("top_items", res.get("top_items"));
+                jdbc.update("""
+                        INSERT INTO external_signals
+                        (tenant_id, signal_type, observed_at, valid_from, valid_to, value_num, value_tags, source, raw, created_at)
+                        VALUES (?, 'NEWS_SENTIMENT', now(), date_trunc('day', now()), date_trunc('day', now()) + INTERVAL '1 day',
+                                ?, ?, 'rss', ?::jsonb, now())
+                        """, tenantId, ((Number) res.get("sentiment_mean")).floatValue(), tagsArray,
+                        new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(raw));
+                log.info("ExternalSignals: news sentiment tenant={} n={} mean={} label={}",
+                        tenantId, n, res.get("sentiment_mean"), res.get("label"));
+            } catch (Exception e) {
+                log.warn("ExternalSignals: news sentiment failed for tenant {}: {}", tenantId, e.getMessage());
             }
         }
     }

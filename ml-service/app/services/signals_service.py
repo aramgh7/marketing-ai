@@ -21,6 +21,7 @@ def classify_anomaly(
     calendar_tags: list[str],           # e.g. ["black_friday", "drought_moderate"]
     fraud_threshold_pct: float = 15.0,
     cpm_z_threshold: float = 2.5,
+    news_label: str = "NEUTRAL",       # NEGATIVE / NEUTRAL / POSITIVE from /signals/news-sentiment (3-12)
 ) -> dict:
     """
     Returns {verdict, evidence} per §8.2 three-row table.
@@ -43,7 +44,13 @@ def classify_anomaly(
             evidence.append(f"cpm_z={cpm_z_score:.2f}")
         if calendar_tags:
             evidence.append(f"calendar={calendar_tags}")
+        if news_label == "NEGATIVE":
+            evidence.append("news_sentiment=NEGATIVE")
         return {"verdict": "MARKET", "evidence": evidence}
+
+    if anchor_verdict == "NONE" and news_label == "NEGATIVE" and cpm_z_score is not None and cpm_z_score > cpm_z_threshold:
+        # no anchor signal yet, but negative news + CPM spike is a market explanation (3-12)
+        return {"verdict": "MARKET", "evidence": [f"cpm_z={cpm_z_score:.2f}", "news_sentiment=NEGATIVE"]}
 
     if anchor_verdict == "CREATIVE":
         evidence.append("tests_dropped_anchors_stable")

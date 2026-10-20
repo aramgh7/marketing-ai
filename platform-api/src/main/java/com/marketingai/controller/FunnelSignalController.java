@@ -119,10 +119,25 @@ public class FunnelSignalController {
 
         List<Map<String, Object>> configRows = jdbc.queryForList(
             "SELECT funnel_signal_config FROM tenants WHERE id = ?", tenantId);
-        List<String> newsTags = List.of();
+        List<String> newsTags = new java.util.ArrayList<>();
         if (!configRows.isEmpty()) {
             Object cfg = configRows.get(0).get("funnel_signal_config");
-            newsTags = extractNewsTags(cfg, funnelKey);
+            newsTags.addAll(extractNewsTags(cfg, funnelKey));
+        }
+        // Roadmap 3-12: themes from the latest news-sentiment signal (last 48 h)
+        try {
+            List<Object> live = jdbc.queryForList("""
+                SELECT value_tags FROM external_signals
+                WHERE tenant_id = ? AND signal_type = 'NEWS_SENTIMENT' AND observed_at > now() - INTERVAL '48 hours'
+                ORDER BY observed_at DESC LIMIT 1
+                """, Object.class, tenantId);
+            if (!live.isEmpty() && live.get(0) != null) {
+                Object arr = live.get(0);
+                Object[] vals = arr instanceof java.sql.Array a ? (Object[]) a.getArray() : arr instanceof Object[] o ? o : new Object[0];
+                for (Object v : vals) if (v != null && !newsTags.contains(v.toString())) newsTags.add(v.toString());
+            }
+        } catch (Exception e) {
+            log.debug("news tags lookup failed: {}", e.getMessage());
         }
 
         try {

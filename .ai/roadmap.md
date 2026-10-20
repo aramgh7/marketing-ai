@@ -654,7 +654,7 @@
 - [x] FastAPI `POST /signals/anomaly` — labels drop as `MARKET` / `CREATIVE` / `TECHNICAL` / `FRAUD` / `NONE` using priority chain; `signals_service.classify_anomaly()`
 - [x] **[v1.1.1]** Weather for client #1: Open-Meteo tags: `drought_moderate`, `drought_severe`, `heat_stress`, `growing_degree_days`; `summarise_weather_signals()` extracts bucket for GLM
 - [x] **[v1.1.1]** Agronomic calendar entries via `saveCalendarEvent` (marketer-maintained)
-- [ ] News headline sentiment (LLM) — deferred post-MVP
+- [x] News headline sentiment (LLM) — `news_sentiment_service.py` (RSS/Atom parse, keyword relevance, lexicon fallback, theme tags, aggregation; 7 tests) + `POST /signals/news-sentiment` (Claude haiku per-headline scores when the key is set); `ExternalSignalsScheduler.fetchNewsSignals` 06:30 UTC per tenant (`settings.news_feeds`, `news_keywords`) → `external_signals(NEWS_SENTIMENT)`; `classify_anomaly(news_label=…)` adds news evidence to MARKET; narrative context merges live news tags (2026-10-20)
 - [ ] Weather-aware power calculator dashboard flag — deferred to frontend
 
 ### 3-13. Site Health Guard — Full ✅ **[v1.1 — added]** (vision §11.4, §22; arch §15.3; HTTP check from 0-13)
@@ -712,7 +712,7 @@
 ### 3-20. Fraud Layer 3 — Funnel Anomalies ✅ **[v1.1 — added]** (vision §12.6.2; arch §15.18)
 
 - [x] `FraudL3Scheduler` — hourly geo×placement scan; fraud_rate > 30% → `circuit_breaker_events` level=L3, trigger_type=FRAUD_L3; Telegram alert
-- [x] Night-hour click burst detection (per-tenant timezone) — deferred
+- [x] Night-hour click burst detection (per-tenant timezone) — `NightBurstMath` (23:00–05:00 in `settings.timezone`, sliding 15-min window, threshold 10; 5 tests) run hourly by `FraudL3Scheduler.checkNightBurst` → `circuit_breaker_events` L3 `FRAUD_NIGHT_BURST` + alert (2026-10-20)
 - [ ] First-party vs Meta-reported clicks delta — deferred (requires live Meta Insights API)
 - [x] `FRAUD` verdict in `signals_service.classify_anomaly()` priority chain (FRAUD > MARKET)
 

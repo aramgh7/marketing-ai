@@ -1,5 +1,6 @@
 package com.marketingai.scheduler;
 
+import com.marketingai.service.NightBurstMath;
 import com.marketingai.service.AlertService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -36,6 +37,11 @@ public class FraudL3Scheduler {
                 checkTenantFraudL3(tenantId);
             } catch (Exception e) {
                 log.warn("FraudL3Scheduler failed for tenant={}: {}", tenantId, e.getMessage());
+            }
+            try {
+                checkNightBurst(tenantId);
+            } catch (Exception e) {
+                log.warn("FraudL3 night-burst failed for tenant={}: {}", tenantId, e.getMessage());
             }
         }
     }
@@ -96,6 +102,44 @@ public class FraudL3Scheduler {
                     + "Check circuit_breaker_events and review Meta placements.",
                     tenantId, l3EventsCreated));
         }
+    }
+
+    /**
+     * Roadmap 3-20: night-hour click bursts (23:00–05:00 in tenants.settings.timezone).
+     * 10+ clicks within 15 minutes at night → circuit_breaker_events L3 FRAUD_NIGHT_BURST + alert
+     * (one open event per tenant). Thresholds: settings.night_burst_threshold / night_burst_window_min.
+     */
+    private void checkNightBurst(UUID tenantId) {
+        Map<String, Object> settings = com.marketingai.util.Jsonb.asMap(
+                jdbc.queryForObject("SELECT settings FROM tenants WHERE id = ?", Object.class, tenantId));
+        java.time.ZoneId zone = NightBurstMath.zoneOf(settings.get("timezone"));
+        int threshold = settings.get("night_burst_threshold") instanceof Number n ? n.intValue() : NightBurstMath.DEFAULT_THRESHOLD;
+        int windowMin = settings.get("night_burst_window_min") instanceof Number w ? w.intValue() : NightBurstMath.DEFAULT_WINDOW_MINUTES;
+
+        List<java.time.Instant> clicks = jdbc.query("""
+                SELECT event_time FROM events
+                WHERE tenant_id = ? AND event_type IN ('CLICK', 'PAGE_VIEW')
+                  AND event_time > now() - INTERVAL '24 hours'
+                """, (rs, i) -> rs.getTimestamp("event_time").toInstant(), tenantId);
+        NightBurstMath.Result r = NightBurstMath.detect(clicks, zone, threshold, windowMin);
+        if (!r.burst()) return;
+
+        List<Map<String, Object>> existing = jdbc.queryForList("""
+                SELECT id FROM circuit_breaker_events
+                WHERE tenant_id = ? AND trigger_type = 'FRAUD_NIGHT_BURST' AND resolved_at IS NULL
+                """, tenantId);
+        if (!existing.isEmpty()) return;
+        String reason = String.format(java.util.Locale.ROOT,
+                "FRAUD_NIGHT_BURST: %d clicks within %d min between 23:00 and 05:00 %s (%d night clicks in 24h)",
+                r.maxInWindow(), r.windowMinutes(), zone.getId(), r.nightEvents());
+        jdbc.update("""
+                INSERT INTO circuit_breaker_events
+                (tenant_id, level, trigger_type, trigger_reason, metric, value, action_taken, created_at)
+                VALUES (?, 'L3', 'FRAUD_NIGHT_BURST', ?, 'night_clicks_15min', ?, 'REVIEW_PLACEMENTS', now())
+                """, tenantId, reason, (float) r.maxInWindow());
+        alertService.sendAlert("🔴 Fraud L3 — Tenant " + tenantId + ": " + reason
+                + "\nBot-like traffic pattern; review placements and IP clusters.");
+        log.warn("FraudL3 night burst: tenant={} {}", tenantId, reason);
     }
 
     private long toLong(Object o) {
