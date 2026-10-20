@@ -191,7 +191,7 @@ public class ChurnPenaltyService {
         for (String sessionId : sessionIds) {
             jdbc.update(
                     "UPDATE sessions SET churn_penalized_at = ? WHERE id = ? AND tenant_id = ?",
-                    now, sessionId, tenantId
+                    java.sql.Timestamp.from(now), sessionId, tenantId
             );
         }
     }

@@ -26,13 +26,21 @@ public interface MetaPixelRepository extends JpaRepository<MetaPixel, UUID> {
            "WHERE p.tenantId = :tenantId AND p.defaultPixel = true AND p.status = 'ACTIVE'")
     Optional<byte[]> findDefaultCapiTokenBytes(UUID tenantId);
 
-    /** Find pixel_id by role_key (for CAPI v2 multi-pixel routing). */
+    /** Find pixel_id by role_key (for CAPI v2 multi-pixel routing). JPQL has no LIMIT — list + first. */
     @Query("SELECT p.pixelId FROM MetaPixel p " +
-           "WHERE p.tenantId = :tenantId AND p.roleKey = :roleKey AND p.status = 'ACTIVE' LIMIT 1")
-    Optional<String> findPixelIdByRole(UUID tenantId, String roleKey);
+           "WHERE p.tenantId = :tenantId AND p.roleKey = :roleKey AND p.status = 'ACTIVE' ORDER BY p.createdAt")
+    List<String> findPixelIdsByRole(UUID tenantId, String roleKey);
 
-    /** Find CAPI token by role_key. */
+    default Optional<String> findPixelIdByRole(UUID tenantId, String roleKey) {
+        return findPixelIdsByRole(tenantId, roleKey).stream().findFirst();
+    }
+
+    /** Find the sealed CAPI token by role_key (open it with TokenVault). */
     @Query("SELECT p.capiAccessTokenEnc FROM MetaPixel p " +
-           "WHERE p.tenantId = :tenantId AND p.roleKey = :roleKey AND p.status = 'ACTIVE' LIMIT 1")
-    Optional<byte[]> findCapiTokenBytesByRole(UUID tenantId, String roleKey);
+           "WHERE p.tenantId = :tenantId AND p.roleKey = :roleKey AND p.status = 'ACTIVE' ORDER BY p.createdAt")
+    List<byte[]> findCapiTokenBytesListByRole(UUID tenantId, String roleKey);
+
+    default Optional<byte[]> findCapiTokenBytesByRole(UUID tenantId, String roleKey) {
+        return findCapiTokenBytesListByRole(tenantId, roleKey).stream().filter(b -> b != null && b.length > 0).findFirst();
+    }
 }

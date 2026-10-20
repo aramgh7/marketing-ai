@@ -19,6 +19,16 @@ public class JwtUtil {
 
     private final AppProperties props;
 
+    /** Fail at startup, not on the first login: HS256 needs ≥ 32 bytes (RFC 7518 §3.2). */
+    @jakarta.annotation.PostConstruct
+    void validateSecret() {
+        String secret = props.getJwt().getSecret();
+        if (secret == null || secret.startsWith("${") || secret.getBytes(StandardCharsets.UTF_8).length < 32) {
+            throw new IllegalStateException(
+                    "JWT_SECRET is missing or shorter than 32 bytes — set the JWT_SECRET environment variable");
+        }
+    }
+
     private SecretKey key() {
         return Keys.hmacShaKeyFor(
                 props.getJwt().getSecret().getBytes(StandardCharsets.UTF_8));

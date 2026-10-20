@@ -56,7 +56,7 @@ public class QualityScoreScheduler {
                   AND s.consent_level = 'full'
                   AND s.is_suspicious = false
                 LIMIT 5000
-                """, cutoff);
+                """, java.sql.Timestamp.from(cutoff));
 
         if (sessions.isEmpty()) return;
         log.debug("QualityScoreScheduler: scoring {} sessions", sessions.size());

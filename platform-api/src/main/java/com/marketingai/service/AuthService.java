@@ -57,7 +57,8 @@ public class AuthService {
         user.setEmail(req.getEmail());
         user.setPasswordHash(passwordEncoder.encode(req.getPassword()));
         user.setRole("ADMIN");
-        user = userRepo.save(user);
+        // Flush the JPA inserts before the JDBC insert below: refresh_tokens has FKs to tenants/users
+        user = userRepo.saveAndFlush(user);
 
         String token = jwtUtil.generate(user.getId(), tenant.getId(), user.getRole());
         String refresh = issueRefreshToken(user.getId(), tenant.getId());

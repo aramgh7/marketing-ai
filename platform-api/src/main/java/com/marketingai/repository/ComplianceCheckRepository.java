@@ -13,12 +13,10 @@ public interface ComplianceCheckRepository extends JpaRepository<ComplianceCheck
 
     List<ComplianceCheck> findByTenantIdAndEntityIdOrderByCreatedAtDesc(UUID tenantId, UUID entityId);
 
-    @Query("""
-        SELECT c FROM ComplianceCheck c
-        WHERE c.tenantId = :tenantId AND c.entityId = :entityId
-        ORDER BY c.createdAt DESC
-        LIMIT 1
-        """)
-    Optional<ComplianceCheck> findLatestByEntityId(@Param("tenantId") UUID tenantId,
-                                                    @Param("entityId") UUID entityId);
+    /** Latest check for an entity. JPQL has no LIMIT (Hibernate 6 rejects it at boot) — derived query instead. */
+    Optional<ComplianceCheck> findFirstByTenantIdAndEntityIdOrderByCreatedAtDesc(UUID tenantId, UUID entityId);
+
+    default Optional<ComplianceCheck> findLatestByEntityId(UUID tenantId, UUID entityId) {
+        return findFirstByTenantIdAndEntityIdOrderByCreatedAtDesc(tenantId, entityId);
+    }
 }
