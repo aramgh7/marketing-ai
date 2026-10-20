@@ -26,13 +26,41 @@ public class FunnelService {
      * Falls back to empty string if unmapped.
      */
     public String resolveStage(UUID tenantId, String ghlEventType) {
-        try {
-            return jdbc.queryForObject(
-                    "SELECT stage_key FROM funnel_stages WHERE tenant_id = ? AND maps_to_ghl_status = ? LIMIT 1",
-                    String.class, tenantId, ghlEventType);
-        } catch (Exception e) {
-            return "";
+        return resolveStage(tenantId, ghlEventType, null, null);
+    }
+
+    /**
+     * Audit 4.1/4.2: seeds store composite keys ("AppointmentUpdate_showed",
+     * "OpportunityStatusUpdate_won"); the composite form is tried before the bare type, and ties
+     * (two stages on "AppointmentCreate") resolve to the furthest stage instead of arbitrarily.
+     */
+    public String resolveStage(UUID tenantId, String ghlEventType, String statusField, String appointmentStatus) {
+        for (String key : candidateKeys(ghlEventType, statusField, appointmentStatus)) {
+            try {
+                List<String> rows = jdbc.queryForList(
+                        "SELECT stage_key FROM funnel_stages WHERE tenant_id = ? AND maps_to_ghl_status = ? " +
+                        "ORDER BY ordinal DESC LIMIT 1",
+                        String.class, tenantId, key);
+                if (!rows.isEmpty()) return rows.get(0);
+            } catch (Exception e) {
+                log.warn("resolveStage failed for key {}: {}", key, e.getMessage());
+            }
         }
+        return "";
+    }
+
+    /** Lookup keys in priority order: type_appointmentStatus, type_status, type (all lower-cased statuses). */
+    static List<String> candidateKeys(String ghlEventType, String statusField, String appointmentStatus) {
+        List<String> keys = new java.util.ArrayList<>();
+        if (ghlEventType == null) return keys;
+        if (appointmentStatus != null && !appointmentStatus.isBlank()) {
+            keys.add(ghlEventType + "_" + appointmentStatus.trim().toLowerCase());
+        }
+        if (statusField != null && !statusField.isBlank()) {
+            keys.add(ghlEventType + "_" + statusField.trim().toLowerCase());
+        }
+        keys.add(ghlEventType);
+        return keys;
     }
 
     /**
@@ -88,9 +116,9 @@ public class FunnelService {
             new Object[]{"CALENDAR_OPEN",      1,  "Calendar Opened",          false, false, "CALENDAR_OPEN",         "CALENDAR_OPEN"},
             new Object[]{"SLOT_SELECTED",      2,  "Slot Selected",            false, false, "SLOT_SELECTED",         "SLOT_SELECTED"},
             new Object[]{"FORM_SUBMIT",        3,  "Form Submitted",           false, false, "AppointmentCreate",     "FORM_SUBMIT"},
-            new Object[]{"BOOKED",             4,  "Appointment Booked",       true,  false, "AppointmentCreate",     "BOOKED"},
+            new Object[]{"BOOKED",             4,  "Appointment Booked",       false, false, "AppointmentCreate",     "BOOKED"},
             new Object[]{"COORD_CONFIRMED",    5,  "Coordinator Confirmed",    false, false, "COORD_CONFIRMED",       "COORD_CONFIRMED"},
-            new Object[]{"CALL_HELD",          6,  "Call Held",                false, false, "AppointmentUpdate_showed","CALL_HELD"},
+            new Object[]{"CALL_HELD",          6,  "Call Held",                true,  false, "AppointmentUpdate_showed","CALL_HELD"},
             new Object[]{"NO_SHOW",            6,  "No Show",                  false, false, "AppointmentUpdate_noshow","NO_SHOW"},
             new Object[]{"FOLLOWUP_HELD",      7,  "Follow-up Call Held",      false, false, "FOLLOWUP_HELD",         "FOLLOWUP_HELD"},
             new Object[]{"ACCRED_VERIFIED",    8,  "Accreditation Verified",   false, false, "ACCRED_VERIFIED",       "ACCRED_VERIFIED"},

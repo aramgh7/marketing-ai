@@ -1,5 +1,7 @@
 package com.marketingai.service;
 
+import java.time.Duration;
+import org.springframework.data.domain.PageRequest;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.marketingai.entity.CAPIEventLog;
 import com.marketingai.entity.Tenant;
@@ -133,9 +135,12 @@ public class CAPIForwardingService {
     private CAPIEventLog sendToMeta(
             CAPIEventLog entry, String pixelId, String accessToken,
             Map<String, Object> payload) {
+        entry.setAttempts(entry.getAttempts() + 1);
+        entry.setLastAttemptAt(Instant.now());
         try {
-            String url = GRAPH_API + "/" + pixelId + "/events?access_token=" + accessToken;
-            Map<String, Object> body = Map.of("data", List.of(payload));
+            // Token travels in the POST body, not the query string (audit §3.4: it leaked into proxy/CDN logs).
+            String url = GRAPH_API + "/" + pixelId + "/events";
+            Map<String, Object> body = Map.of("data", List.of(payload), "access_token", accessToken);
 
             ResponseEntity<String> resp = restTemplate.postForEntity(url, body, String.class);
             entry.setStatus("SENT");
@@ -311,6 +316,7 @@ public class CAPIForwardingService {
             entry.setEventId(clientEventId);
             entry.setPixelId(pixelId);
             entry.setProxyValue((float) proxyValue);
+            entry.setPixelRole(roleKey);
             entry.setGhlEventType(stageKey);
             entry.setGhlContactId(ghlContactId);
             entry.setPayload(toJson(payload));
@@ -337,6 +343,63 @@ public class CAPIForwardingService {
         String cond = condition.trim().toLowerCase();
         if (cond.equals("self_accredited = true"))  return Boolean.TRUE.equals(selfAccredited);
         if (cond.equals("self_accredited = false")) return Boolean.FALSE.equals(selfAccredited);
-        return true; // unknown condition → allow
+        // Audit 4.6: an unknown expression (e.g. a typo in capi_event_map) must not silently disable the gate.
+        log.warn("CAPI send_condition '{}' is not supported — event NOT sent (fail closed)", condition);
+        return false;
+    }
+
+    /** Audit 4.4: sha256(tenant | GHL anchor id | stage) — stable across webhook retries; null without an anchor. */
+    public static String deterministicEventId(UUID tenantId, String anchorId, String stageKey) {
+        if (anchorId == null || anchorId.isBlank()) return null;
+        return sha256(tenantId + "|" + anchorId.trim() + "|" + stageKey);
+    }
+
+    // ─── Retry of PENDING / FAILED events (audit 4.5) ────────────────────────
+
+    static final int MAX_ATTEMPTS = 5;
+    private static final Duration RETRY_BASE = Duration.ofMinutes(5);
+    private static final Duration RETRY_CAP  = Duration.ofHours(6);
+
+    /** Exponential backoff: due when now >= last_attempt + min(5 min · 2^attempts, 6 h). */
+    static boolean retryDue(int attempts, Instant lastAttempt, Instant now) {
+        if (lastAttempt == null) return true;
+        long factor = 1L << Math.min(attempts, 20);
+        Duration backoff = RETRY_BASE.multipliedBy(factor);
+        if (backoff.compareTo(RETRY_CAP) > 0) backoff = RETRY_CAP;
+        return !now.isBefore(lastAttempt.plus(backoff));
+    }
+
+    /**
+     * Resend PENDING/FAILED events younger than 7 days (Meta's event_time limit) whose backoff has
+     * elapsed. Credentials are resolved now (they may have been pasted after the event was logged).
+     * Returns the number of events that reached SENT.
+     */
+    @SuppressWarnings("unchecked")
+    public int retryPending(int limit) {
+        Instant now = Instant.now();
+        List<CAPIEventLog> due = capiRepo.findRetryable(now.minus(Duration.ofDays(7)), MAX_ATTEMPTS, PageRequest.of(0, limit));
+        int sent = 0;
+        for (CAPIEventLog entry : due) {
+            if (!retryDue(entry.getAttempts(), entry.getLastAttemptAt(), now)) continue;
+            UUID tenantId = entry.getTenantId();
+            String role = entry.getPixelRole();
+            String pixelId = role != null
+                    ? pixelRepo.findPixelIdByRole(tenantId, role).orElse(null)
+                    : pixelRepo.findDefaultPixelId(tenantId).orElse(null);
+            String token = role != null
+                    ? pixelRepo.findCapiTokenByRole(tenantId, role).orElse(null)
+                    : pixelRepo.findCapiToken(tenantId).orElse(null);
+            if (pixelId == null || token == null) continue; // still no credentials — keep waiting
+            Map<String, Object> payload;
+            try {
+                payload = MAPPER.readValue(entry.getPayload(), Map.class);
+            } catch (Exception e) {
+                log.warn("CAPI retry: unreadable payload for event {}: {}", entry.getId(), e.getMessage());
+                continue;
+            }
+            entry.setPixelId(pixelId);
+            if ("SENT".equals(sendToMeta(entry, pixelId, token, payload).getStatus())) sent++;
+        }
+        return sent;
     }
 }

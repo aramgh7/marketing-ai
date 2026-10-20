@@ -12,7 +12,7 @@ import java.util.UUID;
 /**
  * Pixel Pollution Auto-Detection — Level 3 (vision §6.8).
  *
- * Quality rate = CRM_MEETING_ATTENDED events / FORM_SUBMIT events per UTM campaign.
+ * Quality rate = held appointments (appointments.status = COMPLETED) / converted sessions per UTM campaign.
  * Drift alert fires when:
  *   quality_rate_14d < 0.70 × baseline_rate_30d
  *   AND forms_14d >= 20 (min volume — avoid noise on tiny cohorts)
@@ -56,30 +56,34 @@ public class PixelPollutionService {
                       AND  started_at  > now() - INTERVAL '14 days'
                     GROUP  BY utm_campaign
                 ),
+                -- Audit 4.8: nothing ever wrote a CRM_MEETING_ATTENDED event; held meetings live in
+                -- appointments (status = COMPLETED, set by the GHL AppointmentUpdate/showed webhook).
                 meetings_14 AS (
                     SELECT s.utm_campaign, COUNT(*) AS cnt
-                    FROM   events e
-                    JOIN   sessions s ON s.id = e.session_id AND s.tenant_id = e.tenant_id
-                    WHERE  e.tenant_id  = ?
-                      AND  e.event_type = 'CRM_MEETING_ATTENDED'
-                      AND  e.event_time > now() - INTERVAL '14 days'
+                    FROM   appointments a
+                    JOIN   sessions s ON s.id = a.session_id AND s.tenant_id = a.tenant_id
+                    WHERE  a.tenant_id = ?
+                      AND  a.status    = 'COMPLETED'
+                      AND  COALESCE(a.ghl_updated_at, a.scheduled_at) > now() - INTERVAL '14 days'
                     GROUP  BY s.utm_campaign
                 ),
+                -- Baseline = the 30 days *before* the compared 14-day window (it used to include it)
                 forms_30 AS (
                     SELECT utm_campaign, COUNT(*) AS cnt
                     FROM   sessions
                     WHERE  tenant_id   = ?
                       AND  converted   = true
-                      AND  started_at  > now() - INTERVAL '30 days'
+                      AND  started_at  BETWEEN now() - INTERVAL '44 days' AND now() - INTERVAL '14 days'
                     GROUP  BY utm_campaign
                 ),
                 meetings_30 AS (
                     SELECT s.utm_campaign, COUNT(*) AS cnt
-                    FROM   events e
-                    JOIN   sessions s ON s.id = e.session_id AND s.tenant_id = e.tenant_id
-                    WHERE  e.tenant_id  = ?
-                      AND  e.event_type = 'CRM_MEETING_ATTENDED'
-                      AND  e.event_time > now() - INTERVAL '30 days'
+                    FROM   appointments a
+                    JOIN   sessions s ON s.id = a.session_id AND s.tenant_id = a.tenant_id
+                    WHERE  a.tenant_id = ?
+                      AND  a.status    = 'COMPLETED'
+                      AND  COALESCE(a.ghl_updated_at, a.scheduled_at)
+                               BETWEEN now() - INTERVAL '44 days' AND now() - INTERVAL '14 days'
                     GROUP  BY s.utm_campaign
                 )
                 SELECT

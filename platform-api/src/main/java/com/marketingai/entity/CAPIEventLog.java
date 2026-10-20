@@ -51,6 +51,15 @@ public class CAPIEventLog {
 
     private Instant sentAt;
 
+    /** capi_event_map.pixel_role the event was built for (null = legacy default pixel). */
+    private String pixelRole;
+
+    /** Delivery attempts so far (audit 4.5 retry). */
+    @Column(nullable = false)
+    private Integer attempts = 0;
+
+    private Instant lastAttemptAt;
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
 

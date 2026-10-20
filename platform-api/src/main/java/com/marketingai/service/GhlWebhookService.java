@@ -61,7 +61,12 @@ public class GhlWebhookService {
         handleAppointmentEvent(tenantId, eventType, sessionId, payload);
 
         // 4. Forward to CAPI — use DB-driven funnel if available, else legacy gate.
-        String stageKey = funnelService.resolveStage(tenantId, eventType);
+        String stageKey = funnelService.resolveStage(
+                tenantId, eventType, payload.getStatus(), payload.getAppointmentStatus());
+        // Audit 4.4: a deterministic event_id lets Meta dedup CAPI against the browser pixel and
+        // makes webhook retries idempotent on Meta's side.
+        String anchor = firstNonBlank(payload.getAppointmentId(), payload.getOpportunityId(),
+                payload.getContactId(), payload.getEmail());
         if (!stageKey.isBlank()) {
             // CAPI v2: resolve session qualifiers for value formula
             Boolean selfAccredited = lookupSelfAccredited(sessionId, tenantId);
@@ -71,7 +76,8 @@ public class GhlWebhookService {
                     payload.getContactId(), sessionId,
                     payload.getEmail(), payload.getPhone(),
                     selfAccredited, ticketBucket,
-                    payload.getDealValue(), null,
+                    payload.getDealValue(),
+                    CAPIForwardingService.deterministicEventId(tenantId, anchor, stageKey),
                     valueFormulaService);
             // Reward ladder: notify RewardService of reached stage (8-3)
             if (sessionId != null) {
@@ -93,7 +99,8 @@ public class GhlWebhookService {
                     tenant, capiKey,
                     payload.getContactId(), sessionId,
                     payload.getEmail(), payload.getPhone(),
-                    payload.getDealValue(), null);
+                    payload.getDealValue(),
+                    CAPIForwardingService.deterministicEventId(tenantId, anchor, capiKey));
         }
     }
 
@@ -129,6 +136,11 @@ public class GhlWebhookService {
         }
     }
 
+    private static String firstNonBlank(String... values) {
+        for (String v : values) if (v != null && !v.isBlank()) return v.trim();
+        return null;
+    }
+
     private Instant parseInstant(String iso) {
         if (iso == null || iso.isBlank()) return null;
         try {
@@ -153,7 +165,7 @@ public class GhlWebhookService {
                     JOIN events e ON e.session_id = s.id AND e.event_time > now() - INTERVAL '30 days'
                     WHERE s.tenant_id = ?
                       AND e.event_type = 'FORM_SUBMIT'
-                      AND e.event_data->>'email' = ?
+                      AND lower(e.event_data->>'email') = lower(?)
                     ORDER BY e.event_time DESC
                     LIMIT 1
                     """,
@@ -204,7 +216,7 @@ public class GhlWebhookService {
         if (sessionId == null) return null;
         try {
             return jdbc.queryForObject(
-                    "SELECT self_accredited FROM sessions WHERE id = ?::uuid AND tenant_id = ? LIMIT 1",
+                    "SELECT self_accredited FROM sessions WHERE id = ? AND tenant_id = ? LIMIT 1",
                     Boolean.class, sessionId, tenantId);
         } catch (Exception e) {
             return null;
@@ -215,7 +227,7 @@ public class GhlWebhookService {
         if (sessionId == null) return null;
         try {
             return jdbc.queryForObject(
-                    "SELECT ticket_bucket FROM sessions WHERE id = ?::uuid AND tenant_id = ? LIMIT 1",
+                    "SELECT ticket_bucket FROM sessions WHERE id = ? AND tenant_id = ? LIMIT 1",
                     String.class, sessionId, tenantId);
         } catch (Exception e) {
             return null;
