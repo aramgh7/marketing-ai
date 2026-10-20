@@ -22,8 +22,9 @@ Propensity (arch v1.1 §4.6):
 Cache: Redis key posterior:{tenant_id}:{context_key}, TTL 15 min.
 """
 
-import asyncio
+import hashlib
 import json
+import math
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -40,8 +41,13 @@ DECAY_FACTOR = 0.99
 DECAY_INTERVAL_SECS = 86_400  # 24 h
 N_PROPENSITY = 200  # Monte Carlo draws for propensity estimation
 
-_UPDATE_ALPHA = "UPDATE thompson_arms SET alpha=alpha+$1, total_samples=total_samples+1, updated_at=$2 WHERE id=$3"
-_UPDATE_BETA  = "UPDATE thompson_arms SET beta=beta+$1,  total_samples=total_samples+1, updated_at=$2 WHERE id=$3"
+_UPDATE_ALPHA = ("UPDATE thompson_arms SET alpha=alpha+$1, total_samples=total_samples+1, updated_at=$2 "
+                 "WHERE id=$3::uuid AND tenant_id=$4::uuid")
+_UPDATE_BETA  = ("UPDATE thompson_arms SET beta=beta+$1,  total_samples=total_samples+1, updated_at=$2 "
+                 "WHERE id=$3::uuid AND tenant_id=$4::uuid")
+_SET_TENANT   = "SELECT set_config('app.current_tenant', $1, true)"  # SET LOCAL cannot take a bind parameter
+
+NO_RESPONSE_WINDOW_DAYS = 7   # attribution window before a decision counts as a negative (beta += 1)
 
 # arch v1.1 §4.4: all deltas are 1.0 — binary counts only, no fractional increments
 REWARD_MAP: dict[str, tuple[str, float]] = {
@@ -56,19 +62,67 @@ REWARD_MAP: dict[str, tuple[str, float]] = {
 }
 
 
-async def load_arms(tenant_id: str, context_key: str = "global") -> list[dict]:
-    """Return ACTIVE arms from Redis cache or DB. Apply 24 h decay lazily."""
-    redis = get_redis()
-    cache_key = f"{CACHE_PREFIX}:{tenant_id}:{context_key}"
-    cached = await redis.get(cache_key)
-    if cached:
-        return json.loads(cached)
+# ─── Pure helpers (no I/O) ───────────────────────────────────────────────────
 
+def holdout_bucket(session_id: Optional[str]) -> int:
+    """Deterministic 0-9999 bucket. Session ids are cookie strings, not necessarily hex/UUID."""
+    if not session_id:
+        return int(np.random.randint(0, 10_000))
+    return int(hashlib.sha1(session_id.encode("utf-8")).hexdigest()[:8], 16) % 10_000
+
+
+def decay_toward_prior(value: float, days: int) -> float:
+    """arch v1.1 §9: alpha = 1 + 0.99^days * (alpha - 1). Never crosses below the Beta(1,1) prior."""
+    if days <= 0:
+        return value
+    return 1.0 + (DECAY_FACTOR ** days) * (value - 1.0)
+
+
+def churn_penalty_delta(weighted_sum: float, alpha: float, beta: float) -> tuple[int, bool]:
+    """Integer beta penalty for a churn wave (vision §6.7 cap, arch §4.4 binary counts).
+
+    Returns (applied_delta, capped). The cap is 30 % of (alpha+beta); the result is floored
+    because fractional increments are forbidden - a penalty below 1 is skipped.
+    """
+    cap = _CHURN_CAP * (alpha + beta)
+    capped = weighted_sum > cap
+    return int(math.floor(min(weighted_sum, cap))), capped
+
+
+def arm_for_decision(chosen_variant_id: str, candidates) -> Optional[str]:
+    """Recover the chosen arm id from a decision_log row (candidates JSON)."""
+    if isinstance(candidates, str):
+        try:
+            candidates = json.loads(candidates)
+        except ValueError:
+            return None
+    for c in candidates or []:
+        if str(c.get("variant_id")) == str(chosen_variant_id):
+            return c.get("arm_id")
+    return None
+
+
+def _as_dict(value) -> dict:
+    if isinstance(value, str):
+        try:
+            return json.loads(value) or {}
+        except ValueError:
+            return {}
+    return value or {}
+
+
+# ─── Arms ────────────────────────────────────────────────────────────────────
+
+async def ensure_arms(tenant_id: str, context_key: str) -> int:
+    """Create Beta(1,1) arms for every ACTIVE variant under context_key (idempotent).
+
+    Audit 2.9: this used to run inside load_arms for *any* requested key, which created a
+    cold arm set for every cluster/channel and defeated the documented fallback to the
+    channel-global arms. It is now an explicit call made only for the canonical key.
+    """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # arch v1.1 §12 #12: single writer = FastAPI.
-        # Create arms lazily for ACTIVE variants that have no arm yet (idempotent).
-        await conn.execute(
+        status = await conn.execute(
             """
             INSERT INTO thompson_arms (tenant_id, variant_id, context_key)
             SELECT $1::uuid, lv.id, $2
@@ -84,6 +138,49 @@ async def load_arms(tenant_id: str, context_key: str = "global") -> list[dict]:
             """,
             tenant_id,
             context_key,
+        )
+    await get_redis().delete(f"{CACHE_PREFIX}:{tenant_id}:{context_key}")
+    try:
+        return int(status.split()[-1])
+    except (ValueError, IndexError):
+        return 0
+
+
+async def load_arms(tenant_id: str, context_key: str = "global") -> list[dict]:
+    """Return ACTIVE arms from Redis cache or DB (read-only apart from decay).
+
+    Decay (arch v1.1 §9) is applied atomically in SQL for arms idle > 24 h, using
+    0.99^days so a 10-day idle arm decays 10 steps, not one (audit 2.6, 6.22).
+    Concurrent alpha/beta increments are never overwritten because the UPDATE is relative.
+    """
+    redis = get_redis()
+    cache_key = f"{CACHE_PREFIX}:{tenant_id}:{context_key}"
+    cached = await redis.get(cache_key)
+    if cached:
+        return json.loads(cached)
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE thompson_arms ta
+            SET    alpha           = 1 + power($3::float8, d.days) * (ta.alpha - 1),
+                   beta            = 1 + power($3::float8, d.days) * (ta.beta  - 1),
+                   last_decayed_at = now(),
+                   updated_at      = now()
+            FROM (
+                SELECT id,
+                       floor(extract(epoch FROM (now() - last_decayed_at)) / 86400)::int AS days
+                FROM   thompson_arms
+                WHERE  tenant_id   = $1::uuid
+                  AND  context_key = $2
+                  AND  last_decayed_at < now() - INTERVAL '24 hours'
+            ) d
+            WHERE ta.id = d.id
+            """,
+            tenant_id,
+            context_key,
+            DECAY_FACTOR,
         )
         rows = await conn.fetch(
             """
@@ -107,12 +204,8 @@ async def load_arms(tenant_id: str, context_key: str = "global") -> list[dict]:
     if not rows:
         return []
 
-    now = datetime.now(timezone.utc)
-    arms: list[dict] = []
-    to_decay: list[dict] = []
-
-    for row in rows:
-        arm = {
+    arms: list[dict] = [
+        {
             "id": row["id"],
             "variant_id": row["variant_id"],
             "alpha": float(row["alpha"]),
@@ -120,42 +213,11 @@ async def load_arms(tenant_id: str, context_key: str = "global") -> list[dict]:
             "total_samples": row["total_samples"],
             "block_order": list(row["block_order"]) if row["block_order"] else [],
         }
-        last = row["last_decayed_at"]
-        if last is not None:
-            # asyncpg returns timezone-aware datetime for TIMESTAMPTZ
-            if last.tzinfo is None:
-                last = last.replace(tzinfo=timezone.utc)
-            if (now - last).total_seconds() > DECAY_INTERVAL_SECS:
-                # arch v1.1 §9: decay toward prior (1,1), not toward zero.
-                # α = 1 + 0.99·(α − 1). Naive α×=0.99 drives α < 1 → Beta(0,0) improper.
-                arm["alpha"] = 1.0 + DECAY_FACTOR * (arm["alpha"] - 1.0)
-                arm["beta"]  = 1.0 + DECAY_FACTOR * (arm["beta"]  - 1.0)
-                to_decay.append(arm)
-        arms.append(arm)
-
-    if to_decay:
-        asyncio.create_task(_persist_decay(to_decay, now))
+        for row in rows
+    ]
 
     await redis.setex(cache_key, CACHE_TTL, json.dumps(arms))
     return arms
-
-
-async def _persist_decay(arms: list[dict], now: datetime) -> None:
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        for arm in arms:
-            await conn.execute(
-                """
-                UPDATE thompson_arms
-                SET alpha = $1, beta = $2, last_decayed_at = $3, updated_at = $4
-                WHERE id = $5
-                """,
-                arm["alpha"],
-                arm["beta"],
-                now,
-                now,
-                arm["id"],
-            )
 
 
 def sample_arms(arms: list[dict]) -> tuple[dict, list[dict]]:
@@ -277,25 +339,30 @@ async def apply_churn_penalty(
             """
             SELECT id::text, variant_id::text, alpha, beta, context_key
             FROM   thompson_arms
-            WHERE  id = $1::uuid
+            WHERE  id = $1::uuid AND tenant_id = $2::uuid
             """,
             arm_id,
+            tenant_id,
         )
         if not row:
             raise ValueError(f"Arm not found: {arm_id}")
 
         current_alpha = float(row["alpha"])
         current_beta  = float(row["beta"])
-        cap           = _CHURN_CAP * (current_alpha + current_beta)
-        applied_delta = min(weighted_sum, cap)
-        capped        = applied_delta < weighted_sum
+        applied_delta, capped = churn_penalty_delta(weighted_sum, current_alpha, current_beta)
+        if applied_delta == 0:
+            return {"arm_id": arm_id, "beta_delta": 0, "capped": capped,
+                    "new_beta": current_beta, "skipped": True,
+                    "reason": "penalty below 1 - fractional increments forbidden (arch §4.4)"}
 
         now = datetime.now(timezone.utc)
         await conn.execute(
-            "UPDATE thompson_arms SET beta = beta + $1, updated_at = $2 WHERE id = $3::uuid",
+            "UPDATE thompson_arms SET beta = beta + $1, total_samples = total_samples + $1, "
+            "updated_at = $2 WHERE id = $3::uuid AND tenant_id = $4::uuid",
             applied_delta,
             now,
             arm_id,
+            tenant_id,
         )
         await conn.execute(
             """
@@ -327,17 +394,42 @@ async def apply_churn_penalty(
     }
 
 
-async def apply_reward(decision_id: str, reward_type: str) -> dict:
-    """Update the α or β of the arm that was chosen in the given decision.
+async def _load_decision(decision_id: str) -> Optional[dict]:
+    """Audit 2.2: the Redis decision key lives 1 h, CRM rewards arrive days later."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT tenant_id::text AS tenant_id, chosen_variant_id::text AS variant_id,
+                   candidates, context
+            FROM   decision_log
+            WHERE  id = $1::uuid
+            """,
+            decision_id,
+        )
+    if not row:
+        return None
+    return {
+        "tenant_id":   row["tenant_id"],
+        "variant_id":  row["variant_id"],
+        "arm_id":      arm_for_decision(row["variant_id"], row["candidates"]),
+        "context_key": _as_dict(row["context"]).get("context_key", "global"),
+    }
 
-    vision §16.1: FORM_SUBMIT reward is disabled when reward_on_form_submit=false
-    (B2B clients with GHL integration — reward comes from call_answered/meeting_attended).
+
+async def apply_reward(decision_id: str, reward_type: str) -> dict:
+    """Update the alpha or beta of the arm that was chosen in the given decision.
+
+    - Idempotent per (decision_id, reward_type) via thompson_reward_log (audit 2.8).
+    - Falls back to decision_log when the Redis key has expired (audit 2.2).
+    - A positive reward reverses an earlier NO_RESPONSE_7D sweep for the same decision,
+      so every decision stays one Bernoulli observation.
+    - vision §16.1: FORM_SUBMIT reward is disabled when reward_on_form_submit=false.
     """
     if reward_type not in REWARD_MAP:
         raise ValueError(f"Unknown reward_type '{reward_type}'. Valid: {list(REWARD_MAP)}")
 
     if reward_type == "FORM_SUBMIT" and not settings.reward_on_form_submit:
-        # Return a no-op response — the decision is logged but Thompson is not updated.
         return {"arm_id": None, "tenant_id": None, "variant_id": None,
                 "field_updated": None, "delta": 0.0, "skipped": True,
                 "reason": "reward_on_form_submit=false (§16.1 B2B mode)"}
@@ -346,18 +438,49 @@ async def apply_reward(decision_id: str, reward_type: str) -> dict:
 
     redis = get_redis()
     raw = await redis.get(f"decision:{decision_id}")
-    if not raw:
-        raise ValueError(f"Decision not found or expired: {decision_id}")
+    dec = json.loads(raw) if raw else await _load_decision(decision_id)
+    if not dec:
+        raise ValueError(f"Decision not found: {decision_id}")
+    if not dec.get("arm_id"):
+        raise ValueError(f"Decision {decision_id} has no resolvable arm")
 
-    dec = json.loads(raw)
     pool = await get_pool()
     now = datetime.now(timezone.utc)
-
-    sql = _UPDATE_ALPHA if field == "alpha" else _UPDATE_BETA
     async with pool.acquire() as conn:
-        await conn.execute(sql, delta, now, dec["arm_id"])
+        async with conn.transaction():
+            await conn.execute(_SET_TENANT, dec["tenant_id"])
+            inserted = await conn.fetchval(
+                """
+                INSERT INTO thompson_reward_log (decision_id, reward_type, tenant_id, arm_id, field_updated)
+                VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5)
+                ON CONFLICT DO NOTHING
+                RETURNING 1
+                """,
+                decision_id, reward_type, dec["tenant_id"], dec["arm_id"], field,
+            )
+            if not inserted:
+                return {"arm_id": dec["arm_id"], "tenant_id": dec["tenant_id"],
+                        "variant_id": dec["variant_id"], "field_updated": None,
+                        "delta": 0.0, "skipped": True,
+                        "reason": f"{reward_type} already applied for this decision"}
 
-    # Invalidate cached posteriors so next decide sees fresh values
+            if field == "alpha":
+                reversed_sweep = await conn.fetchval(
+                    "DELETE FROM thompson_reward_log WHERE decision_id = $1::uuid "
+                    "AND reward_type = 'NO_RESPONSE_7D' AND field_updated = 'beta' RETURNING 1",
+                    decision_id,
+                )
+                if reversed_sweep:
+                    await conn.execute(
+                        "UPDATE thompson_arms SET beta = GREATEST(1.0, beta - 1), "
+                        "total_samples = GREATEST(0, total_samples - 1), updated_at = $1 "
+                        "WHERE id = $2::uuid AND tenant_id = $3::uuid",
+                        now, dec["arm_id"], dec["tenant_id"],
+                    )
+
+            sql = _UPDATE_ALPHA if field == "alpha" else _UPDATE_BETA
+            await conn.execute(sql, delta, now, dec["arm_id"], dec["tenant_id"])
+
     context_key = dec.get("context_key", "global")
     await redis.delete(f"{CACHE_PREFIX}:{dec['tenant_id']}:{context_key}")
 
@@ -368,6 +491,101 @@ async def apply_reward(decision_id: str, reward_type: str) -> dict:
         "field_updated": field,
         "delta": delta,
     }
+
+
+async def sweep_no_response(
+    window_days: int = NO_RESPONSE_WINDOW_DAYS,
+    max_age_days: int = 30,
+    limit: int = 1000,
+    tenant_id: Optional[str] = None,
+) -> dict:
+    """Audit 2.3: beta += 1 for every decision older than the attribution window with no reward.
+
+    Without this, beta never moves and Beta(alpha,beta) degenerates into a raw success count.
+    Each swept decision is logged as NO_RESPONSE_7D, so the sweep is idempotent and a
+    late positive reward can reverse it (see apply_reward).
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT dl.id::text AS id, dl.tenant_id::text AS tenant_id,
+                   dl.chosen_variant_id::text AS variant_id, dl.candidates, dl.context
+            FROM   decision_log dl
+            WHERE  dl.decided_at < now() - ($1 * INTERVAL '1 day')
+              AND  dl.decided_at > now() - ($2 * INTERVAL '1 day')
+              AND  ($4::uuid IS NULL OR dl.tenant_id = $4::uuid)
+              AND  NOT EXISTS (SELECT 1 FROM thompson_reward_log r WHERE r.decision_id = dl.id)
+            ORDER BY dl.decided_at
+            LIMIT  $3
+            """,
+            window_days, max_age_days, limit, tenant_id,
+        )
+
+        swept = 0
+        unresolved = 0
+        touched: set[tuple[str, str]] = set()
+        now = datetime.now(timezone.utc)
+        for row in rows:
+            arm_id = arm_for_decision(row["variant_id"], row["candidates"])
+            async with conn.transaction():
+                await conn.execute(_SET_TENANT, row["tenant_id"])
+                inserted = await conn.fetchval(
+                    """
+                    INSERT INTO thompson_reward_log (decision_id, reward_type, tenant_id, arm_id, field_updated)
+                    VALUES ($1::uuid, 'NO_RESPONSE_7D', $2::uuid, $3::uuid, $4)
+                    ON CONFLICT DO NOTHING
+                    RETURNING 1
+                    """,
+                    row["id"], row["tenant_id"], arm_id, "beta" if arm_id else "none",
+                )
+                if not inserted:
+                    continue
+                if not arm_id:
+                    unresolved += 1
+                    continue
+                await conn.execute(_UPDATE_BETA, 1.0, now, arm_id, row["tenant_id"])
+            swept += 1
+            touched.add((row["tenant_id"], _as_dict(row["context"]).get("context_key", "global")))
+
+    redis = get_redis()
+    for t, ck in touched:
+        await redis.delete(f"{CACHE_PREFIX}:{t}:{ck}")
+    return {"swept": swept, "unresolved": unresolved, "scanned": len(rows),
+            "window_days": window_days, "max_age_days": max_age_days}
+
+
+async def apply_followup_outcome(tenant_id: str, appointment_id: str, outcome: str) -> dict:
+    """Audit 2.10: the follow-up sequence bandit never learned - nothing wrote followup_variants.alpha/beta.
+
+    SHOWED -> alpha += 1, NO_SHOW -> beta += 1 on the assigned variant. Idempotent: the
+    assignment row transitions from UNKNOWN/NULL exactly once.
+    """
+    if outcome not in ("SHOWED", "NO_SHOW"):
+        raise ValueError("outcome must be SHOWED or NO_SHOW")
+    field = "alpha" if outcome == "SHOWED" else "beta"
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(_SET_TENANT, tenant_id)
+            variant_id = await conn.fetchval(
+                """
+                UPDATE followup_assignments
+                SET    outcome = $1, resolved_at = now()
+                WHERE  appointment_id = $2::uuid AND tenant_id = $3::uuid
+                  AND  (outcome IS NULL OR outcome = 'UNKNOWN')
+                RETURNING variant_id::text
+                """,
+                outcome, appointment_id, tenant_id,
+            )
+            if not variant_id:
+                return {"updated": False, "variant_id": None, "field_updated": None,
+                        "reason": "assignment not found or already resolved"}
+            await conn.execute(
+                f"UPDATE followup_variants SET {field} = {field} + 1 WHERE id = $1::uuid AND tenant_id = $2::uuid",
+                variant_id, tenant_id,
+            )
+    return {"updated": True, "variant_id": variant_id, "field_updated": field}
 
 
 async def get_benchmark(tenant_id: str, days: int = 30) -> dict:

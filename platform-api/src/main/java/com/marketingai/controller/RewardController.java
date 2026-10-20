@@ -26,7 +26,7 @@ public class RewardController {
     public ResponseEntity<Void> stageReached(
             @RequestAttribute("tenantId") UUID tenantId,
             @RequestBody Map<String, Object> body) {
-        UUID sessionId  = UUID.fromString((String) body.get("session_id"));
+        String sessionId = (String) body.get("session_id");  // sessions.id is VARCHAR(100)
         UUID variantId  = UUID.fromString((String) body.get("variant_id"));
         String stageKey = (String) body.get("stage_key");
         rewardService.onStageReached(tenantId, sessionId, variantId, stageKey);

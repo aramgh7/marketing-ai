@@ -12,11 +12,15 @@ from app.services.decide_service import derive_context_key
 from app.services.cluster_refinement_service import build_refinement_plan, apply_refinement
 from app.services.thompson_service import (
     apply_churn_penalty,
+    apply_followup_outcome,
     apply_reward,
+    ensure_arms,
     get_benchmark,
+    holdout_bucket,
     load_arms,
     log_decision,
     sample_arms,
+    sweep_no_response,
 )
 from app.services.followup_service import (
     classify_context,
@@ -29,10 +33,11 @@ router = APIRouter(tags=["Thompson Sampling"])
 
 
 def _holdout_bucket(session_id: Optional[str]) -> int:
-    """Deterministic 0-9999 bucket from session_id so the same session stays in holdout."""
-    if not session_id:
-        return random.randint(0, 9999)
-    return int(session_id.replace("-", "")[:8], 16) % 10_000
+    """Deterministic 0-9999 bucket from session_id so the same session stays in holdout.
+
+    Audit 2.5: hash-based - session ids are cookie strings, not guaranteed hex.
+    """
+    return holdout_bucket(session_id)
 
 
 async def _get_holdout_config(tenant_id: str) -> tuple[bool, float]:
@@ -137,6 +142,12 @@ async def decide_landing(req: DecideRequest):
         effective_key = "global"
         arms = await load_arms(req.tenant_id, effective_key)
     if not arms:
+        # No arms anywhere: create them once for the canonical channel-global key
+        # (audit 2.9 - load_arms is read-only; arms are created here explicitly).
+        effective_key = f"channel:{channel}"
+        await ensure_arms(req.tenant_id, effective_key)
+        arms = await load_arms(req.tenant_id, effective_key)
+    if not arms:
         raise HTTPException(status_code=404, detail="No active variants for this tenant")
 
     holdout_enabled, holdout_rate = await _get_holdout_config(req.tenant_id)
@@ -192,7 +203,40 @@ async def submit_reward(req: RewardRequest):
         arm_id=result["arm_id"],
         field_updated=result["field_updated"],
         delta=result["delta"],
+        skipped=bool(result.get("skipped", False)),
+        reason=result.get("reason"),
     )
+
+
+class SweepRequest(BaseModel):
+    tenant_id: Optional[str] = None
+    window_days: int = 7
+    max_age_days: int = 30
+    limit: int = 1000
+
+
+@router.post("/reward/sweep-negatives")
+async def reward_sweep_negatives(req: SweepRequest):
+    """beta += 1 for decisions past the attribution window with no reward (audit 2.3).
+
+    Called hourly by Spring RewardSweepScheduler; FastAPI stays the sole thompson_arms writer.
+    """
+    return await sweep_no_response(req.window_days, req.max_age_days, req.limit, req.tenant_id)
+
+
+class FollowupOutcomeRequest(BaseModel):
+    tenant_id: str
+    appointment_id: str
+    outcome: str  # SHOWED | NO_SHOW
+
+
+@router.post("/followup/outcome")
+async def followup_outcome(req: FollowupOutcomeRequest):
+    """Record a follow-up outcome and update the assigned followup_variants alpha/beta (audit 2.10)."""
+    try:
+        return await apply_followup_outcome(req.tenant_id, req.appointment_id, req.outcome)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/benchmark/{tenant_id}")

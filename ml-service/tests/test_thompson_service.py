@@ -264,25 +264,25 @@ class TestChurnPenaltyLogic:
 
     CAP_FRACTION = 0.30
 
-    def _cap(self, weighted_sum: float, alpha: float, beta: float) -> tuple[float, bool]:
-        cap = self.CAP_FRACTION * (alpha + beta)
-        applied = min(weighted_sum, cap)
-        return applied, applied < weighted_sum
+    def _cap(self, weighted_sum: float, alpha: float, beta: float) -> tuple[int, bool]:
+        # Audit 2.7: the service now floors the penalty — arch §4.4 forbids fractional β.
+        from app.services.thompson_service import churn_penalty_delta
+        return churn_penalty_delta(weighted_sum, alpha, beta)
 
     def test_cap_not_exceeded(self):
-        """Penalty never exceeds 30% of current (α+β)."""
+        """Penalty never exceeds 30% of current (α+β) — and is an integer."""
         alpha, beta = 10.0, 5.0
         weighted_sum = 100.0  # massive churn wave
         applied, capped = self._cap(weighted_sum, alpha, beta)
-        assert applied == pytest.approx(self.CAP_FRACTION * (alpha + beta))
+        assert applied == math.floor(self.CAP_FRACTION * (alpha + beta))
         assert capped is True
 
     def test_cap_not_applied_when_small_penalty(self):
-        """Small penalty below cap is applied in full."""
+        """Penalty below 1 is skipped (binary counts only); nothing fractional is applied."""
         alpha, beta = 50.0, 10.0
         weighted_sum = 0.5
         applied, capped = self._cap(weighted_sum, alpha, beta)
-        assert applied == pytest.approx(0.5)
+        assert applied == 0
         assert capped is False
 
     def test_cap_at_exactly_threshold(self):
@@ -311,10 +311,9 @@ class TestChurnPenaltyLogic:
         assert weight_recent > weight_old
 
     def test_single_fresh_churn_penalty(self):
-        """One day-0 churn event adds ≈1.0 weighted, capped at 30% of small prior."""
+        """One day-0 churn event on a tiny arm: cap = 0.9 < 1.0 → capped, and floored to 0 (skipped)."""
         alpha, beta = 2.0, 1.0  # small arm (uninformative prior)
         weighted_sum = math.exp(-0.02 * 0)  # same day = 1.0
         applied, capped = self._cap(weighted_sum, alpha, beta)
-        # cap = 0.30 * 3.0 = 0.9 < 1.0 → should be capped
-        assert applied == pytest.approx(0.9)
+        assert applied == 0
         assert capped is True

@@ -76,11 +76,10 @@ public class GhlWebhookService {
             // Reward ladder: notify RewardService of reached stage (8-3)
             if (sessionId != null) {
                 try {
-                    UUID sid = UUID.fromString(sessionId);
                     // variant_id from session (best-effort — may be null for old sessions)
                     String variantIdStr = lookupVariantId(sessionId, tenantId);
                     if (variantIdStr != null) {
-                        rewardService.onStageReached(tenantId, sid, UUID.fromString(variantIdStr), stageKey);
+                        rewardService.onStageReached(tenantId, sessionId, UUID.fromString(variantIdStr), stageKey);
                     }
                 } catch (Exception e) {
                     log.warn("Reward stage notification failed: {}", e.getMessage());
@@ -227,7 +226,7 @@ public class GhlWebhookService {
         if (sessionId == null) return null;
         try {
             return jdbc.queryForObject(
-                    "SELECT variant_id::text FROM sessions WHERE id = ?::uuid AND tenant_id = ? LIMIT 1",
+                    "SELECT variant_id::text FROM sessions WHERE id = ? AND tenant_id = ? LIMIT 1",
                     String.class, sessionId, tenantId);
         } catch (Exception e) {
             return null;

@@ -97,9 +97,11 @@ public class ExperimentService {
                    COALESCE(ta.alpha, 1.0) AS alpha,
                    COALESCE(ta.beta,  1.0) AS beta
             FROM landing_variants lv
-            LEFT JOIN thompson_arms ta
-                ON ta.variant_id = lv.id AND ta.tenant_id = lv.tenant_id
-                AND ta.reward_event = 'quality_gate_pass'
+            LEFT JOIN LATERAL (
+                SELECT 1 + SUM(ta.alpha - 1) AS alpha, 1 + SUM(ta.beta - 1) AS beta
+                FROM thompson_arms ta
+                WHERE ta.variant_id = lv.id AND ta.tenant_id = lv.tenant_id
+            ) ta ON TRUE
             WHERE lv.experiment_id = ? AND lv.status = 'ACTIVE'
             """, experimentId);
 

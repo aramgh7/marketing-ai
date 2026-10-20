@@ -3,6 +3,9 @@ package com.marketingai.service;
 import com.marketingai.config.AppProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
@@ -26,11 +29,27 @@ public class RewardService {
     private final AlertService  alertService;
 
     /**
+     * Map a funnel stage to the Thompson reward type understood by FastAPI /decide/reward
+     * (thompson_service.REWARD_MAP). Quality stages are CRM-confirmed outcomes.
+     */
+    static String rewardTypeForStage(String stageKey) {
+        if (stageKey == null) return "CONVERSION";
+        String k = stageKey.toUpperCase();
+        if (k.endsWith("_HELD") || k.contains("MEETING") || k.contains("ATTENDED")) return "MEETING_ATTENDED";
+        if (k.contains("ANSWERED")) return "CALL_ANSWERED";
+        if (k.contains("FUNDS") || k.contains("PURCHASE") || k.contains("PAID") || k.contains("WON")) return "PURCHASE";
+        if (k.contains("FORM_SUBMIT")) return "FORM_SUBMIT";
+        return "CONVERSION";
+    }
+
+    /**
      * Called when a funnel stage is reached for a session.
      * Writes reward_events. If quality stage, also writes quality_gate_log and
-     * calls FastAPI /thompson/reward (binary increment 1.0 — FastAPI sole writer).
+     * posts the reward to FastAPI /decide/reward (binary increment 1.0 — FastAPI sole writer).
+     * The decision_id is looked up in decision_log by (tenant, session, variant); the Redis
+     * decision key alone expires after 1 h while CRM rewards arrive days later (audit 2.1/2.2).
      */
-    public void onStageReached(UUID tenantId, UUID sessionId, UUID variantId, String stageKey) {
+    public void onStageReached(UUID tenantId, String sessionId, UUID variantId, String stageKey) {
         List<Boolean> qualityCheck = jdbc.queryForList("""
             SELECT is_quality_key FROM funnel_stages
             WHERE tenant_id = ? AND stage_key = ?
@@ -58,13 +77,24 @@ public class RewardService {
                 """, tenantId, sessionId, variantId, stageKey);
 
             try {
-                Map<String, Object> req = Map.of(
-                    "tenant_id",  tenantId.toString(),
-                    "variant_id", variantId.toString(),
-                    "reward",     1.0,
-                    "event_type", "quality_gate_pass"
-                );
-                restTemplate.postForObject(appProperties.getMlServiceUrl() + "/decide/reward", req, Map.class);
+                List<String> decisionIds = jdbc.queryForList("""
+                    SELECT id::text FROM decision_log
+                    WHERE tenant_id = ? AND session_id = ? AND chosen_variant_id = ?
+                    ORDER BY decided_at DESC LIMIT 1
+                    """, String.class, tenantId, sessionId, variantId);
+                if (decisionIds.isEmpty()) {
+                    log.info("No Thompson decision for session {} variant {} — reward not forwarded", sessionId, variantId);
+                } else {
+                    Map<String, Object> req = Map.of(
+                        "decision_id", decisionIds.get(0),
+                        "reward_type", rewardTypeForStage(stageKey)
+                    );
+                    HttpHeaders headers = new HttpHeaders();
+                    headers.setContentType(MediaType.APPLICATION_JSON);
+                    headers.set("X-Internal-API-Key", appProperties.getInternalApiKey());
+                    restTemplate.postForObject(appProperties.getMlServiceUrl() + "/decide/reward",
+                            new HttpEntity<>(req, headers), Map.class);
+                }
             } catch (Exception e) {
                 log.warn("Thompson reward notification failed for variant {}: {}", variantId, e.getMessage());
             }

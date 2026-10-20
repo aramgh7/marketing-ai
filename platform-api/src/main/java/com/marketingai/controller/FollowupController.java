@@ -203,15 +203,16 @@ public class FollowupController {
             return ResponseEntity.badRequest().body(Map.of("error", "outcome must be SHOWED or NO_SHOW"));
         }
 
-        // Update assignment outcome
-        jdbc.update("""
-                UPDATE followup_assignments
-                SET outcome = ?, resolved_at = ?
-                WHERE appointment_id = ?::uuid AND tenant_id = ?
-                """, outcome, Instant.now(), apptId, currentTenant());
-
-        // Update variant posteriors (single writer: FastAPI only — this just marks outcome, not alpha/beta)
-        return ResponseEntity.ok(Map.of("status", "recorded", "outcome", outcome));
+        // Single writer: FastAPI marks the assignment outcome AND updates followup_variants alpha/beta
+        // in one transaction (audit 2.10 — previously nothing ever incremented alpha/beta).
+        @SuppressWarnings("unchecked")
+        Map<String, Object> result = mlClient.post("/decide/followup/outcome", Map.of(
+                "tenant_id",      currentTenant().toString(),
+                "appointment_id", apptId,
+                "outcome",        outcome), Map.class);
+        Map<String, Object> resp = new HashMap<>(Map.of("status", "recorded", "outcome", outcome));
+        if (result != null) resp.putAll(result);
+        return ResponseEntity.ok(resp);
     }
 
     // ─── Report ───────────────────────────────────────────────────────────────
