@@ -48,6 +48,8 @@ import java.util.UUID;
 public class TwoContourService {
 
     private final MetaCampaignRepository campaignRepo;
+
+    private final TokenVault vault;   // roadmap 9-1: sealed secrets
     private final MetaAdSetRepository adSetRepo;
     private final ThompsonArmRepository armRepo;
     private final MetaApiService metaApi;
@@ -534,7 +536,7 @@ public class TwoContourService {
         if (tenant.getMetaAccessTokenEnc() == null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Tenant has no Meta access token");
         }
-        return new String(tenant.getMetaAccessTokenEnc(), StandardCharsets.UTF_8);
+        return vault.open(tenant.getMetaAccessTokenEnc());
     }
 
     private String buildRecommendation(AdSetScore winner, double groupMean) {

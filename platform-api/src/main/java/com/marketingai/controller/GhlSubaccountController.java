@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.service.TokenVault;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -29,6 +30,8 @@ public class GhlSubaccountController {
     private static final Set<String> ROLES = Set.of("MAIN", "AGENCY", "WEBINAR", "MAILING");
 
     private final JdbcTemplate jdbc;
+
+    private final TokenVault vault;   // roadmap 9-1: sealed secrets
 
     @GetMapping("/subaccounts")
     public ResponseEntity<List<Map<String, Object>>> list(@RequestAttribute("tenantId") UUID tenantId) {
@@ -62,7 +65,7 @@ public class GhlSubaccountController {
                     api_key_enc = COALESCE(EXCLUDED.api_key_enc, ghl_subaccounts.api_key_enc),
                     is_active = TRUE
                 """, tenantId, locationId, str(body.get("name")), role, str(body.get("webhook_secret")),
-                apiKey == null || apiKey.isBlank() ? null : apiKey.getBytes(StandardCharsets.UTF_8));
+                vault.seal(apiKey));
         return ResponseEntity.ok(Map.of("location_id", locationId, "role", role, "status", "saved",
                 "webhook_url_hint", "/api/v1/webhooks/ghl/" + tenantId + "  (header X-Webhook-Secret = this location's secret)"));
     }

@@ -35,6 +35,8 @@ import java.util.UUID;
 public class MetaPixelService {
 
     private final MetaPixelRepository pixelRepo;
+
+    private final TokenVault vault;   // roadmap 9-1: sealed secrets
     private final JdbcTemplate jdbc;
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -74,8 +76,7 @@ public class MetaPixelService {
         pixel.setStatus("ACTIVE");
 
         if (req.getCapiAccessToken() != null && !req.getCapiAccessToken().isBlank()) {
-            pixel.setCapiAccessTokenEnc(
-                    req.getCapiAccessToken().getBytes(StandardCharsets.UTF_8));
+            pixel.setCapiAccessTokenEnc(vault.seal(req.getCapiAccessToken()));
         }
 
         MetaPixel saved = pixelRepo.save(pixel);
@@ -96,8 +97,7 @@ public class MetaPixelService {
         }
 
         if (req.getCapiAccessToken() != null && !req.getCapiAccessToken().isBlank()) {
-            pixel.setCapiAccessTokenEnc(
-                    req.getCapiAccessToken().getBytes(StandardCharsets.UTF_8));
+            pixel.setCapiAccessTokenEnc(vault.seal(req.getCapiAccessToken()));
         }
 
         return PixelResponse.from(pixelRepo.save(pixel));

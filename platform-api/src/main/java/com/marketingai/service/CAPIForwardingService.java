@@ -24,6 +24,8 @@ import java.util.*;
 public class CAPIForwardingService {
 
     private final CAPIEventLogRepository capiRepo;
+
+    private final TokenVault vault;   // roadmap 9-1: sealed secrets
     private final MetaPixelRepository pixelRepo;
     private final RestTemplate restTemplate;
     private final org.springframework.jdbc.core.JdbcTemplate jdbc;
@@ -102,7 +104,7 @@ public class CAPIForwardingService {
                 : avgDeal * pm.multiplier();
 
         String pixelId      = pixelRepo.findDefaultPixelId(tenant.getId()).orElse(null);
-        String accessToken  = pixelRepo.findCapiToken(tenant.getId()).orElse(null);
+        String accessToken  = pixelRepo.findDefaultCapiTokenBytes(tenant.getId()).map(vault::openOrNull).orElse(null);
 
         // Lookup session external_id_hash for Advanced Matching (vision §7.4)
         String externalIdHash = lookupExternalIdHash(tenant.getId(), sessionId);
@@ -301,7 +303,7 @@ public class CAPIForwardingService {
 
             String roleKey  = (String) mapping.get("pixel_role");
             String pixelId  = pixelRepo.findPixelIdByRole(tenant.getId(), roleKey).orElse(null);
-            String accessToken = pixelRepo.findCapiTokenByRole(tenant.getId(), roleKey).orElse(null);
+            String accessToken = pixelRepo.findCapiTokenBytesByRole(tenant.getId(), roleKey).map(vault::openOrNull).orElse(null);
 
             String externalIdHash = lookupExternalIdHash(tenant.getId(), sessionId);
             String metaEventName  = (String) mapping.get("meta_event_name");
@@ -387,8 +389,8 @@ public class CAPIForwardingService {
                     ? pixelRepo.findPixelIdByRole(tenantId, role).orElse(null)
                     : pixelRepo.findDefaultPixelId(tenantId).orElse(null);
             String token = role != null
-                    ? pixelRepo.findCapiTokenByRole(tenantId, role).orElse(null)
-                    : pixelRepo.findCapiToken(tenantId).orElse(null);
+                    ? pixelRepo.findCapiTokenBytesByRole(tenantId, role).map(vault::openOrNull).orElse(null)
+                    : pixelRepo.findDefaultCapiTokenBytes(tenantId).map(vault::openOrNull).orElse(null);
             if (pixelId == null || token == null) continue; // still no credentials — keep waiting
             Map<String, Object> payload;
             try {

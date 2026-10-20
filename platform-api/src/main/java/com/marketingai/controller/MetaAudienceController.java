@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.service.TokenVault;
 import com.marketingai.service.MetaApiService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,6 +28,7 @@ public class MetaAudienceController {
 
     private final JdbcTemplate   jdbc;
     private final MetaApiService metaApiService;
+    private final TokenVault vault;   // roadmap 9-1: sealed secrets
 
     // ─────────────────────────────────────────────────────────────────────────
     // GET /api/v1/meta/audiences — list sync history for tenant
@@ -81,7 +83,7 @@ public class MetaAudienceController {
         Map<String, Object> pixelConfig;
         try {
             pixelConfig = jdbc.queryForMap("""
-                    SELECT ENCODE(p.capi_access_token_enc, 'escape') AS access_token,
+                    SELECT p.capi_access_token_enc AS token_enc,
                            p.pixel_id,
                            t.meta_ad_account_id AS ad_account_id
                     FROM meta_pixels p
@@ -94,7 +96,7 @@ public class MetaAudienceController {
                     "No active Meta pixel configured for this tenant");
         }
 
-        String accessToken  = (String) pixelConfig.get("access_token");
+        String accessToken  = vault.openOrNull((byte[]) pixelConfig.get("token_enc"));
         String adAccountId  = (String) pixelConfig.get("ad_account_id");
 
         int syncedCount = 0;

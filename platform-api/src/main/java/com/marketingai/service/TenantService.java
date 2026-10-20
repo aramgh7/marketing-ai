@@ -22,16 +22,28 @@ public class TenantService {
 
     private final TenantRepository tenantRepo;
 
+    private final TokenVault vault;   // roadmap 9-1: sealed secrets
+    private final org.springframework.jdbc.core.JdbcTemplate jdbc;
+
     @Transactional
     public void setMetaCredentials(UUID tenantId, MetaCredentialsRequest req) {
         Tenant tenant = tenantRepo.findById(tenantId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tenant not found"));
-        tenant.setMetaAccessTokenEnc(req.getAccessToken().getBytes(StandardCharsets.UTF_8));
+        tenant.setMetaAccessTokenEnc(vault.seal(req.getAccessToken()));
         tenant.setMetaAdAccountId(req.getAdAccountId());
         if (req.getAppId() != null) {
             tenant.setMetaAppId(req.getAppId());
         }
         tenantRepo.save(tenant);
+        // Token age starts now (TokenRotationScheduler counts from meta_token_created_at)
+        jdbc.update("UPDATE tenants SET meta_token_created_at = now(), meta_token_status = 'OK' WHERE id = ?", tenantId);
+        // Roadmap 9-2: a token that went INVALID dropped autonomy to OBSERVER — restore the previous level on re-auth
+        jdbc.update("""
+                UPDATE tenants
+                SET autonomy_level = settings->>'autonomy_before_token_invalid',
+                    settings = settings - 'autonomy_before_token_invalid'
+                WHERE id = ? AND settings ? 'autonomy_before_token_invalid'
+                """, tenantId);
         log.info("Meta credentials updated for tenant {}", tenantId);
     }
 

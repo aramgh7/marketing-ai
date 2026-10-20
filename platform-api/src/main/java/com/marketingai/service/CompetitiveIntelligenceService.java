@@ -43,6 +43,7 @@ public class CompetitiveIntelligenceService {
     private final RestTemplate               restTemplate;
     private final AppProperties              appProperties;
     private final AlertService alertService;
+    private final TokenVault vault;   // roadmap 9-1: sealed secrets
     private static final ObjectMapper        MAPPER = new ObjectMapper();
 
     public void runWeeklyScan() {
@@ -251,10 +252,10 @@ public class CompetitiveIntelligenceService {
 
     private String getMetaAccessToken(String tenantId) {
         try {
-            // meta_access_token_enc is stored as bytea — for now use plaintext fallback
-            return jdbc.queryForObject(
-                    "SELECT ENCODE(meta_access_token_enc, 'escape') FROM tenants WHERE id = ?::uuid",
-                    String.class, tenantId);
+            byte[] sealed = jdbc.queryForObject(
+                    "SELECT meta_access_token_enc FROM tenants WHERE id = ?::uuid",
+                    byte[].class, tenantId);
+            return vault.openOrNull(sealed);
         } catch (Exception e) {
             return null;
         }

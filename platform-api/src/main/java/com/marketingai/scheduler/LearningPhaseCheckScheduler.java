@@ -1,5 +1,6 @@
 package com.marketingai.scheduler;
 
+import com.marketingai.service.TokenVault;
 import com.marketingai.service.LearningPhaseService;
 import com.marketingai.service.MetaApiService;
 import lombok.RequiredArgsConstructor;
@@ -23,6 +24,8 @@ import java.util.UUID;
 public class LearningPhaseCheckScheduler {
 
     private final JdbcTemplate jdbc;
+
+    private final TokenVault vault;   // roadmap 9-1: sealed secrets
     private final MetaApiService metaApi;
     private final LearningPhaseService learningPhaseService;
 
@@ -52,7 +55,11 @@ public class LearningPhaseCheckScheduler {
                 continue;
             }
 
-            String accessToken = new String(tokenBytes, java.nio.charset.StandardCharsets.UTF_8);
+            String accessToken = vault.openOrNull(tokenBytes);
+            if (accessToken == null) {
+                learningPhaseService.logPhaseAfter(logId, "UNKNOWN");
+                continue;
+            }
             try {
                 String phase = metaApi.getAdSetLearningPhase(accessToken, adSetId);
                 learningPhaseService.logPhaseAfter(logId, phase != null ? phase : "UNKNOWN");

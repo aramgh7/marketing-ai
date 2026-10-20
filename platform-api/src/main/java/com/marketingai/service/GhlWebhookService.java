@@ -24,6 +24,8 @@ import java.util.UUID;
 public class GhlWebhookService {
 
     private final JdbcTemplate jdbc;
+
+    private final TokenVault vault;   // roadmap 9-1: sealed secrets
     private final TenantRepository tenantRepo;
     private final CAPIForwardingService capiService;
     private final AppointmentService appointmentService;
@@ -269,7 +271,7 @@ public class GhlWebhookService {
                     SELECT event_id FROM events WHERE session_id = ? AND tenant_id = ? AND event_type = 'FORM_SUBMIT'
                     ORDER BY event_time DESC LIMIT 1
                     """, String.class, sessionId, tenantId);
-            ghlApiClient.writeContactIds(new String(keys.get(0), java.nio.charset.StandardCharsets.UTF_8),
+            ghlApiClient.writeContactIds(vault.open(keys.get(0)),
                     p.getContactId(), sessionId, eventIds.isEmpty() ? null : eventIds.get(0));
         } catch (Exception e) {
             log.debug("writeContactIds skipped: {}", e.getMessage());

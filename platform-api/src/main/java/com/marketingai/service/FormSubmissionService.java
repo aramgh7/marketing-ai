@@ -25,6 +25,8 @@ import java.util.UUID;
 public class FormSubmissionService {
 
     private final JdbcTemplate jdbc;
+
+    private final TokenVault vault;   // roadmap 9-1: sealed secrets
     private final ValueFormulaService valueFormulaService;
     private final GhlApiClient ghlApiClient;
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -95,7 +97,7 @@ public class FormSubmissionService {
                         "SELECT api_key_enc FROM ghl_subaccounts WHERE tenant_id = ? AND role = 'MAIN' AND is_active = TRUE AND api_key_enc IS NOT NULL LIMIT 1",
                         byte[].class, tenantId);
                 if (!keys.isEmpty()) {
-                    ghlApiClient.writeContactIds(new String(keys.get(0), java.nio.charset.StandardCharsets.UTF_8),
+                    ghlApiClient.writeContactIds(vault.open(keys.get(0)),
                             ghlContactId, sessionId, submissionId.toString());
                 }
             } catch (Exception e) {

@@ -27,6 +27,8 @@ import java.util.UUID;
 public class MetaCampaignService {
 
     private final MetaCampaignRepository campaignRepo;
+
+    private final TokenVault vault;   // roadmap 9-1: sealed secrets
     private final MetaAdSetRepository adSetRepo;
     private final MetaApiService metaApi;
     private final TenantRepository tenantRepo;
@@ -180,7 +182,7 @@ public class MetaCampaignService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "Tenant has no Meta access token configured");
         }
-        return new String(tenant.getMetaAccessTokenEnc(), StandardCharsets.UTF_8);
+        return vault.open(tenant.getMetaAccessTokenEnc());
     }
 
     CampaignResponse toResponse(MetaCampaign c) {

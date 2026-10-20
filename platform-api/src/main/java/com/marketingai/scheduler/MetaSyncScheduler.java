@@ -1,5 +1,6 @@
 package com.marketingai.scheduler;
 
+import com.marketingai.service.TokenVault;
 import com.marketingai.service.MetaSyncMath;
 import com.marketingai.entity.MetaAdSet;
 import com.marketingai.entity.MetaCampaign;
@@ -29,6 +30,8 @@ import java.util.UUID;
 public class MetaSyncScheduler {
 
     private final MetaCampaignRepository campaignRepo;
+
+    private final TokenVault vault;   // roadmap 9-1: sealed secrets
     private final MetaAdSetRepository adSetRepo;
     private final MetaApiService metaApi;
     private final TenantRepository tenantRepo;
@@ -43,7 +46,8 @@ public class MetaSyncScheduler {
                 Optional<Tenant> tenantOpt = tenantRepo.findById(campaign.getTenantId());
                 if (tenantOpt.isEmpty() || tenantOpt.get().getMetaAccessTokenEnc() == null) continue;
 
-                String token = new String(tenantOpt.get().getMetaAccessTokenEnc(), StandardCharsets.UTF_8);
+                String token = vault.openOrNull(tenantOpt.get().getMetaAccessTokenEnc());
+                if (token == null) continue;
 
                 Map<String, String> insights = metaApi.getInsights(token, campaign.getMetaCampaignId());
                 float spend = Float.parseFloat(insights.getOrDefault("spend", "0"));

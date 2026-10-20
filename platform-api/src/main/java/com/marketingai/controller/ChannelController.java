@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.service.TokenVault;
 import com.marketingai.service.GoogleAdsApiService;
 import com.marketingai.service.TikTokApiService;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +25,8 @@ import java.util.*;
 public class ChannelController {
 
     private final JdbcTemplate jdbc;
+
+    private final TokenVault vault;   // roadmap 9-1: sealed secrets
     private final GoogleAdsApiService googleAdsApiService;
     private final TikTokApiService tikTokApiService;
 
@@ -74,6 +77,22 @@ public class ChannelController {
 
     // ─── DELETE /{id} — deactivate ───────────────────────────────────────────
 
+    /** Roadmap 9-1: store the channel OAuth token sealed (AES-GCM) — the only write path for it. */
+    @PutMapping("/{id}/token")
+    public ResponseEntity<Map<String, Object>> setToken(
+            @RequestAttribute("tenantId") UUID tenantId,
+            @PathVariable UUID id,
+            @RequestBody Map<String, String> body) {
+        String token = body.get("access_token");
+        if (token == null || token.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "access_token required"));
+        }
+        int n = jdbc.update("UPDATE channel_accounts SET access_token_enc = ? WHERE id = ? AND tenant_id = ?",
+                vault.seal(token), id, tenantId);
+        return n == 0 ? ResponseEntity.notFound().build()
+                : ResponseEntity.ok(Map.of("id", id, "status", "token_saved", "sealed", vault.isActive()));
+    }
+
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deactivate(
             @RequestAttribute("tenantId") UUID tenantId,
@@ -118,7 +137,7 @@ public class ChannelController {
 
         List<Map<String, Object>> accounts = jdbc.queryForList("""
                 SELECT id, channel, account_id,
-                       ENCODE(access_token_enc, 'escape') AS access_token
+                       access_token_enc
                 FROM channel_accounts
                 WHERE tenant_id = ? AND status = 'ACTIVE'
                 """, tenantId);
@@ -131,7 +150,7 @@ public class ChannelController {
         for (Map<String, Object> account : accounts) {
             String channel     = (String) account.get("channel");
             String accountId   = (String) account.get("account_id");
-            String accessToken = (String) account.get("access_token");
+            String accessToken = vault.openOrNull((byte[]) account.get("access_token_enc"));
             UUID accountUuid   = (UUID) account.get("id");
 
             if (accessToken == null || accessToken.isBlank()) {

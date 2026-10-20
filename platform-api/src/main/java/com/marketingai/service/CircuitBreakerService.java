@@ -48,6 +48,7 @@ public class CircuitBreakerService {
     private final MetaCampaignRepository    campaignRepo;
     private final MetaAdSetRepository       adSetRepo;
     private final CircuitBreakerEventRepository cbRepo;
+    private final TokenVault vault;   // roadmap 9-1: sealed secrets
     private final CampaignCpmHistoryRepository  cpmRepo;
     private final TenantRepository          tenantRepo;
     private final MetaApiService            metaApi;
@@ -252,8 +253,7 @@ public class CircuitBreakerService {
         log.error("🔴 CIRCUIT BREAKER L3 — tenant={} contour={} reason={}", tenantId, contour, reason);
 
         Tenant tenant = tenantRepo.findById(tenantId).orElse(null);
-        String token = tenant != null && tenant.getMetaAccessTokenEnc() != null
-                ? new String(tenant.getMetaAccessTokenEnc(), StandardCharsets.UTF_8) : null;
+        String token = tenant != null ? vault.openOrNull(tenant.getMetaAccessTokenEnc()) : null;
 
         String action = "all".equals(contour) ? "PAUSE_ALL"
                 : "SCALE".equals(contour) ? "PAUSE_SCALE" : "PAUSE_ALL";

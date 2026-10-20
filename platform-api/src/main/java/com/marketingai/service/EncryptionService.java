@@ -25,8 +25,10 @@ import java.util.Base64;
 public class EncryptionService {
 
     private final SecretKey dataKey;
+    private final boolean configured;
 
     public EncryptionService(@Value("${app.encryption.key:}") String rawKey) {
+        configured = !rawKey.isEmpty();
         if (rawKey.isEmpty()) {
             log.warn("EncryptionService: ENCRYPTION_KEY not set — using ephemeral dev key (data not persistent across restarts)");
             try {
@@ -40,6 +42,11 @@ public class EncryptionService {
             byte[] keyBytes = Base64.getDecoder().decode(rawKey);
             dataKey = new SecretKeySpec(keyBytes, "AES");
         }
+    }
+
+    /** True when a persistent key was supplied (ENCRYPTION_KEY); false = ephemeral dev key. */
+    public boolean isConfigured() {
+        return configured;
     }
 
     public String encrypt(String plaintext) {

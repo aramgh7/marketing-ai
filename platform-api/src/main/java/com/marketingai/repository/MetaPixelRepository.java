@@ -20,18 +20,11 @@ public interface MetaPixelRepository extends JpaRepository<MetaPixel, UUID> {
     Optional<String> findDefaultPixelId(UUID tenantId);
 
     /**
-     * Returns the CAPI access token (raw bytes → UTF-8) for the default pixel.
-     * Phase 0: no encryption. Phase 1+: decrypt with AES/KMS here.
+     * Returns the sealed CAPI access token for the default pixel — open it with {@code TokenVault} (roadmap 9-1).
      */
     @Query("SELECT p.capiAccessTokenEnc FROM MetaPixel p " +
            "WHERE p.tenantId = :tenantId AND p.defaultPixel = true AND p.status = 'ACTIVE'")
     Optional<byte[]> findDefaultCapiTokenBytes(UUID tenantId);
-
-    default Optional<String> findCapiToken(UUID tenantId) {
-        return findDefaultCapiTokenBytes(tenantId)
-                .filter(bytes -> bytes.length > 0)
-                .map(bytes -> new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
-    }
 
     /** Find pixel_id by role_key (for CAPI v2 multi-pixel routing). */
     @Query("SELECT p.pixelId FROM MetaPixel p " +
@@ -42,10 +35,4 @@ public interface MetaPixelRepository extends JpaRepository<MetaPixel, UUID> {
     @Query("SELECT p.capiAccessTokenEnc FROM MetaPixel p " +
            "WHERE p.tenantId = :tenantId AND p.roleKey = :roleKey AND p.status = 'ACTIVE' LIMIT 1")
     Optional<byte[]> findCapiTokenBytesByRole(UUID tenantId, String roleKey);
-
-    default Optional<String> findCapiTokenByRole(UUID tenantId, String roleKey) {
-        return findCapiTokenBytesByRole(tenantId, roleKey)
-                .filter(bytes -> bytes.length > 0)
-                .map(bytes -> new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
-    }
 }
