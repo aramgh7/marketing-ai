@@ -1,6 +1,6 @@
 # Marketing AI Platform — Architecture Document
 
-> Version 1.4 — 2026-10-17
+> Version 1.5 — 2026-10-20
 > Scope: **[v1.2 — changed]** ~~MVP (Phase 0 + Phase 1 descriptive + Phase 2 + Thompson on site)~~ MVP core (Phase 0–2) in §1–§14; Phase 3+ modules the vision requires but v1.1 left out are specified in §15 (gap closure), with their schema, jobs and API routes
 > Reference: **[v1.1 — changed]** ~~vision.md v1.9.6~~ vision.md v1.9.9
 > v1.1: review round 1. §13/§6/§5.1: real GoHighLevel webhook names (`ContactCreate`, `AppointmentUpdate`, `OpportunityStatusUpdate`); Google Calendar removed as attendance source; `thompson_arms` has a single writer (FastAPI derives arms from events — Spring never increments α/β); no fractional α increments; §8 RLS fixed (`SET LOCAL`, `missing_ok`, non-owner role, FastAPI tenant GUC); §4.5 client-generated `event_id` for Pixel/CAPI dedup + idempotency; one server-side CAPI path (Spring), sGTM demoted; §7 Edge → FastAPI exposure made explicit; §9/§14 budget-guard pause needs Marketing API write in MVP + Meta Automated Rules at onboarding; §4.6 propensity stored, decision log made durable; §9 decay toward prior; smaller: Spring Boot version, Bot Management tier, `users.email` scope, `block_order` by `event_id`, `/decide` session_id
@@ -12,6 +12,8 @@
 > v1.3: **§16 Client #1 Adaptation** (vision §19) — the client runs an investor funnel (Reg D 506(c)); funnel/CAPI/reward move behind per-tenant configuration (`funnel_stages`, `capi_event_map`, `reward_levels`); CAPI chain v2 Lead(value) → Schedule → CompleteRegistration → Purchase with pixel routing (non-accredited → `future_regcf`); new **Follow-up Sequence Optimisation** module (`followup_variants`, `followup_assignments`, `/decide/followup`, GHL workflows as executor); show-rate corrector and no-show attribution; securities compliance rulebases + approved phrases; investor offer atom schema; attribution across GHL sub-accounts and agency pixels; external-signal role per funnel. Pointers in §13 and §14.
 >
 > v1.4: §16.13–16.21 — beyond-current-capability modules (vision §19.18), **additive only**: funnel paths as arms, no-show propensity + risk-tiered follow-up + slot overbooking, predicted lead value at day 0 (`predicted_value` formula token), compliance by construction + staged moderation probe + reviewer persona, post-call intelligence, investor archetypes, creative sources (agency measurability), Reg CF waitlist value. No existing table semantics, service contracts or migrations change.
+>
+> v1.5: **sync with the code after the 2026-10-20 conformance review** (`.ai/conformance-review-2026-10-20.md`). §5.1/§5.2 route tables now name the paths that exist (`/decide/landing`, `/capi-events`, `/analytics/creatives`, `/mmf/offers/*`, `/evolve/*`, `POST /explain/{entity_type}`, `/predict/score`, `/simulate`); the `/model/*` family is replaced by the incremental reward path (`/decide/reward`, `RewardSweepScheduler`, lazy decay in `load_arms`). §8: Spring sets the GUC per statement at session level with a reset on connection return (Hikari autocommit); ml-service role becomes `mai_ml` (roadmap 9-4). §9: Quality Score / taxonomy / proxy-calibration jobs run in Spring; jobs still missing are marked with their roadmap 9-x item. §16.3: the seeded CAPI map follows vision §19.4 (roadmap 9-7). Tags: **[v1.5 — changed]** / **[v1.5 — added]**.
 >
 > **Marking convention for v1.2 edits**: same as v1.1, with the tag **[v1.2 — added]** / **[v1.2 — changed]**. §15 is entirely new, so only its heading carries the tag.
 
@@ -526,9 +528,11 @@ CREATE INDEX idx_sessions_ext_id ON sessions(tenant_id, external_id_hash);   -- 
 #### Tenants
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/tenants/me` | Current tenant info |
-| PUT | `/api/v1/tenants/me` | Update tenant settings |
-| PUT | `/api/v1/tenants/me/meta-credentials` | Set Meta API tokens (encrypted) |
+| GET | **[v1.5 — changed]** ~~`/api/v1/tenants/me`~~ `/api/v1/tenants/me/settings` | Current tenant settings (report e-mail, alert channel, holdout, …) |
+| PATCH | **[v1.5 — changed]** ~~`PUT /api/v1/tenants/me`~~ `/api/v1/tenants/me/settings` | Partial update of tenant settings |
+| PUT | `/api/v1/tenants/me/meta-credentials` | Set Meta API tokens (sealed with `TokenVault`, roadmap 9-1) |
+| GET/PUT | **[v1.5 — added]** `/api/v1/tenants/me/autonomy` | Autonomy level; PUT above ADVISOR requires the latest `ope_runs` PASS ≤ 7 days (roadmap 9-3) |
+| GET/PUT | **[v1.5 — added]** `/api/v1/tenants/me/oauth-scopes` | Minimal Meta scope record (§11) |
 
 #### Creatives
 | Method | Path | Description |
@@ -553,14 +557,15 @@ CREATE INDEX idx_sessions_ext_id ON sessions(tenant_id, external_id_hash);   -- 
 #### Events
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/events` | Ingest batch of events from landing tracker |
-| POST | `/api/v1/events/capi` | Receive Meta CAPI webhook events |
+| POST | `/api/v1/events` | Ingest batch of events from landing tracker (dedup: Redis 24 h key per `event_id` + partial unique index `idx_events_tenant_event_dedup`) |
+| POST | **[v1.5 — changed]** ~~`/api/v1/events/capi`~~ `/api/v1/capi-events` | Receive Meta CAPI webhook events (`CAPIEventController`) |
+| POST | **[v1.5 — added]** `/api/v1/form/submit` | Investor form (self-accreditation, ticket bucket) → `form_submissions`, value log, GHL ids |
 
 #### Dashboard
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/analytics/overview` | Tenant overview (conversions, revenue, ROAS) |
-| GET | `/api/v1/analytics/variants` | Per-variant performance |
+| GET | **[v1.5 — changed]** ~~`/api/v1/analytics/variants`~~ `/api/v1/analytics/creatives` | Per-creative performance (variants: `GET /api/v1/landings/arms`, `GET /api/v1/experiments/{id}/results`) |
 | GET | `/api/v1/analytics/atoms` | Atom-level performance breakdown |
 | GET | `/api/v1/analytics/funnel` | Funnel diagnostics (§3.2) |
 
@@ -582,33 +587,33 @@ CREATE INDEX idx_sessions_ext_id ON sessions(tenant_id, external_id_hash);   -- 
 #### GoHighLevel Webhooks
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/webhooks/ghl` | **[v1.1 — changed]** ~~Receive GHL events: `contact.created`, `opportunity.*`, `appointment.*`, `call.completed`~~ Receive GHL events by their real names: `ContactCreate`, `ContactUpdate`, `AppointmentCreate`, `AppointmentUpdate`, `OpportunityStatusUpdate` (+ conversation/message webhooks for call outcome — ⚠️ verify exact event in GHL docs). Writes to `ghl_webhook_log` + `events`/`sessions` only — never to `thompson_arms` (§13.1) |
+| POST | **[v1.5 — changed]** ~~`/api/v1/webhooks/ghl`~~ `/api/v1/webhooks/ghl/{tenantId}` (header `X-Webhook-Secret`, chosen per `locationId` from `ghl_subaccounts`, §16.9) | **[v1.1 — changed]** ~~Receive GHL events: `contact.created`, `opportunity.*`, `appointment.*`, `call.completed`~~ Receive GHL events by their real names: `ContactCreate`, `ContactUpdate`, `AppointmentCreate`, `AppointmentUpdate`, `OpportunityStatusUpdate` (+ conversation/message webhooks for call outcome — ⚠️ verify exact event in GHL docs). Writes to `ghl_webhook_log` + `events`/`sessions` only — never to `thompson_arms` (§13.1) |
 
 #### [v1.2 — added] Gap-closure routes (Spring Boot)
 Full contracts in §15; summary so the surface is visible in one place:
 
 | Area | Routes | §15 |
 |------|--------|-----|
-| External signals | `GET/PUT /api/v1/signals/calendar`, `GET /api/v1/signals/context?date=` | 15.1 |
+| External signals | **[v1.5 — changed]** `GET /api/v1/signals/calendar`, ~~`PUT`~~ `POST /api/v1/signals/calendar`, ~~`GET /api/v1/signals/context?date=`~~ context is snapshotted into `sessions.external_ctx` at session start (no date endpoint) | 15.1 |
 | Anchors | `PUT /api/v1/ad-sets/{id}/anchor` (exists), `GET /api/v1/campaigns/{id}/anchor-divergence` | 15.2 |
-| Site Health | `GET /api/v1/site-health`, `POST /api/v1/site-health/checks`, `POST /api/v1/site-health/{id}/resume` | 15.3 |
+| Site Health | **[v1.5 — changed]** `GET /api/v1/site-health`, ~~`POST /api/v1/site-health/checks`~~ (checks run only from `SiteHealthScheduler` / `FormHealthScheduler`), ~~`POST /api/v1/site-health/{id}/resume`~~ `POST /api/v1/site-health/{id}/confirm-resume` (3 consecutive passes **and** this confirmation) | 15.3 |
 | Compliance / IP | `POST /api/v1/compliance/check` (text or creative), `GET /api/v1/compliance/{entityId}`, `PUT /api/v1/compliance/{id}/override` | 15.4 |
-| Quality Score | `GET /api/v1/analytics/quality-score?by=creative` (or `by=variant`) | 15.5 |
-| Message-Market Fit / Offer Explorer | `GET /api/v1/mmf/{audience}`, `POST /api/v1/offers/explore`, `GET/POST /api/v1/offers/candidates/{id}/approve` | 15.6 |
+| Quality Score | **[v1.5 — changed]** ~~`GET /api/v1/analytics/quality-score?by=creative`~~ no read route yet — scores live in `creative_quality` and `sessions.quality_score`, computed by `QualityScoreScheduler`; the admin page in roadmap 9-5 exposes them | 15.5 |
+| Message-Market Fit / Offer Explorer | **[v1.5 — changed]** `GET /api/v1/mmf` (per-audience rows in the body), `POST /api/v1/evolve/generate` (offer + atom candidates), `POST /api/v1/evolve/{id}/approve`, `GET /api/v1/offer-schemas/{key}/explore` (§16.8) | 15.6 |
 | LLM content + RLHA | `POST /api/v1/landings/{id}/generate`, `POST /api/v1/landings/{id}/match-score`, `GET /api/v1/rlha/corrections`, `GET /api/v1/rlha/metrics` | 15.7 |
 | Voice of Customer | `POST /api/v1/voc/import`, `GET /api/v1/voc/objections` | 15.8 |
-| Autonomy | `GET/PUT /api/v1/tenants/me/autonomy`, `POST /api/v1/creatives/{id}/expert-rating` | 15.13 |
-| Circuit-breaker recovery | `GET /api/v1/circuit-breaker/{id}/diagnosis`, `POST /api/v1/circuit-breaker/{id}/confirm-cause`, `POST /api/v1/circuit-breaker/{id}/resume-batch` | 15.14 |
-| Security | `GET /api/v1/audit-log`, `POST /api/v1/tenants/me/meta-credentials/rotate` | 15.15 |
-| Data governance | `GET /api/v1/event-schemas`, `POST /api/v1/privacy/erasure` | 15.12 |
+| Autonomy | `GET/PUT /api/v1/tenants/me/autonomy` (roadmap 9-3), `POST /api/v1/creatives/{id}/expert-rating`; autopilot switches `GET/PUT /api/v1/autopilot/settings` | 15.13 |
+| Circuit-breaker recovery | **[v1.5 — changed]** `GET /api/v1/circuit-breaker/{id}/diagnosis`, `POST /api/v1/circuit-breaker/{id}/confirm-cause`, ~~`POST /api/v1/circuit-breaker/{id}/resume-batch`~~ `POST /api/v1/circuit-breaker/resume-batch` (body carries the event id) | 15.14 |
+| Security | **[v1.5 — changed]** `GET /api/v1/audit-log`; ~~`POST /api/v1/tenants/me/meta-credentials/rotate`~~ rotation is only the daily `TokenRotationScheduler` (roadmap 9-2) | 15.15 |
+| Data governance | **[v1.5 — changed]** ~~`GET /api/v1/event-schemas`~~ schemas are read by `EventSchemaService` from `event_schemas` (no public route), `POST /api/v1/privacy/erasure` | 15.12 |
 
 ### 5.2 FastAPI — ML Service (port 8000)
 
 #### Thompson Sampling
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/decide` | Choose variant for visitor. **[v1.1 — changed]** Input: `{tenant_id, creative_id, context` ~~`}`~~ `, session_id?}` — `session_id` present only after consent (sticky assignment); absent = stateless decision per vision §12.1a. Output: `{variant_id, block_order, decision_id}`. Latency target: <15ms **from FastAPI**; end-to-end budget depends on where middleware runs (§7) |
-| POST | `/decide/batch` | Batch decisions (for pre-warming cache) |
+| POST | **[v1.5 — changed]** ~~`/decide`~~ `/decide/landing` (`/decide/followup` for follow-up arms §16.5, `/decide/reward` for reward deltas) | Choose variant for visitor. **[v1.1 — changed]** Input: `{tenant_id, creative_id, context` ~~`}`~~ `, session_id?}` — `session_id` present only after consent (sticky assignment); absent = stateless decision per vision §12.1a. Output: `{variant_id, block_order, decision_id}`. Latency target: <15ms **from FastAPI**; end-to-end budget depends on where middleware runs (§7) |
+| POST | **[v1.5 — changed]** ~~`/decide/batch`~~ — not implemented; the Redis posterior cache is warmed by the first `/decide/landing` per `{tenant, context_key}` (TTL 15 min) |
 
 #### Creative DNA
 | Method | Path | Description |
@@ -619,16 +624,16 @@ Full contracts in §15; summary so the surface is visible in one place:
 #### Model
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/model/update` | Trigger posterior recalculation from recent events |
-| GET | `/model/posteriors/{tenant_id}` | Current posteriors for all arms |
-| POST | `/model/decay` | Run daily α/β decay (called by scheduler) |
+| POST | **[v1.5 — changed]** ~~`/model/update`~~ `/decide/reward` (`{decision_id, reward_type}`; idempotent through `thompson_reward_log`) and `/decide/reward/sweep-negatives` (`RewardSweepScheduler`: β += 1 after the 7-day no-response window) | Posteriors are updated incrementally per reward, not by a batch recalculation; `PosteriorRecalcScheduler` (15 min) only reports arms with rewards that have not been applied |
+| GET | **[v1.5 — changed]** ~~`/model/posteriors/{tenant_id}`~~ `/glm/posteriors?tenant_id=` (GLM atom posteriors) and `GET /api/v1/landings/arms` (arm α/β) | Current posteriors |
+| POST | **[v1.5 — changed]** ~~`/model/decay`~~ — decay `α = 1 + 0.99·(α−1)` is applied lazily inside `load_arms()` when `last_decayed_at` is older than 24 h (arms never loaded are never decayed — acceptable: they are not being served) |
 
 #### Diagnostics
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/diagnostics/{tenant_id}` | Diagnostic card (§3.2): symptoms, diagnoses, actions |
-| GET | `/diagnostics/{tenant_id}/power` | Power calculator: min traffic for decision |
-| GET | `/diagnostics/{tenant_id}/anchors` | Anchor creative comparison (market vs creative effect) |
+| POST | **[v1.5 — changed]** ~~`GET /diagnostics/{tenant_id}/power`~~ `/simulate` with `scenario = "power"` (sessions to significance, p10/p50/p90) | Power calculator |
+| POST | **[v1.5 — changed]** ~~`GET /diagnostics/{tenant_id}/anchors`~~ `/anchors/divergence`, `/anchors/divergence/multi` | Anchor creative comparison (market vs creative effect) |
 
 #### Creator Brief
 | Method | Path | Description |
@@ -642,14 +647,15 @@ Full contracts in §15; summary so the surface is visible in one place:
 | Anchor divergence | `POST /anchors/divergence` — P(test − anchor < −X) from Beta posteriors | 15.2 |
 | Quality Score / clickbait | `POST /quality/score`, `POST /quality/clickbait-check` | 15.5 |
 | Message-Market Fit | `POST /mmf/diagnose` — P(any variant > breakeven) + between-variant variance | 15.6 |
-| Offer Explorer | `POST /offers/generate` (LLM candidates from sub-atoms, validity mask, margin floor), `POST /offers/rank` | 15.6 |
+| Offer Explorer | **[v1.5 — changed]** `POST /mmf/offers/generate`, `POST /mmf/offers/rank`, `POST /mmf/offers/generate-from-schema` (§16.8; COMPLIANCE_PASS replaces the margin floor for securities) | 15.6 |
 | Content generation / match | `POST /content/generate` (slots from product facts + best atoms + RLHA few-shot), `POST /content/match-score` | 15.7 |
 | Voice of Customer | `POST /voc/extract-objections` | 15.8 |
 | Persona sandbox | `POST /persona/build`, `POST /persona/score` | 15.9 |
 | Taxonomy alignment | `POST /taxonomy/align`, `POST /taxonomy/recalibrate` | 15.10 |
 | Off-policy evaluation | `POST /ope/evaluate` — IPS / SNIPS / doubly-robust estimate of a candidate policy on `decision_log` | 15.11 |
-| Explainability | `GET /explain/{tenant_id}/{entity}` — stats-only narrative (vision §21.2) | 15.16 |
-| Predictive extras | `POST /predict/cpm` (Phase 4+), `POST /burnout/survival` (Phase 6), `POST /glm/interactions` (Phase 6) | 15.17 |
+| Explainability | **[v1.5 — changed]** `POST /explain/{entity_type}` (tenant id and stats in the body) — stats-only narrative (vision §21.2) | 15.16 |
+| Predictive extras | **[v1.5 — changed]** `POST /predict/score` (CPM, log-linear MVP), `POST /burnout/survival` (Phase 6), `POST /glm/interactions` (Bayes-factor ranking) | 15.17 |
+| **[v1.5 — added]** Beyond §15 | `/video/*` (transcribe, tag-scenes, montage-plan, render, generate-variations), `/ai-video/*`, `/propensity/*` (no-show, report), `/predict/lead-value`, `/post-call/*`, `/investor/*`, `/agency/*`, `/waitlist/value`, `/reward/*` (show-rate corrector, gate adjustment), `/portfolio/optimize`, `/geo-lift/*`, `/entropy/*`, `/cb/*`, `/offer/*` (validity), `/niche-store/*`, `/hierarchy/*`, `/red-flags/*`, `/model-quality/*`, `/analyze/noshow-attribution`, `/analyze/form-health`, `/signals/news-sentiment` — 139 routes in total, every one with a Spring caller (`scripts/check-ml-routes.py`) | — |
 
 ---
 
@@ -766,9 +772,9 @@ CREATE POLICY tenant_isolation ON creatives
 -- mai_app, which does NOT own the tables and has no BYPASSRLS. FORCE above is belt-and-braces.
 ```
 
-**Spring Boot side**: `TenantFilter` (servlet filter) extracts tenant from JWT; **[v1.1 — changed]** ~~sets `app.current_tenant` on the JDBC connection~~ a `@Transactional` aspect issues `SET LOCAL app.current_tenant` as the first statement of every transaction (not on the pooled connection). Every query is automatically scoped.
+**Spring Boot side**: **[v1.5 — changed]** `JwtFilter` extracts the tenant from the JWT into `TenantContext`; `TenantScopedConnection` (a JDBC proxy around every pooled connection) runs `set_config('app.current_tenant', ?, false)` before each statement and resets it to `''` when the connection returns to the pool. Session scope is used on purpose: `SET LOCAL` is silently discarded in Hikari's autocommit mode before Spring opens a transaction. Schedulers and bootstrap paths run in an explicit system scope (`TenantContext.runAsSystem`, `app.rls_bypass = on`, see V116). ~~`TenantFilter` … `SET LOCAL`~~
 
-**FastAPI side**: **[v1.1 — changed]** ~~tenant_id is always an explicit parameter in API calls (no ambient state). Each query includes `WHERE tenant_id = :tenant_id`.~~ tenant_id is still an explicit parameter in every API call, but FastAPI connects as the same `mai_app` role, so with RLS enabled its `WHERE tenant_id = :tenant_id` queries return **nothing** unless it also sets the GUC. FastAPI's DB session wrapper issues `SET LOCAL app.current_tenant = :tenant_id` per transaction, exactly like Spring. Scheduled jobs that span tenants (`/model/update`, `/model/decay`) iterate tenants and set the GUC per iteration — no cross-tenant query is ever issued.
+**FastAPI side**: **[v1.5 — changed]** tenant_id is an explicit parameter in every API call. Until roadmap 9-4 ships, ml-service connects as the owner role `mai` (superuser in the dev compose), which bypasses RLS; 9-4 introduces `mai_ml` (LOGIN, NOBYPASSRLS, write grants on `thompson_arms` / `thompson_reward_log` / `model_posteriors` only) and `db_client.tenant_tx(tenant_id)` / `system_tx()` wrappers that run `set_config('app.current_tenant', $1, true)` or `set_config('app.rls_bypass', 'on', true)` inside the transaction, so every one of the 19 DB access sites is scoped. `mai_app` keeps no write grant on `thompson_arms` (single writer, §12 #12). ~~… connects as the same `mai_app` role … `/model/update`, `/model/decay` …~~
 
 ---
 
@@ -776,29 +782,31 @@ CREATE POLICY tenant_isolation ON creatives
 
 | Job | Frequency | Service | Description |
 |-----|-----------|---------|-------------|
-| Posterior decay | Daily 03:00 UTC | FastAPI | **[v1.1 — changed]** ~~α/β × 0.99 on all arms (§6.2)~~ `α = 1 + 0.99·(α−1)`, `β = 1 + 0.99·(β−1)` — decay toward the prior, not toward Beta(0,0) (vision §6.2 v1.9.9) |
-| Posterior recalc | Every 15 min | FastAPI | Recalculate from recent events → update Redis. **[v1.1 — added]** Sole writer of `thompson_arms` |
+| Posterior decay | **[v1.5 — changed]** ~~Daily 03:00 UTC~~ lazy, inside `load_arms()` when `last_decayed_at` > 24 h | FastAPI | **[v1.1 — changed]** ~~α/β × 0.99 on all arms (§6.2)~~ `α = 1 + 0.99·(α−1)`, `β = 1 + 0.99·(β−1)` — decay toward the prior, not toward Beta(0,0) (vision §6.2 v1.9.9) |
+| Posterior recalc | **[v1.5 — changed]** ~~Every 15 min~~ per reward (`/decide/reward`) + `RewardSweepScheduler` hourly (β += 1 after 7 days without response) | FastAPI (writer) / Spring (sweep trigger) | **[v1.1 — added]** Sole writer of `thompson_arms`; `PosteriorRecalcScheduler` (15 min, Spring) only logs arms with pending rewards |
 | Meta sync | Every 30 min | Spring Boot | Pull campaign/ad set status, learning phase, spend |
 | Budget guard check | Every 5 min | Spring Boot | Compare spend vs thresholds → trigger pause if exceeded. **[v1.1 — added]** Pausing an ad set is a **Marketing API write** (`ads_management` scope) — this is in MVP even though campaign management is not (§14). Spend data is up to 30 min stale (Meta sync) plus Meta's own reporting delay, so the in-app guard alone cannot be the last line: Meta Account Spending Limit + Automated Rules are configured at onboarding (§12 #13) |
 | Fraud session review | Hourly | Spring Boot | Score suspicious sessions, exclude from model |
-| GHL sync | Every 60 min | Spring Boot | Pull pipeline stages for open opportunities, update lead quality scores |
-| Event partition create | Monthly | Flyway/cron | Create next month's event partition |
+| GHL sync | Every 60 min | Spring Boot | Pull pipeline stages for open opportunities, update lead quality scores. **[v1.5 — added]** not implemented yet (data arrives only from webhooks) → roadmap 9-8 `GhlSyncScheduler` |
+| Event partition create | Monthly | Flyway/cron | Create next month's event partition. **[v1.5 — added]** partitions are pre-created to 2027-03 in V5; automatic creation → roadmap 9-6 `EventPartitionScheduler` |
 | **[v1.2 — added]** Site health check | Every 1–5 min | Spring Boot | HEAD/GET every ACTIVE landing; 5xx/timeout ×2 → P0 autopause of ad sets pointing at it (§15.3) |
 | **[v1.2 — added]** Synthetic form check | Every 15–30 min | Spring Boot → Playwright | Headless submission of each ACTIVE form with a sentinel email; failure → alert + autopause (§15.3) |
-| **[v1.2 — added]** CVR-collapse detector | Every 15 min | FastAPI | CTR stable and CVR→0 in < 1 h on stable traffic → autopause + urgent alert (§15.3) |
+| **[v1.2 — added]** CVR-collapse detector | Every 15 min | FastAPI | CTR stable and CVR→0 in < 1 h on stable traffic → autopause + urgent alert (§15.3). **[v1.5 — added]** not implemented → roadmap 9-8 `CvrCollapseScheduler` |
 | **[v1.2 — added]** External signals refresh | Hourly (CPM, news), daily (weather, calendar) | Spring Boot | Pull CPM series from Insights, weather for tenant geos, news headlines → LLM sentiment; write `external_signals` (§15.1) |
-| **[v1.2 — added]** Baseline anomaly scan | Hourly | FastAPI | Detect simultaneous drops across anchors + tests; classify market / creative / technical / fraud (§15.1, §15.2) |
+| **[v1.2 — added]** Baseline anomaly scan | Hourly | **[v1.5 — changed]** Spring (`ExternalSignalsScheduler` hourly) → FastAPI `POST /signals/anomaly` | Detect simultaneous drops across anchors + tests; classify market / creative / technical / fraud (§15.1, §15.2); the news label feeds the classification (§15.1) |
 | **[v1.2 — added]** Fraud funnel-anomaly scan (L3) | Hourly | Spring Boot | CTR spike without conversions per geo/placement; clicks in target-geo night hours; one ad set's CTR anomalous vs same creative elsewhere; first-party clicks vs Meta clicks delta (§15.18) |
-| **[v1.2 — added]** Quality Score compute | Every 15 min (closed sessions) | FastAPI | `sessions.quality_score` + per-creative/variant aggregate; clickbait rule vs anchor (§15.5) |
-| **[v1.2 — added]** Message-Market Fit scan | Daily | FastAPI | Per audience: P(any variant > breakeven) and between-variant variance → "offer problem" flag (§15.6) |
-| **[v1.2 — added]** Taxonomy recalibration | Weekly | FastAPI | Re-cluster atom embeddings, merge drifting duplicates, promote candidate clusters (§15.10) |
+| **[v1.2 — added]** Quality Score compute | Every 15 min (closed sessions) | **[v1.5 — changed]** Spring `QualityScoreScheduler` → FastAPI `/quality/score` | `sessions.quality_score` + per-creative/variant aggregate; clickbait rule vs anchor (§15.5); show rate weight 0.40 (§16.6) |
+| **[v1.2 — added]** Message-Market Fit scan | Daily | FastAPI | Per audience: P(any variant > breakeven) and between-variant variance → "offer problem" flag (§15.6). **[v1.5 — added]** on demand only (`/mmf/diagnose`) → roadmap 9-8 `MmfScanScheduler` |
+| **[v1.2 — added]** Taxonomy recalibration | Weekly | **[v1.5 — changed]** Spring `TaxonomyRecalibrateScheduler` (Sun 04:00 UTC) → FastAPI `/taxonomy/recalibrate` | Re-cluster atom embeddings, merge drifting duplicates, promote candidate clusters (§15.10) |
 | **[v1.2 — added]** Retro bounce correction | Daily | Spring Boot | Sessions newly linked to an identity: flip earlier "bounce" to "returned & converted" (§7.4; feeds posterior recalc) |
-| **[v1.2 — added]** Proxy-value calibration | Weekly | FastAPI | Compare sent proxy values with realised CRM outcomes; adjust multipliers; report (§15.19) |
+| **[v1.2 — added]** Proxy-value calibration | Weekly | **[v1.5 — changed]** Spring `ProxyCalibrationScheduler` (Mon 03:00 UTC) | Compare sent proxy values with realised CRM outcomes; adjust multipliers; report (§15.19); `capi_value_mode = AB` → roadmap 9-9 |
 | **[v1.2 — added]** CRM discipline report | Weekly | Spring Boot | Appointments without Showed/No-show status; alert if > 20% (§13, vision §22) |
 | **[v1.2 — added]** Token rotation | Daily check, rotate at 50 days | Spring Boot | Exchange long-lived Meta tokens before the 60-day expiry; alert on failure (§15.15) |
 | **[v1.2 — added]** Retention sweep | Monthly | Flyway/cron | Drop raw `events` partitions older than retention window after aggregates are materialised (§15.12) |
-| **[v1.2 — added]** Off-policy evaluation | Weekly + before any autonomy upgrade | FastAPI | IPS/DR estimate of current policy vs logged policy on `decision_log`; result gates autopilot (§15.11) |
+| **[v1.2 — added]** Off-policy evaluation | Weekly + before any autonomy upgrade | FastAPI | IPS/DR estimate of current policy vs logged policy on `decision_log`; result gates autopilot (§15.11). **[v1.5 — added]** today only on demand (`POST /ope/evaluate`) and the gate is not enforced → roadmap 9-3 (`OpeScheduler`, `PUT /tenants/me/autonomy`) |
 | **[v1.2 — added]** Learning-phase snapshot | On every launch/pause/budget change, +24h | Spring Boot | Log `learning_phase` before/after each Meta write (vision §6.5 rule) (§15.20) |
+| **[v1.5 — added]** Jobs that exist beyond this table | — | Spring Boot | `NoshowAttributionScheduler` (weekly), `FunnelIntegrityScheduler` (07:15 UTC), `FollowupAutoPauseScheduler` (hourly), `ShowRateCorrectorScheduler` (weekly), `ClusterFitScheduler` (Sun 03:00), `EntropyScheduler`, `NicheBenchmarkScheduler`, `NicheFeatureStoreScheduler`, `RedFlagsScanScheduler`, `RetentionScheduler`, `RetroCorrectionJob`, `CrmDisciplineScheduler`, `WeeklyReportScheduler` (Mon 08:00), `FormHealthScheduler` (30 min), `FraudL2Scheduler`, `FraudL3Scheduler`, `LearningPhaseCheckScheduler`, `MetaSyncScheduler`, `CircuitBreakerScheduler`, `TokenRotationScheduler` (04:00), `SiteHealthScheduler` (60 s) — 41 scheduler classes, all wrapped in system scope by `SchedulingConfig` |
+| **[v1.5 — added]** Still missing (roadmap 9-8) | — | Spring Boot | `GhlSyncScheduler`, `CvrCollapseScheduler`, `MmfScanScheduler`, `RegCfWaitlistScheduler`, `SelfReportCalibrationScheduler`, `StageValueRefreshScheduler`, `SlotCapacityScheduler`, `ModerationProbeScheduler`, `OpeScheduler` (9-3), `EventPartitionScheduler` (9-6) |
 
 ---
 
@@ -1363,7 +1371,7 @@ ALTER TABLE sessions ADD COLUMN accreditation_verified_at TIMESTAMPTZ;
 
 ### 16.3 CAPI chain v2 and pixel routing (vision §19.4) — changes `CAPIForwardingService`, `meta_pixels`
 
-`capi_event_map` rows for client #1:
+`capi_event_map` rows for client #1 (**[v1.5 — added]** `ValueFormulaService.seedInvestorCAPIMap` seeds exactly these rows — roadmap 9-7; before 9-7 the seed had BOOKED→Lead, CALL_HELD→Schedule, ACCRED_VERIFIED→CompleteRegistration, INVEST_COMMITTED→Purchase, which contradicted vision §19.4):
 
 | stage_key | pixel_role | meta_event | value_formula | send_condition |
 |-----------|------------|------------|---------------|----------------|
