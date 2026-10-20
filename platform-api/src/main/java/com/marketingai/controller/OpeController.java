@@ -54,11 +54,15 @@ public class OpeController {
 
         // Fetch decisions from decision_log
         List<Map<String, Object>> decisions = jdbc.queryForList("""
-                SELECT variant_id, propensity AS logged_prob,
-                       CASE WHEN converted THEN 1.0 ELSE 0.0 END AS reward
-                FROM decision_log
-                WHERE tenant_id = ?
-                  AND created_at > now() - interval '30 days'
+                SELECT dl.chosen_variant_id AS variant_id,
+                       COALESCE((SELECT (c->>'propensity')::float8 FROM jsonb_array_elements(dl.candidates) c
+                                 WHERE c->>'variant_id' = dl.chosen_variant_id::text LIMIT 1), 1e-6) AS logged_prob,
+                       CASE WHEN EXISTS (SELECT 1 FROM thompson_reward_log r
+                                         WHERE r.decision_id = dl.id AND r.field_updated = 'alpha')
+                            THEN 1.0 ELSE 0.0 END AS reward
+                FROM decision_log dl
+                WHERE dl.tenant_id = ?
+                  AND dl.decided_at > now() - interval '30 days'
                 LIMIT 5000
                 """, tenantId);
 

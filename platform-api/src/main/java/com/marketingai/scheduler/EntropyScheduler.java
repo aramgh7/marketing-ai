@@ -148,7 +148,7 @@ public class EntropyScheduler {
                 UUID.randomUUID(), niche, embeddings.size(),
                 entropy, meanSim, diversityFlag, recommendation);
 
-        log.info("Niche '{}': entropy={:.3f} diversity_flag={}", niche, entropy, diversityFlag);
+        log.info("Niche '{}': entropy={} diversity_flag={}", niche, entropy, diversityFlag);
 
         // Telegram alert when diversity is flagged
         if (diversityFlag) {

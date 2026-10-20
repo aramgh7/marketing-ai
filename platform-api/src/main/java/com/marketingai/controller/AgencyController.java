@@ -78,7 +78,7 @@ public class AgencyController {
                     LEFT JOIN reward_events re
                         ON re.session_id = s.id AND re.tenant_id = s.tenant_id
                         AND re.rewarded_at >= NOW() - (? || ' days')::interval
-                    WHERE s.tenant_id = ? AND s.created_at >= NOW() - (? || ' days')::interval
+                    WHERE s.tenant_id = ? AND s.started_at >= NOW() - (? || ' days')::interval
                     """, String.valueOf(days), tid, String.valueOf(days));
             } catch (Exception e) {
                 return Map.<String, Object>of("lpv", 0, "held_calls", 0);
@@ -112,7 +112,7 @@ public class AgencyController {
             JOIN creatives c ON c.source_id = cs.id AND c.tenant_id = cs.tenant_id
             JOIN landing_variants lv ON lv.creative_id = c.id
             JOIN sessions s ON s.variant_id = lv.id AND s.tenant_id = cs.tenant_id
-                AND s.created_at >= NOW() - (? || ' days')::interval
+                AND s.started_at >= NOW() - (? || ' days')::interval
             LEFT JOIN reward_events re
                 ON re.session_id = s.id AND re.tenant_id = s.tenant_id
                 AND re.rewarded_at >= NOW() - (? || ' days')::interval

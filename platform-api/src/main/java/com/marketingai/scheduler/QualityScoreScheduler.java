@@ -32,16 +32,21 @@ public class QualityScoreScheduler {
         // Sessions closed in the last 16 min that don't yet have a quality_score
         List<Map<String, Object>> sessions = jdbc.queryForList("""
                 SELECT s.id, s.tenant_id, s.variant_id, s.creative_id,
-                       s.event_count, s.converted, s.max_scroll_depth,
+                       (SELECT COUNT(*) FROM events e
+                        WHERE e.session_id = s.id AND e.tenant_id = s.tenant_id)            AS event_count,
+                       s.converted,
+                       (SELECT MAX((e.event_data->>'scroll_depth')::int) FROM events e
+                        WHERE e.session_id = s.id AND e.tenant_id = s.tenant_id
+                          AND e.event_type = 'SCROLL')                                    AS max_scroll_depth,
                        (SELECT EXISTS(
                            SELECT 1 FROM events e
-                           WHERE e.session_id = s.id AND e.event_type = 'FORM_START'
+                           WHERE e.session_id = s.id AND e.tenant_id = s.tenant_id AND e.event_type = 'FORM_START'
                        )) AS form_started,
                        lv.match_score AS variant_match_score
                 FROM sessions s
                 LEFT JOIN landing_variants lv ON lv.id = s.variant_id
-                WHERE s.closed_at IS NOT NULL
-                  AND s.closed_at >= ?
+                WHERE s.last_event_at < now() - INTERVAL '30 minutes'   -- session closed
+                  AND s.last_event_at >= ?
                   AND s.quality_score IS NULL
                   AND s.consent_level = 'full'
                   AND s.is_suspicious = false
@@ -107,7 +112,7 @@ public class QualityScoreScheduler {
                     now()
                 FROM sessions s
                 WHERE s.quality_score IS NOT NULL
-                  AND s.closed_at >= now() - INTERVAL '30 days'
+                  AND s.last_event_at >= now() - INTERVAL '30 days'
                   AND s.consent_level = 'full'
                   AND s.is_suspicious = false
                   AND s.creative_id IS NOT NULL

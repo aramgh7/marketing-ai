@@ -26,7 +26,7 @@ public class CrmDisciplineScheduler {
     @Scheduled(cron = "0 0 8 * * MON")
     public void sendWeeklyDisciplineReport() {
         List<Map<String, Object>> tenants = jdbc.queryForList(
-                "SELECT id, name FROM tenants WHERE status = 'ACTIVE'");
+                "SELECT id, name FROM tenants");
 
         for (Map<String, Object> tenant : tenants) {
             UUID tenantId = (UUID) tenant.get("id");
@@ -48,7 +48,7 @@ public class CrmDisciplineScheduler {
                     SUM(CASE WHEN consent_level = 'full' THEN 1 ELSE 0 END) AS full_consent
                 FROM sessions
                 WHERE tenant_id = ?
-                  AND created_at > now() - interval '7 days'
+                  AND started_at > now() - interval '7 days'
                 """, tenantId);
 
         long total = toLong(row.get("total_sessions"));

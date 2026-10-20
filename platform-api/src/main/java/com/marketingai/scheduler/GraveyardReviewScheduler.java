@@ -79,9 +79,11 @@ public class GraveyardReviewScheduler {
     private String getLatestAnchorVerdict(UUID tenantId, UUID creativeId) {
         try {
             List<String> verdicts = jdbc.queryForList("""
-                    SELECT verdict FROM anchor_divergence_log
-                    WHERE tenant_id = ? AND creative_id = ?
-                    ORDER BY created_at DESC LIMIT 1
+                    SELECT verdict FROM anchor_divergence_log adl
+                    WHERE adl.tenant_id = ?
+                      AND adl.campaign_id IN (SELECT mas.campaign_id FROM meta_ad_sets mas
+                                              WHERE mas.creative_id = ? AND mas.tenant_id = adl.tenant_id)
+                    ORDER BY adl.created_at DESC LIMIT 1
                     """, String.class, tenantId, creativeId);
             return verdicts.isEmpty() ? null : verdicts.get(0);
         } catch (Exception e) {

@@ -35,7 +35,8 @@ public class MmfController {
     public List<Map<String, Object>> getRecentDiagnoses() {
         UUID tenantId = currentTenant();
         return jdbc.queryForList("""
-                SELECT id, campaign_id, diagnosis, confidence, recommendations, created_at
+                SELECT id, audience_key AS campaign_id, verdict AS diagnosis,
+                       p_any_above_breakeven AS confidence, signals AS recommendations, created_at
                 FROM mmf_diagnoses
                 WHERE tenant_id = ?
                   AND created_at > now() - interval '7 days'
@@ -48,8 +49,8 @@ public class MmfController {
     public List<Map<String, Object>> getActiveOffers() {
         UUID tenantId = currentTenant();
         return jdbc.queryForList("""
-                SELECT id, campaign_id, label, price, usp, guarantee_days,
-                       price_anchor, expected_value, status, created_at
+                SELECT id, audience_key AS campaign_id, hypothesis AS label, sub_atoms,
+                       rank_score AS expected_value, status, created_at
                 FROM offer_candidates
                 WHERE tenant_id = ?
                   AND status = 'ACTIVE'
@@ -90,10 +91,10 @@ public class MmfController {
         UUID diagId = UUID.randomUUID();
         jdbc.update("""
                 INSERT INTO mmf_diagnoses
-                (id, tenant_id, campaign_id, diagnosis, confidence, recommendations, created_at)
+                (id, tenant_id, audience_key, verdict, p_any_above_breakeven, signals, created_at)
                 VALUES (?, ?, ?, ?, ?, ?::jsonb, now())
                 """,
-                diagId, tenantId, req.campaign_id(),
+                diagId, tenantId, String.valueOf(req.campaign_id()),
                 diagnosis, (float) confidence,
                 recommendations.toString().replace("[", "[\"").replace("]", "\"]").replace(", ", "\", \""));
 

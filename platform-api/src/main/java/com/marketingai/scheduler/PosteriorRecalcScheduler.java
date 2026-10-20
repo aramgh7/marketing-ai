@@ -30,12 +30,12 @@ public class PosteriorRecalcScheduler {
                 SELECT DISTINCT v.id  AS variant_id,
                                 v.tenant_id,
                                 COUNT(e.id) AS new_conversions
-                FROM variants v
-                JOIN sessions s ON s.tenant_id = v.tenant_id
-                JOIN events   e ON e.session_id = s.id
+                FROM landing_variants v
+                JOIN sessions s ON s.tenant_id = v.tenant_id AND s.variant_id = v.id
+                JOIN events   e ON e.session_id = s.id AND e.tenant_id = s.tenant_id
                 WHERE v.status = 'ACTIVE'
-                  AND e.event_type = 'CONVERSION'
-                  AND e.created_at > NOW() - INTERVAL '15 minutes'
+                  AND e.event_type IN ('CONVERSION', 'FORM_SUBMIT')
+                  AND e.event_time > NOW() - INTERVAL '15 minutes'
                 GROUP BY v.id, v.tenant_id
                 LIMIT 200
                 """);

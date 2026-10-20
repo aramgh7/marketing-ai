@@ -34,9 +34,11 @@ public class EvolveController {
 
         // Load top arms with atoms from DB
         List<Map<String, Object>> arms = jdbc.queryForList("""
-                SELECT ta.id::text AS id, ta.alpha, ta.beta, c.atoms
+                SELECT ta.id::text AS id, ta.alpha, ta.beta,
+                       (SELECT COALESCE(jsonb_object_agg(ca.atom_type, ca.atom_value), '{}'::jsonb) FROM creative_atoms ca WHERE ca.creative_id = c.id AND ca.tenant_id = c.tenant_id) AS atoms
                 FROM thompson_arms ta
-                JOIN creatives c ON c.id = ta.creative_id
+                JOIN landing_variants lv ON lv.id = ta.variant_id AND lv.tenant_id = ta.tenant_id
+                JOIN creatives c ON c.id = lv.creative_id
                 WHERE ta.tenant_id = ?
                   AND ta.alpha + ta.beta >= 50
                 ORDER BY ta.alpha / (ta.alpha + ta.beta) DESC

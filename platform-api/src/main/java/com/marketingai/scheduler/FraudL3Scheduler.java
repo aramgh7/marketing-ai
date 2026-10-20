@@ -28,7 +28,7 @@ public class FraudL3Scheduler {
     @Scheduled(fixedDelay = 3_600_000)
     public void detectFraudL3() {
         List<Map<String, Object>> tenants = jdbc.queryForList(
-                "SELECT id FROM tenants WHERE status = 'ACTIVE'");
+                "SELECT id FROM tenants");
 
         for (Map<String, Object> tenant : tenants) {
             UUID tenantId = (UUID) tenant.get("id");
@@ -42,13 +42,13 @@ public class FraudL3Scheduler {
 
     private void checkTenantFraudL3(UUID tenantId) {
         List<Map<String, Object>> segments = jdbc.queryForList("""
-                SELECT geo, placement,
+                SELECT geo, COALESCE(utm_source, 'UNKNOWN') AS placement,
                        COUNT(*) AS total,
                        SUM(CASE WHEN is_suspicious THEN 1 ELSE 0 END) AS fraud_count
                 FROM sessions
                 WHERE tenant_id = ?
-                  AND created_at > now() - interval '1 hour'
-                GROUP BY geo, placement
+                  AND started_at > now() - interval '1 hour'
+                GROUP BY geo, COALESCE(utm_source, 'UNKNOWN')
                 HAVING COUNT(*) >= 20
                 """, tenantId);
 

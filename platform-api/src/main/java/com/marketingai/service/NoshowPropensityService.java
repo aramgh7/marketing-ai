@@ -63,8 +63,8 @@ public class NoshowPropensityService {
                     (a.lead_tz IS NOT NULL)             AS lead_tz_known,
                     s.ticket_bucket,
                     s.self_accredited,
-                    s.device_type,
-                    COALESCE(s.country != 'US', false)  AS is_international
+                    s.device AS device_type,
+                    COALESCE(s.geo NOT IN ('US', 'USA', 'United States'), false)  AS is_international
                 FROM sessions s
                 JOIN appointments a ON a.id = ?
                 WHERE s.id = ? AND s.tenant_id = ?

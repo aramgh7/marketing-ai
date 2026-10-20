@@ -121,7 +121,7 @@ public class SiteHealthScheduler {
                 // P0 autopause: pause all ACTIVE ad sets to prevent wasted spend during site outage
                 metaApiClient.enqueue("P0", null, tenantId, "AUTOPAUSE_SITE_INCIDENT", () -> {
                     int paused = jdbc.update(
-                            "UPDATE meta_ad_sets SET status='PAUSED', updated_at=now() WHERE tenant_id=? AND status='ACTIVE'",
+                            "UPDATE meta_ad_sets SET status='PAUSED', synced_at=now() WHERE tenant_id=? AND status='ACTIVE'",
                             tenantId);
                     if (paused > 0) {
                         log.warn("Site health P0 autopause: tenant={} paused {} ad sets", tenantId, paused);

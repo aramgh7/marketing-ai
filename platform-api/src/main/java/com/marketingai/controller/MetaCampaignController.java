@@ -165,7 +165,7 @@ public class MetaCampaignController {
             JOIN sessions s ON s.id = e.session_id
             WHERE s.tenant_id = ?
               AND e.event_type = 'CONVERSION'
-              AND e.created_at > NOW() - INTERVAL '7 days'
+              AND e.event_time > NOW() - INTERVAL '7 days'
             """, Integer.class, tenantId);
 
         int n = convCount != null ? convCount : 0;

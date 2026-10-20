@@ -49,13 +49,18 @@ public class BurnoutScanScheduler {
 
     private void scanTenant(UUID tenantId) {
         List<Map<String, Object>> creatives = jdbc.queryForList("""
-                SELECT c.id, c.name,
-                       COALESCE(cq.frequency, 1.0)        AS frequency,
-                       COALESCE(cq.initial_roas, 1.0)     AS initial_roas,
-                       COALESCE(cq.days_running, 0)       AS days_running,
-                       COALESCE(cq.n_obs, 0)              AS n_obs
+                SELECT c.id, c.title AS name,
+                       COALESCE(ins.frequency, 1.0)                                  AS frequency,
+                       1.0                                                           AS initial_roas,
+                       GREATEST(0, EXTRACT(DAY FROM now() - c.created_at))::int      AS days_running,
+                       COALESCE(ins.n_obs, 0)                                        AS n_obs
                 FROM creatives c
-                LEFT JOIN creative_quality cq ON cq.creative_id = c.id
+                LEFT JOIN LATERAL (
+                    SELECT AVG(mih.frequency) AS frequency, COUNT(*) AS n_obs
+                    FROM meta_ad_sets mas
+                    JOIN meta_insights_history mih ON mih.ad_set_id = mas.meta_ad_set_id AND mih.tenant_id = mas.tenant_id
+                    WHERE mas.creative_id = c.id AND mas.tenant_id = c.tenant_id
+                ) ins ON TRUE
                 WHERE c.tenant_id = ?
                   AND c.status = 'ACTIVE'
                 """, tenantId);
@@ -103,9 +108,11 @@ public class BurnoutScanScheduler {
     private String getLatestAnchorVerdict(UUID tenantId, UUID creativeId) {
         try {
             List<String> verdicts = jdbc.queryForList("""
-                    SELECT verdict FROM anchor_divergence_log
-                    WHERE tenant_id = ? AND creative_id = ?
-                    ORDER BY created_at DESC LIMIT 1
+                    SELECT verdict FROM anchor_divergence_log adl
+                    WHERE adl.tenant_id = ?
+                      AND adl.campaign_id IN (SELECT mas.campaign_id FROM meta_ad_sets mas
+                                              WHERE mas.creative_id = ? AND mas.tenant_id = adl.tenant_id)
+                    ORDER BY adl.created_at DESC LIMIT 1
                     """, String.class, tenantId, creativeId);
             return verdicts.isEmpty() ? null : verdicts.get(0);
         } catch (Exception e) {
@@ -165,10 +172,11 @@ public class BurnoutScanScheduler {
         try {
             UUID briefId = UUID.randomUUID();
             jdbc.update("""
-                    INSERT INTO creator_briefs (id, tenant_id, brief_type, description, version)
-                    VALUES (?, ?, 'VIDEO', ?, 1)
+                    INSERT INTO creator_briefs (id, tenant_id, brief_type, creative_type, title, notes, version)
+                    VALUES (?, ?, 'VIDEO', 'VIDEO', ?, ?, 1)
                     """,
                     briefId, tenantId,
+                    "AUTO: burnout replacement for " + creativeName,
                     String.format("AUTO: burnout predicted in %d days for creative '%s' (id=%s)",
                             daysRemaining, creativeName, creativeId));
             return briefId;

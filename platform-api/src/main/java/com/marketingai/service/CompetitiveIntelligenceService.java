@@ -222,11 +222,9 @@ public class CompetitiveIntelligenceService {
             jdbc.update(
                 """
                 INSERT INTO external_signals
-                    (tenant_id, signal_type, signal_date, value, description)
-                VALUES (?::uuid, 'COMPETITOR', CURRENT_DATE, ?, ?)
-                ON CONFLICT (tenant_id, signal_type, signal_date)
-                DO UPDATE SET value = GREATEST(external_signals.value, EXCLUDED.value),
-                              description = EXCLUDED.description
+                    (tenant_id, signal_type, observed_at, valid_from, valid_to, value_num, source, raw)
+                VALUES (?::uuid, 'COMPETITOR', now(), date_trunc('day', now()), date_trunc('day', now()) + INTERVAL '1 day',
+                        ?, 'competitive_intelligence', jsonb_build_object('description', ?::text))
                 """,
                 tenantId, (double) runDays, description);
         } catch (Exception e) {

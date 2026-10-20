@@ -122,9 +122,11 @@ public class InvestorArchetypeController {
         if (sessionId != null) {
             try {
                 List<Map<String, Object>> sessions = jdbc.queryForList("""
-                    SELECT ticket_bucket, self_accredited, device_type,
-                        EXTRACT(EPOCH FROM (form_submitted_at - created_at))/3600 AS time_to_form_h
-                    FROM sessions WHERE id = ? AND tenant_id = ?
+                    SELECT s.ticket_bucket, s.self_accredited, s.device AS device_type,
+                        (SELECT EXTRACT(EPOCH FROM (MIN(fs.submitted_at) - s.started_at))/3600
+                         FROM form_submissions fs
+                         WHERE fs.session_id = s.id AND fs.tenant_id = s.tenant_id) AS time_to_form_h
+                    FROM sessions s WHERE s.id = ? AND s.tenant_id = ?
                     """, sessionId, tenantId);
                 if (!sessions.isEmpty()) sessions.get(0).forEach(features::putIfAbsent);
 

@@ -27,7 +27,7 @@ public class ModerationController {
     public ResponseEntity<List<Map<String, Object>>> getResults(
             @RequestAttribute("tenantId") UUID tenantId) {
         return ResponseEntity.ok(jdbc.queryForList("""
-            SELECT mr.*, c.name AS creative_name
+            SELECT mr.*, c.title AS creative_name
             FROM moderation_results mr
             LEFT JOIN creatives c ON c.id = mr.creative_id
             WHERE mr.tenant_id = ? ORDER BY mr.checked_at DESC LIMIT 100
@@ -78,8 +78,7 @@ public class ModerationController {
 
         List<Map<String, Object>> rulebases = jdbc.queryForList("""
             SELECT rulebase_key, rules::text AS rules FROM compliance_rulebases
-            WHERE (tenant_id = ? OR tenant_id IS NULL) AND is_active = TRUE
-            """, tenantId);
+            """);
 
         Map<String, Object> complianceReq = Map.of("text", text, "rulebases", rulebases);
         try {

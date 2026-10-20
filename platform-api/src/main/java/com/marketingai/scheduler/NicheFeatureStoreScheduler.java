@@ -32,32 +32,34 @@ public class NicheFeatureStoreScheduler {
                 SELECT
                     COALESCE(t.settings->>'niche', 'UNKNOWN')   AS niche,
                     COALESCE(s.utm_source, 'UNKNOWN')            AS placement,
-                    CASE WHEN s.device_type IN ('MOBILE','DESKTOP','TABLET')
-                         THEN s.device_type ELSE 'UNKNOWN' END   AS device_type,
+                    CASE WHEN UPPER(s.device) IN ('MOBILE','DESKTOP','TABLET')
+                         THEN UPPER(s.device) ELSE 'UNKNOWN' END  AS device_type,
                     'BOUNCE_RATE'                                 AS metric,
                     COUNT(DISTINCT t.id)                          AS n_tenants,
                     COUNT(*)                                      AS n_obs,
                     AVG(CASE WHEN s.bounce THEN 1.0 ELSE 0.0 END) AS mean_val,
                     STDDEV_POP(CASE WHEN s.bounce THEN 1.0 ELSE 0.0 END) AS std_val
-                FROM sessions s
+                FROM (SELECT s.*, (NOT EXISTS (SELECT 1 FROM events ev WHERE ev.session_id = s.id AND ev.tenant_id = s.tenant_id AND ev.event_type IN ('SCROLL','CLICK','HOVER','BLOCK_VIEW','FORM_START','FORM_SUBMIT','VIDEO_PROGRESS','CTA_CLICK','FIRST_CLICK'))) AS bounce
+                      FROM sessions s
+                      WHERE s.started_at >= NOW() - INTERVAL '90 days'
+                        AND s.consent_level = 'full'
+                        AND s.is_suspicious = false) s
                 JOIN tenants t ON s.tenant_id = t.id
-                WHERE s.created_at >= NOW() - INTERVAL '90 days'
-                  AND s.consent_level = 'full'
-                  AND s.is_suspicious = false
-                GROUP BY niche, placement, device_type
+                GROUP BY 1, 2, 3   -- aliases; tenants also has a niche column
                 HAVING COUNT(*) >= 50
                 """);
 
         // Global mean for Cohen's d
         Map<String, Object> global = jdbc.queryForMap("""
                 SELECT
-                    AVG(CASE WHEN bounce THEN 1.0 ELSE 0.0 END) AS global_mean,
-                    STDDEV_POP(CASE WHEN bounce THEN 1.0 ELSE 0.0 END) AS global_std,
+                    AVG(CASE WHEN s.bounce THEN 1.0 ELSE 0.0 END) AS global_mean,
+                    STDDEV_POP(CASE WHEN s.bounce THEN 1.0 ELSE 0.0 END) AS global_std,
                     COUNT(*) AS global_n
-                FROM sessions
-                WHERE created_at >= NOW() - INTERVAL '90 days'
-                  AND consent_level = 'full'
-                  AND is_suspicious = false
+                FROM (SELECT s.id, s.tenant_id, (NOT EXISTS (SELECT 1 FROM events ev WHERE ev.session_id = s.id AND ev.tenant_id = s.tenant_id AND ev.event_type IN ('SCROLL','CLICK','HOVER','BLOCK_VIEW','FORM_START','FORM_SUBMIT','VIDEO_PROGRESS','CTA_CLICK','FIRST_CLICK'))) AS bounce
+                      FROM sessions s
+                      WHERE s.started_at >= NOW() - INTERVAL '90 days'
+                        AND s.consent_level = 'full'
+                        AND s.is_suspicious = false) s
                 """);
 
         double globalMean = global.get("global_mean") != null ? ((Number) global.get("global_mean")).doubleValue() : 0.55;

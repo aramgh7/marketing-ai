@@ -242,7 +242,7 @@ public class CAPIForwardingService {
             return jdbc.queryForObject("""
                     SELECT external_id_hash
                     FROM sessions
-                    WHERE id = ?::uuid
+                    WHERE id = ?
                       AND tenant_id = ?
                       AND consent_level = 'full'
                     LIMIT 1

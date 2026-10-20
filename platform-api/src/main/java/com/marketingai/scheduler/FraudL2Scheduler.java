@@ -33,7 +33,7 @@ public class FraudL2Scheduler {
     @Scheduled(fixedDelay = 3_600_000)
     public void checkSuspiciousShare() {
         List<Map<String, Object>> tenants = jdbc.queryForList(
-                "SELECT id, fraud_mode FROM tenants WHERE status = 'ACTIVE'");
+                "SELECT id, fraud_mode FROM tenants");
 
         for (Map<String, Object> tenant : tenants) {
             UUID tenantId  = (UUID) tenant.get("id");
@@ -53,7 +53,7 @@ public class FraudL2Scheduler {
                     SUM(CASE WHEN is_suspicious THEN 1 ELSE 0 END) AS suspicious
                 FROM sessions
                 WHERE tenant_id = ?
-                  AND created_at >= now() - INTERVAL '24 hours'
+                  AND started_at >= now() - INTERVAL '24 hours'
                 """, tenantId);
 
         long total     = toLong(stats.get("total"));
@@ -65,16 +65,15 @@ public class FraudL2Scheduler {
 
         // Source breakdown (top fraud flags)
         List<Map<String, Object>> sources = jdbc.queryForList("""
-                SELECT fraud_flags->>'rule' AS rule, COUNT(*) AS cnt
+                SELECT flag.rule AS rule, COUNT(*) AS cnt
                 FROM sessions,
-                     jsonb_array_elements(
-                         CASE WHEN fraud_flags IS NOT NULL AND jsonb_array_length(fraud_flags) > 0
-                              THEN fraud_flags ELSE '[]'::jsonb END
-                     ) AS flag(fraud_flags)
+                     jsonb_array_elements_text(
+                         CASE WHEN jsonb_typeof(fraud_reasons) = 'array' THEN fraud_reasons ELSE '[]'::jsonb END
+                     ) AS flag(rule)
                 WHERE tenant_id = ?
                   AND is_suspicious = true
-                  AND created_at >= now() - INTERVAL '24 hours'
-                GROUP BY fraud_flags->>'rule'
+                  AND started_at >= now() - INTERVAL '24 hours'
+                GROUP BY flag.rule
                 ORDER BY cnt DESC
                 LIMIT 5
                 """, tenantId);
@@ -106,12 +105,12 @@ public class FraudL2Scheduler {
                         ? "Ad sets paused automatically." : "Review traffic sources in Meta Ads Manager.");
 
         alertService.sendAlert(msg);
-        log.warn("FraudL2 share alert: tenant={} suspicious={}/{} ({:.1f}%) mode={}",
+        log.warn("FraudL2 share alert: tenant={} suspicious={}/{} ({}%) mode={}",
                 tenantId, suspicious, total, sharePct * 100, fraudMode);
 
         if ("ENFORCE".equals(fraudMode)) {
             int paused = jdbc.update(
-                    "UPDATE meta_ad_sets SET status='PAUSED', updated_at=now() WHERE tenant_id=? AND status='ACTIVE'",
+                    "UPDATE meta_ad_sets SET status='PAUSED', synced_at=now() WHERE tenant_id=? AND status='ACTIVE'",
                     tenantId);
             if (paused > 0) {
                 log.warn("FraudL2 ENFORCE: tenant={} paused {} ad sets", tenantId, paused);

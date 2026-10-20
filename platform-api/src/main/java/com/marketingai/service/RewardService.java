@@ -107,7 +107,7 @@ public class RewardService {
         List<Map<String, Object>> stages = jdbc.queryForList("""
             SELECT
                 fs.stage_key,
-                fs.stage_label,
+                fs.label AS stage_label,
                 fs.ordinal,
                 fs.is_quality_key,
                 fs.reward_weight,
@@ -122,7 +122,7 @@ public class RewardService {
             LEFT JOIN capi_event_map cem
                 ON cem.tenant_id = fs.tenant_id AND cem.stage_key = fs.stage_key
             WHERE fs.tenant_id = ?
-            GROUP BY fs.stage_key, fs.stage_label, fs.ordinal,
+            GROUP BY fs.stage_key, fs.label, fs.ordinal,
                      fs.is_quality_key, fs.reward_weight, fs.micro_reward_weight,
                      cem.meta_event_name
             ORDER BY fs.ordinal

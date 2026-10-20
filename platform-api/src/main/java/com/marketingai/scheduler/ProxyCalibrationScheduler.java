@@ -24,7 +24,7 @@ public class ProxyCalibrationScheduler {
     @Scheduled(cron = "0 0 3 * * MON")
     public void calibrateProxies() {
         List<Map<String, Object>> tenants = jdbc.queryForList(
-                "SELECT id FROM tenants WHERE status = 'ACTIVE'");
+                "SELECT id FROM tenants");
 
         for (Map<String, Object> tenant : tenants) {
             UUID tenantId = (UUID) tenant.get("id");
@@ -42,7 +42,7 @@ public class ProxyCalibrationScheduler {
                        CASE WHEN converted THEN 1.0 ELSE 0.0 END AS converted
                 FROM sessions
                 WHERE tenant_id = ?
-                  AND created_at > now() - interval '30 days'
+                  AND started_at > now() - interval '30 days'
                   AND quality_score IS NOT NULL
                 LIMIT 10000
                 """, tenantId);
@@ -63,11 +63,11 @@ public class ProxyCalibrationScheduler {
 
         jdbc.update("""
                 INSERT INTO proxy_calibration_runs
-                (tenant_id, proxy_col, target_col, n_samples, pearson_r, spearman_r, calibrated_at, created_at)
-                VALUES (?, 'quality_score', 'converted', ?, ?, ?, now(), now())
+                (tenant_id, run_date, stage, proxy_col, target_col, sample_n, pearson_r, spearman_r)
+                VALUES (?, CURRENT_DATE, 'quality_score', 'quality_score', 'converted', ?, ?, ?)
                 """, tenantId, n, (float) pearsonR, (float) spearmanR);
 
-        log.info("ProxyCalibration: tenant={} n={} pearson={:.3f} spearman={:.3f}",
+        log.info("ProxyCalibration: tenant={} n={} pearson={} spearman={}",
                 tenantId, n, pearsonR, spearmanR);
     }
 

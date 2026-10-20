@@ -103,7 +103,7 @@ public class FunnelPathController {
             FROM sessions s
             LEFT JOIN reward_events re ON re.session_id = s.id AND re.tenant_id = s.tenant_id
                 AND re.rewarded_at >= NOW() - (? || ' days')::interval
-            WHERE s.tenant_id = ? AND s.created_at >= NOW() - (? || ' days')::interval
+            WHERE s.tenant_id = ? AND s.started_at >= NOW() - (? || ' days')::interval
             GROUP BY COALESCE(s.funnel_path_id::text, 'null')
             """, String.valueOf(days), tenantId, String.valueOf(days));
         return ResponseEntity.ok(Map.of("paths", paths, "metrics", metrics, "days", days));

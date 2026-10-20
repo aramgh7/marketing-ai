@@ -145,9 +145,10 @@ public class BriefService {
         // Load top posteriors for active variants; filter by cluster via sessions
         // thompson_arms has no cluster_label — we find variants shown to this cluster via events
         List<Map<String, Object>> arms = jdbc.queryForList("""
-                SELECT DISTINCT ta.variant_id, ta.alpha, ta.beta, v.name AS variant_name
+                SELECT DISTINCT ta.variant_id, ta.alpha, ta.beta, v.name AS variant_name,
+                       ta.alpha / NULLIF(ta.alpha + ta.beta, 0) AS score
                 FROM thompson_arms ta
-                JOIN variants v ON v.id = ta.variant_id
+                JOIN landing_variants v ON v.id = ta.variant_id
                 WHERE v.tenant_id = ?
                   AND v.status = 'ACTIVE'
                   AND EXISTS (
@@ -156,7 +157,7 @@ public class BriefService {
                         AND s.cluster_label = ?
                         AND s.tenant_id = ?
                   )
-                ORDER BY (ta.alpha / NULLIF(ta.alpha + ta.beta, 0)) DESC
+                ORDER BY score DESC
                 LIMIT 10
                 """, tid, clusterLabel, tid);
 
@@ -172,9 +173,10 @@ public class BriefService {
 
         // Load niche benchmark for context
         List<Map<String, Object>> benchmarks = jdbc.queryForList("""
-                SELECT metric_name, niche_mean, niche_std, n_tenants
+                SELECT metric AS metric_name, effect_size AS niche_mean,
+                       (ci_upper - ci_lower) / 3.92 AS niche_std, n_tenants
                 FROM niche_benchmarks
-                WHERE niche_label = ?
+                WHERE niche = ? AND is_published = TRUE
                 LIMIT 5
                 """, clusterLabel);
 

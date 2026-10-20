@@ -226,7 +226,7 @@ public class FollowupController {
                        COUNT(fa.id) as assignments,
                        SUM(CASE WHEN fa.outcome = 'SHOWED' THEN 1 ELSE 0 END) as showed_count,
                        SUM(CASE WHEN fa.outcome = 'NO_SHOW' THEN 1 ELSE 0 END) as no_show_count,
-                       ROUND(fv.alpha / (fv.alpha + fv.beta), 4) as estimated_show_rate
+                       ROUND((fv.alpha / (fv.alpha + fv.beta))::numeric, 4) as estimated_show_rate
                 FROM followup_variants fv
                 LEFT JOIN followup_assignments fa ON fv.id = fa.variant_id
                 WHERE fv.tenant_id = ?

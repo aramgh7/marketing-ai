@@ -54,7 +54,7 @@ public class OnboardingController {
 
         int controlCount = count("""
             SELECT COUNT(*) FROM followup_variants
-            WHERE tenant_id = ? AND is_control = TRUE AND status = 'ACTIVE'
+            WHERE tenant_id = ? AND is_control = TRUE AND lifecycle_state = 'APPROVED'
             """, tenantId);
         items.add(item("followup_control", "Follow-up control arm active",
                 controlCount > 0, controlCount + " control arm(s)"));
@@ -63,10 +63,13 @@ public class OnboardingController {
         items.add(item("funnel_paths", "Funnel paths seeded (CALL_4D minimum)",
                 pathCount >= 1, pathCount + " path(s) configured"));
 
-        int ruleCount = count("""
-            SELECT COUNT(*) FROM compliance_rulebases
-            WHERE (tenant_id = ? OR tenant_id IS NULL) AND is_active = TRUE
-            """, tenantId);
+        int ruleCount;
+        try {
+            Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM compliance_rulebases", Integer.class);
+            ruleCount = n != null ? n : 0;   // rulebases are platform-wide (no tenant_id / is_active columns)
+        } catch (Exception e) {
+            ruleCount = 0;
+        }
         items.add(item("compliance", "Compliance rulebases active",
                 ruleCount >= 2, ruleCount + " active rulebase(s)"));
 

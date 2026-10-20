@@ -25,7 +25,7 @@ public class DiagnosticsBaselineScheduler {
     @Scheduled(cron = "0 0 5 * * SUN", zone = "UTC")
     public void computeBaselines() {
         List<Map<String, Object>> tenants = jdbc.queryForList(
-                "SELECT id FROM tenants WHERE status = 'ACTIVE'");
+                "SELECT id FROM tenants");
 
         for (Map<String, Object> tenant : tenants) {
             UUID tenantId = (UUID) tenant.get("id");
@@ -43,7 +43,7 @@ public class DiagnosticsBaselineScheduler {
                 SELECT
                     COALESCE(s.utm_source, 'UNKNOWN')   AS placement,
                     CASE
-                        WHEN s.device_type IN ('MOBILE','DESKTOP','TABLET') THEN s.device_type
+                        WHEN UPPER(s.device) IN ('MOBILE','DESKTOP','TABLET') THEN UPPER(s.device)
                         ELSE 'UNKNOWN'
                     END                                  AS device_type,
                     COUNT(*)                             AS n,
@@ -51,11 +51,12 @@ public class DiagnosticsBaselineScheduler {
                     STDDEV_POP(CASE WHEN s.bounce THEN 1.0 ELSE 0.0 END) AS bounce_std,
                     AVG(s.quality_score)                 AS quality_mean,
                     STDDEV_POP(s.quality_score)          AS quality_std
-                FROM sessions s
-                WHERE s.tenant_id = ?
-                  AND s.created_at >= NOW() - INTERVAL '90 days'
-                  AND s.consent_level = 'full'
-                  AND s.is_suspicious = false
+                FROM (SELECT s.*, (NOT EXISTS (SELECT 1 FROM events ev WHERE ev.session_id = s.id AND ev.tenant_id = s.tenant_id AND ev.event_type IN ('SCROLL','CLICK','HOVER','BLOCK_VIEW','FORM_START','FORM_SUBMIT','VIDEO_PROGRESS','CTA_CLICK','FIRST_CLICK'))) AS bounce
+                      FROM sessions s
+                      WHERE s.tenant_id = ?
+                        AND s.started_at >= NOW() - INTERVAL '90 days'
+                        AND s.consent_level = 'full'
+                        AND s.is_suspicious = false) s
                 GROUP BY placement, device_type
                 HAVING COUNT(*) >= 30
                 """, tenantId);

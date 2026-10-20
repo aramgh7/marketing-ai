@@ -40,9 +40,11 @@ public class PredictiveController {
         Map<String, Object> arm;
         try {
             arm = jdbc.queryForMap("""
-                    SELECT alpha, beta
-                    FROM thompson_arms
-                    WHERE tenant_id = ? AND creative_id = ?::uuid
+                    SELECT 1 + SUM(ta.alpha - 1) AS alpha, 1 + SUM(ta.beta - 1) AS beta
+                    FROM thompson_arms ta
+                    JOIN landing_variants lv ON lv.id = ta.variant_id AND lv.tenant_id = ta.tenant_id
+                    WHERE ta.tenant_id = ? AND lv.creative_id = ?::uuid
+                    HAVING COUNT(*) > 0
                     """, tenantId, creativeId);
         } catch (Exception e) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,

@@ -73,7 +73,7 @@ public class GraveyardController {
         Map<String, Object> creative;
         try {
             creative = jdbc.queryForMap("""
-                    SELECT atoms FROM creatives WHERE id = ? AND tenant_id = ?
+                    SELECT (SELECT COALESCE(jsonb_object_agg(ca.atom_type, ca.atom_value), '{}'::jsonb) FROM creative_atoms ca WHERE ca.creative_id = c.id AND ca.tenant_id = c.tenant_id) AS atoms FROM creatives c WHERE c.id = ? AND c.tenant_id = ?
                     """, creativeId, tenantId);
         } catch (Exception e) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Creative not found");
@@ -83,8 +83,12 @@ public class GraveyardController {
         Map<String, Object> arm;
         try {
             arm = jdbc.queryForMap("""
-                    SELECT alpha, beta, alpha + beta AS trials
-                    FROM thompson_arms WHERE creative_id = ? AND tenant_id = ?
+                    SELECT 1 + SUM(ta.alpha - 1) AS alpha, 1 + SUM(ta.beta - 1) AS beta,
+                           2 + SUM(ta.alpha - 1) + SUM(ta.beta - 1) AS trials
+                    FROM thompson_arms ta
+                    JOIN landing_variants lv ON lv.id = ta.variant_id AND lv.tenant_id = ta.tenant_id
+                    WHERE lv.creative_id = ? AND ta.tenant_id = ?
+                    HAVING COUNT(*) > 0
                     """, creativeId, tenantId);
         } catch (Exception e) {
             arm = Map.of("alpha", 1.0, "beta", 1.0, "trials", 2.0);

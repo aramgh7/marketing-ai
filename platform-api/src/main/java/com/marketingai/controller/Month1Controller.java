@@ -33,10 +33,10 @@ public class Month1Controller {
         List<Map<String, Object>> rows = jdbc.queryForList("""
             SELECT
                 COUNT(*)                                          AS total_submissions,
-                COUNT(*) FILTER (WHERE (payload->>'self_accredited')::boolean = false)
+                COUNT(*) FILTER (WHERE self_accredited = false)
                                                                   AS non_accredited,
-                COUNT(*) FILTER (WHERE (payload->>'self_accredited')::boolean = true
-                                    AND (payload->>'lead_score')::numeric < 50)
+                COUNT(*) FILTER (WHERE self_accredited = true
+                                    AND COALESCE((raw_payload->>'lead_score')::numeric, 100) < 50)
                                                                   AS low_score_withheld
             FROM form_submissions
             WHERE tenant_id = ?
@@ -72,7 +72,7 @@ public class Month1Controller {
         List<Map<String, Object>> rows = jdbc.queryForList("""
             SELECT
                 e.creative_id,
-                c.name AS creative_name,
+                c.title AS creative_name,
                 COUNT(DISTINCT e.session_id) FILTER (
                     WHERE e.event_type = 'CALL_HELD'
                 )                                                  AS held_calls,
@@ -81,7 +81,7 @@ public class Month1Controller {
                 )                                                  AS page_views,
                 ROUND(
                     SUM(CASE WHEN e.event_type = 'CALL_HELD'
-                             THEN COALESCE((e.properties->>'cpm_cost')::numeric, 0)
+                             THEN COALESCE((e.event_data->>'cpm_cost')::numeric, 0)
                              ELSE 0 END)
                     / NULLIF(COUNT(DISTINCT e.session_id) FILTER (
                         WHERE e.event_type = 'CALL_HELD'), 0),
@@ -89,8 +89,8 @@ public class Month1Controller {
             FROM events e
             LEFT JOIN creatives c ON c.id = e.creative_id AND c.tenant_id = e.tenant_id
             WHERE e.tenant_id = ?
-            AND e.occurred_at >= NOW() - INTERVAL '30 days'
-            GROUP BY e.creative_id, c.name
+            AND e.event_time >= NOW() - INTERVAL '30 days'
+            GROUP BY e.creative_id, c.title
             HAVING COUNT(DISTINCT e.session_id) FILTER (WHERE e.event_type = 'CALL_HELD') > 0
             ORDER BY cost_per_held_call NULLS LAST
             """, tenantId);
@@ -170,18 +170,10 @@ public class Month1Controller {
     public ResponseEntity<List<Map<String, Object>>> complianceStatus(
             @RequestAttribute("tenantId") UUID tenantId) {
         return ResponseEntity.ok(jdbc.queryForList("""
-            SELECT id, rule_type, input_text_snippet, violations, checked_at
-            FROM (
-                SELECT id, rule_type,
-                       LEFT(input_text, 80) AS input_text_snippet,
-                       violations,
-                       created_at AS checked_at
-                FROM compliance_rulebases
-                WHERE 1=0  -- placeholder; real impl reads audit log
-                UNION ALL
-                SELECT gen_random_uuid(), 'N/A', 'No violations recorded', '[]'::jsonb, NOW()
-            ) sub
-            LIMIT 20
+            SELECT gen_random_uuid() AS id, 'N/A' AS rule_type,
+                   'No violations recorded' AS input_text_snippet,
+                   '[]'::jsonb AS violations, NOW() AS checked_at
+            -- placeholder until a compliance audit log table exists
             """));
     }
 

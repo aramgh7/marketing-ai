@@ -211,7 +211,7 @@ public class TwoContourService {
 
         String recommendation = buildRecommendation(winner, groupMean);
 
-        log.info("Winner selected: adSet={}, raw={:.3f}, shrunk={:.3f} (campaign={}, tenant={})",
+        log.info("Winner selected: adSet={}, raw={}, shrunk={} (campaign={}, tenant={})",
                 winner.adSet.getId(), winner.raw, winner.shrunk, campaignId, tenantId);
 
         return WinnerResponse.builder()
@@ -379,7 +379,7 @@ public class TwoContourService {
                 LEFT JOIN events e ON e.session_id IN (
                     SELECT id FROM sessions WHERE tenant_id = ?
                 ) AND e.event_type = 'CONVERSION'
-                AND e.created_at >= NOW() - INTERVAL '30 days'
+                AND e.event_time >= NOW() - INTERVAL '30 days'
                 WHERE ms.campaign_id = ?
                   AND ms.tenant_id = ?
                 GROUP BY ms.id, ms.spend_total

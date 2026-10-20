@@ -49,7 +49,7 @@ public class RecoveryDiagnosisService {
                     SELECT COUNT(*) total,
                            SUM(CASE WHEN is_suspicious THEN 1 ELSE 0 END) fraud_count
                     FROM sessions
-                    WHERE tenant_id = ? AND created_at > now() - interval '2 hours'
+                    WHERE tenant_id = ? AND started_at > now() - interval '2 hours'
                     """, tenantId);
         } catch (Exception e) {
             log.debug("No sessions data for diagnosis: {}", e.getMessage());

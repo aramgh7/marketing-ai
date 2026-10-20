@@ -50,7 +50,7 @@ public class FunnelController {
     public ResponseEntity<Map<String, Object>> getMyFunnel() {
         UUID tenantId = currentTenant();
         List<Map<String, Object>> stages = jdbc.queryForList("""
-            SELECT fs.stage_key, fs.stage_label, fs.ordinal, fs.is_quality_key,
+            SELECT fs.stage_key, fs.label AS stage_label, fs.ordinal, fs.is_quality_key,
                    fs.reward_weight, fs.micro_reward_weight,
                    cem.meta_event_name AS capi_event
             FROM funnel_stages fs

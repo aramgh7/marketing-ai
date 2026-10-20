@@ -30,7 +30,7 @@ public class ShowRateCorrectorScheduler {
     @Scheduled(cron = "0 0 6 * * MON")
     public void weeklyCorrection() {
         List<Map<String, Object>> tenants = jdbc.queryForList(
-                "SELECT id FROM tenants WHERE is_active = TRUE");
+                "SELECT id FROM tenants");
         for (Map<String, Object> tenant : tenants) {
             try {
                 correct((UUID) tenant.get("id"));
@@ -65,7 +65,7 @@ public class ShowRateCorrectorScheduler {
                 SET settings = jsonb_set(
                     COALESCE(settings, '{}'),
                     '{show_rate_multiplier}',
-                    to_jsonb(?)
+                    to_jsonb(?::double precision)
                 )
                 WHERE id = ?
                 """, multiplier, tenantId);

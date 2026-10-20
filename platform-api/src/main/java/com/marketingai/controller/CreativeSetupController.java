@@ -70,14 +70,17 @@ public class CreativeSetupController {
     public ResponseEntity<List<Map<String, Object>>> listLabels(
             @RequestAttribute("tenantId") UUID tenantId) {
         return ResponseEntity.ok(jdbc.queryForList("""
-            SELECT c.id, c.name, c.client_label,
+            SELECT c.id, c.title AS name, c.client_label,
                    c.informed_prior_alpha, c.informed_prior_beta,
-                   g.id IS NOT NULL AS in_graveyard, g.reason AS graveyard_reason
+                   g.id IS NOT NULL AS in_graveyard, g.failure_mode AS graveyard_reason
             FROM creatives c
-            LEFT JOIN graveyard_entries g
-                ON g.creative_id = c.id AND g.tenant_id = c.tenant_id
+            LEFT JOIN LATERAL (
+                SELECT id, failure_mode FROM creative_postmortems p
+                WHERE p.creative_id = c.id AND p.tenant_id = c.tenant_id
+                ORDER BY p.created_at DESC LIMIT 1
+            ) g ON TRUE
             WHERE c.tenant_id = ?
-            ORDER BY c.client_label NULLS LAST, c.name
+            ORDER BY c.client_label NULLS LAST, c.title
             """, tenantId));
     }
 

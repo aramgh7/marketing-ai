@@ -30,7 +30,7 @@ public class PostmortemController {
                 """
                 SELECT id, name, status, created_at,
                        monthly_budget_ceiling, target_cpa, breakeven_roas,
-                       bid_cap_amount, bid_cap_type, launch_mode
+                       NULL::real AS bid_cap_amount, NULL::text AS bid_cap_type, contour AS launch_mode
                 FROM meta_campaigns
                 WHERE id = ? AND tenant_id = ?
                 """, id, tenantId);
@@ -55,7 +55,7 @@ public class PostmortemController {
 
         List<Map<String, Object>> fraudAlerts = jdbc.queryForList(
                 """
-                SELECT id, suspicious_share, mode, created_at
+                SELECT id, share_pct AS suspicious_share, NULL::text AS mode, created_at
                 FROM fraud_share_alerts
                 WHERE tenant_id = ?
                   AND created_at >= ?

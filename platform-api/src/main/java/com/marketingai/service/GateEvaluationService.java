@@ -129,7 +129,7 @@ public class GateEvaluationService {
         double pBetter = probBetter(alpha, beta, groupAlpha, groupBeta);
 
         adSet.setGate1EvaluatedAt(Instant.now());
-        log.info("Gate 1 — adSet={} impressions={} clicks={} P(better)={:.3f}",
+        log.info("Gate 1 — adSet={} impressions={} clicks={} P(better)={}",
                 adSet.getId(), impressions, clicks, pBetter);
 
         if (pBetter < KILL_THRESHOLD) {
@@ -161,7 +161,7 @@ public class GateEvaluationService {
         double pBetter = probBetter(alpha, beta, groupAlpha, groupBeta);
 
         adSet.setGate2EvaluatedAt(Instant.now());
-        log.info("Gate 2 — adSet={} clicks={} P(CTR>group)={:.3f}", adSet.getId(), clicks, pBetter);
+        log.info("Gate 2 — adSet={} clicks={} P(CTR>group)={}", adSet.getId(), clicks, pBetter);
 
         if (pBetter < KILL_THRESHOLD) {
             return kill(adSet, String.format("Gate 2: P(CTR>group)=%.2f%% < 10%% (clicks=%d)",
@@ -201,7 +201,7 @@ public class GateEvaluationService {
         double pBetter = probBetter(alpha, beta, baseAlpha, baseBeta);
 
         adSet.setGate3EvaluatedAt(Instant.now());
-        log.info("Gate 3 — adSet={} conversions={} P(CVR>baseline)={:.3f}",
+        log.info("Gate 3 — adSet={} conversions={} P(CVR>baseline)={}",
                 adSet.getId(), conversions, pBetter);
 
         if (pBetter < KILL_THRESHOLD) {

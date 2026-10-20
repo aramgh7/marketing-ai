@@ -39,12 +39,12 @@ public class RedFlagsScanScheduler {
                     lv.tenant_id,
                     t.settings->>'niche' AS niche,
                     COUNT(s.id)    AS total_visits,
-                    SUM(CASE WHEN s.bounce THEN 1 ELSE 0 END) AS bounced
+                    SUM(CASE WHEN (NOT EXISTS (SELECT 1 FROM events ev WHERE ev.session_id = s.id AND ev.tenant_id = s.tenant_id AND ev.event_type IN ('SCROLL','CLICK','HOVER','BLOCK_VIEW','FORM_START','FORM_SUBMIT','VIDEO_PROGRESS','CTA_CLICK','FIRST_CLICK'))) THEN 1 ELSE 0 END) AS bounced
                 FROM landing_variants lv
                 JOIN tenants t ON lv.tenant_id = t.id
-                JOIN sessions s ON s.landing_variant_id = lv.id
+                JOIN sessions s ON s.variant_id = lv.id AND s.tenant_id = lv.tenant_id
                 WHERE lv.status = 'ACTIVE'
-                  AND s.created_at >= NOW() - INTERVAL '24 hours'
+                  AND s.started_at >= NOW() - INTERVAL '24 hours'
                   AND s.consent_level = 'full'
                   AND s.is_suspicious = false
                 GROUP BY lv.id, lv.tenant_id, t.settings->>'niche'

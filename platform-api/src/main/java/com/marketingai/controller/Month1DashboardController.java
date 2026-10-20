@@ -38,7 +38,7 @@ public class Month1DashboardController {
                 FROM sessions
                 WHERE tenant_id = ?
                   AND quality_score IS NOT NULL
-                  AND closed_at >= now() - INTERVAL '30 days'
+                  AND last_event_at >= now() - INTERVAL '30 days'
                   AND consent_level = 'full'
                   AND is_suspicious = false
                 """, tenantId);

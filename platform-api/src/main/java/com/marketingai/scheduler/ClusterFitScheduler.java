@@ -39,7 +39,7 @@ public class ClusterFitScheduler {
     public void fitAllTenants() {
         log.info("ClusterFitScheduler started");
         List<Map<String, Object>> tenants = jdbc.queryForList(
-                "SELECT id FROM tenants WHERE active = true");
+                "SELECT id FROM tenants");
 
         for (Map<String, Object> tenant : tenants) {
             UUID tenantId = (UUID) tenant.get("id");

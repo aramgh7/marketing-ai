@@ -44,9 +44,9 @@ public class MatchScoreCalibrationScheduler {
                            WHERE e.session_id = s.id AND e.event_type = 'CONVERSION'
                        )) AS converted
                 FROM sessions s
-                JOIN landings l ON l.id = s.landing_id
+                JOIN landing_variants l ON l.id = s.variant_id AND l.tenant_id = s.tenant_id
                 WHERE l.match_score IS NOT NULL
-                  AND s.created_at BETWEEN ? AND ?
+                  AND s.started_at BETWEEN ? AND ?
                 LIMIT 50000
                 """, start.atStartOfDay(), end.plusDays(1).atStartOfDay());
 

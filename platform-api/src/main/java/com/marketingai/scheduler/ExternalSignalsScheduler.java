@@ -31,10 +31,11 @@ public class ExternalSignalsScheduler {
     public void aggregateCpmSignals() {
         try {
             List<Map<String, Object>> rows = jdbc.queryForList("""
-                    SELECT tenant_id, AVG(cpm) AS avg_cpm, COUNT(*) AS n
-                    FROM campaign_cpm_history
-                    WHERE recorded_at > now() - interval '1 hour'
-                    GROUP BY tenant_id
+                    SELECT mc.tenant_id, AVG(h.cpm) AS avg_cpm, COUNT(*) AS n
+                    FROM campaign_cpm_history h
+                    JOIN meta_campaigns mc ON mc.id = h.campaign_id
+                    WHERE h.recorded_at > now() - interval '1 hour'
+                    GROUP BY mc.tenant_id
                     """);
 
             for (Map<String, Object> row : rows) {

@@ -32,7 +32,7 @@ public class RetroCorrectionJob {
     @Scheduled(cron = "0 0 3 * * *", zone = "UTC")
     public void run() {
         List<UUID> tenantIds = jdbc.queryForList(
-                "SELECT id FROM tenants WHERE status = 'ACTIVE'", UUID.class);
+                "SELECT id FROM tenants", UUID.class);
 
         for (UUID tenantId : tenantIds) {
             try {
@@ -66,41 +66,41 @@ public class RetroCorrectionJob {
                     WHERE tenant_id = ?
                       AND external_id_hash = ?
                       AND consent_level = 'full'
-                    ORDER BY created_at ASC
+                    ORDER BY started_at ASC
                     LIMIT 1
                     """, tenantId, hash);
 
             if (anchorRows.isEmpty()) continue;
-            UUID anchorId = (UUID) anchorRows.get(0).get("id");
+            String anchorId = String.valueOf(anchorRows.get(0).get("id"));  // sessions.id is VARCHAR
 
             // Find earlier anonymous sessions (no hash) within 90 days before the anchor.
             // NOTE: without a persistent cross-visit cookie_id we cannot guarantee same-device;
             // the 90-day window reduces false matches. True cross-device linking requires
             // a persistent first-party identifier (§7.4 — deferred to post-MVP).
-            List<UUID> earlierSessions = jdbc.queryForList("""
+            List<String> earlierSessions = jdbc.queryForList("""
                     SELECT s.id
                     FROM sessions s
                     WHERE s.tenant_id = ?
                       AND s.external_id_hash IS NULL
                       AND s.bounce_corrected_at IS NULL
                       AND s.consent_level = 'full'
-                      AND s.created_at < (
-                          SELECT created_at FROM sessions WHERE id = ? AND tenant_id = ?
+                      AND s.started_at < (
+                          SELECT started_at FROM sessions WHERE id = ? AND tenant_id = ?
                       )
-                      AND s.created_at > (
-                          SELECT created_at - INTERVAL '90 days' FROM sessions WHERE id = ? AND tenant_id = ?
+                      AND s.started_at > (
+                          SELECT started_at - INTERVAL '90 days' FROM sessions WHERE id = ? AND tenant_id = ?
                       )
                     LIMIT 50
-                    """, UUID.class, tenantId, anchorId, tenantId, anchorId, tenantId);
+                    """, String.class, tenantId, anchorId, tenantId, anchorId, tenantId);
 
             matched += earlierSessions.size();
 
-            for (UUID sid : earlierSessions) {
+            for (String sid : earlierSessions) {
                 jdbc.update("""
                         UPDATE sessions
                            SET bounce_corrected_at = now(),
                                linked_session_ids  = array_append(
-                                   COALESCE(linked_session_ids, '{}'), ?::uuid
+                                   COALESCE(linked_session_ids, '{}'::text[]), ?::text
                                )
                          WHERE id = ?
                            AND tenant_id = ?

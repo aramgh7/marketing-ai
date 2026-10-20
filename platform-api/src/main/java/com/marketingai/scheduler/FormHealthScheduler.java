@@ -34,7 +34,7 @@ public class FormHealthScheduler {
                 SELECT id, tenant_id, form_endpoint_url,
                        consecutive_form_passes, form_paused
                 FROM landing_variants
-                WHERE is_active = TRUE AND form_endpoint_url IS NOT NULL
+                WHERE status = 'ACTIVE' AND form_endpoint_url IS NOT NULL
                 LIMIT 50
                 """);
         } catch (Exception e) {

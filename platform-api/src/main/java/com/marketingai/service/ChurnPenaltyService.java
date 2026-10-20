@@ -180,7 +180,7 @@ public class ChurnPenaltyService {
         );
         try {
             restTemplate.postForObject(url, new HttpEntity<>(body, headers), Map.class);
-            log.info("Churn penalty applied: arm={} cohort={} churned={} weighted_sum={:.4f}",
+            log.info("Churn penalty applied: arm={} cohort={} churned={} weighted_sum={}",
                     armId, cohortSize, churnCount, weightedSum);
         } catch (Exception e) {
             log.error("Churn penalty FastAPI call failed for arm {}: {}", armId, e.getMessage());
