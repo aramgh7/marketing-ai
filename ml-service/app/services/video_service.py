@@ -118,12 +118,111 @@ def build_variations(
 # FFmpeg command building (Phase 4-1)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def build_ffmpeg_cmd(src: str, dst: str, plan: list[dict], scale: str) -> list[str]:
+def escape_filter_path(path: str) -> str:
+    """Escape a file path for use inside an ffmpeg filter option (e.g. `subtitles=<path>`).
+
+    Backslashes become forward slashes (ffmpeg accepts them on Windows), the drive colon and any
+    other colon are escaped as `\\:` so the filter parser does not read them as option separators,
+    and single quotes are escaped.
+    """
+    p = str(path).replace("\\", "/")
+    return p.replace("'", "\\'").replace(":", "\\:")
+
+
+def _volume_filter(gain_db: float | None) -> str:
+    g = float(gain_db or 0.0)
+    return f"volume={g:+.1f}dB" if abs(g) > 1e-9 else "anull"
+
+
+def build_audio_filter_graph(
+    voiceover: dict | None = None,
+    music: dict | None = None,
+    voice_input_index: int = 1,
+    music_input_index: int | None = None,
+) -> dict:
+    """Build the audio part of the render (roadmap 9-14 / 9-15) — pure, no I/O.
+
+    Inputs are ffmpeg input indices: 0 is always the footage; the voice-over (if any) is input
+    `voice_input_index`; the music (if any) is `music_input_index` (defaults to the next index).
+
+    voiceover = {"path": ..., "mode": "replace" | "mix", "gain_db": 0.0}
+        replace → the voice is the only audio track (original audio dropped)
+        mix     → `amix` of the original track and the voice (duration=first = footage length)
+    music     = {"path": ..., "gain_db": -12.0, "duck": True}
+        mixed under whatever audio exists; with duck=True a `sidechaincompress` keyed by the
+        voice (or the original track when there is no voice) lowers the music while speech plays.
+
+    Returns {"filter_complex": str | None, "map_args": [...], "has_audio_filter": bool}.
+    With neither voiceover nor music the result is empty and callers keep `-vf` only.
+    """
+    if not voiceover and not music:
+        return {"filter_complex": None, "map_args": [], "has_audio_filter": False}
+
+    chains: list[str] = []
+    labels: list[str] = []        # audio streams to mix at the end
+    speech_label: str | None = None   # key for ducking
+
+    if voiceover:
+        mode = str(voiceover.get("mode", "mix")).lower()
+        if mode not in ("replace", "mix"):
+            raise ValueError("voiceover.mode must be 'replace' or 'mix'")
+        chains.append(f"[{voice_input_index}:a]{_volume_filter(voiceover.get('gain_db'))}[voice]")
+        speech_label = "voice"
+        if mode == "mix":
+            chains.append("[0:a]anull[orig]")
+            chains.append("[orig][voice]amix=inputs=2:duration=first:dropout_transition=2[speech]")
+            speech_label = "speech"
+        labels.append(speech_label)
+    else:
+        chains.append("[0:a]anull[orig]")
+        speech_label = "orig"
+        labels.append("orig")
+
+    if music:
+        m_idx = music_input_index if music_input_index is not None else (voice_input_index + 1 if voiceover else voice_input_index)
+        chains.append(f"[{m_idx}:a]{_volume_filter(music.get('gain_db', -12.0))}[music_raw]")
+        if music.get("duck", True):
+            # asplit so the speech stream can both key the compressor and be mixed afterwards
+            chains.append(f"[{speech_label}]asplit=2[{speech_label}_key][{speech_label}_mix]")
+            chains.append(
+                f"[music_raw][{speech_label}_key]sidechaincompress=threshold=0.05:ratio=8:attack=20:release=400[music]"
+            )
+            labels = [f"{speech_label}_mix"]
+        else:
+            chains.append("[music_raw]anull[music]")
+        labels.append("music")
+
+    if len(labels) == 1:
+        chains.append(f"[{labels[0]}]anull[aout]")
+    else:
+        chains.append("[" + "][".join(labels) + f"]amix=inputs={len(labels)}:duration=first:dropout_transition=2[aout]")
+
+    return {
+        "filter_complex": ";".join(chains),
+        "map_args": ["-map", "0:v", "-map", "[aout]"],
+        "has_audio_filter": True,
+    }
+
+
+def build_ffmpeg_cmd(
+    src: str,
+    dst: str,
+    plan: list[dict],
+    scale: str,
+    subtitles_path: str | None = None,
+    voiceover: dict | None = None,
+    music: dict | None = None,
+) -> list[str]:
     """
     Build an FFmpeg command list for rendering a montage plan.
 
     Uses list-style args (no shell=True) to prevent shell injection.
     Escapes text overlay content for the drawtext filter.
+
+    Roadmap 9-13/9-14/9-15 extras (all optional, default behaviour unchanged):
+      subtitles_path — ASS/SRT file burned in with the `subtitles=` filter (after scale/pad)
+      voiceover      — {"path", "mode": "replace"|"mix", "gain_db"} extra audio input
+      music          — {"path", "gain_db", "duck"} extra audio input mixed under the speech
     """
     w, h = scale.split(":")
     total_sec = sum(seg.get("duration_sec", 5) for seg in plan)
@@ -147,18 +246,45 @@ def build_ffmpeg_cmd(src: str, dst: str, plan: list[dict], scale: str) -> list[s
         f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black",
     ]
     vf_parts.extend(drawtext_filters)
+    if subtitles_path:
+        vf_parts.append(f"subtitles='{escape_filter_path(subtitles_path)}'")
     vf = ",".join(vf_parts)
 
-    return [
-        "ffmpeg", "-y",
-        "-i", src,
-        "-t", str(total_sec),
-        "-vf", vf,
+    inputs: list[str] = ["-i", src]
+    next_idx = 1
+    voice_idx = music_idx = None
+    if voiceover and voiceover.get("path"):
+        inputs += ["-i", str(voiceover["path"])]
+        voice_idx = next_idx
+        next_idx += 1
+    if music and music.get("path"):
+        # loop the bed so a short track covers the whole render; -t caps the output anyway
+        inputs += ["-stream_loop", "-1", "-i", str(music["path"])]
+        music_idx = next_idx
+        next_idx += 1
+
+    audio = build_audio_filter_graph(
+        voiceover if voice_idx is not None else None,
+        music if music_idx is not None else None,
+        voice_input_index=voice_idx if voice_idx is not None else 1,
+        music_input_index=music_idx,
+    )
+
+    cmd: list[str] = ["ffmpeg", "-y", *inputs, "-t", str(total_sec)]
+    if audio["has_audio_filter"]:
+        # -vf and -filter_complex cannot be combined; the video chain joins the complex graph
+        cmd += ["-filter_complex", f"[0:v]{vf}[vout];{audio['filter_complex']}",
+                "-map", "[vout]", "-map", "[aout]"]
+    else:
+        cmd += ["-vf", vf]
+    cmd += [
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
         "-c:a", "aac", "-b:a", "128k",
-        "-movflags", "+faststart",
-        dst,
     ]
+    if audio["has_audio_filter"]:
+        cmd.append("-shortest")     # looped music bed must not extend the output
+    cmd += ["-movflags", "+faststart", dst]
+    return cmd
 
 
 def _escape_ffmpeg_text(text: str) -> str:

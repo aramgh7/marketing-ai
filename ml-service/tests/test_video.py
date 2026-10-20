@@ -226,3 +226,95 @@ class TestParseJsonList:
         raw = json.dumps([{"a": 1}, {"a": 2}, {"a": 3}])
         result = parse_json_list(raw)
         assert len(result) == 3
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Roadmap 9-13 / 9-14 / 9-15: subtitles burn-in, voice-over, music bed
+# ──────────────────────────────────────────────────────────────────────────────
+
+from app.services.video_service import build_audio_filter_graph, escape_filter_path  # noqa: E402
+
+
+class TestFfmpegMediaExtras:
+    def test_default_signature_unchanged(self):
+        cmd = build_ffmpeg_cmd("/src.mp4", "/out.mp4", STUB_PLAN, "1080:1920")
+        assert "-vf" in cmd and "-filter_complex" not in cmd and "-shortest" not in cmd
+        assert cmd.count("-i") == 1
+
+    def test_subtitles_filter_appended_last_in_vf(self):
+        cmd = build_ffmpeg_cmd("/src.mp4", "/out.mp4", STUB_PLAN, "1080:1920", subtitles_path="/tmp/subs.ass")
+        vf = cmd[cmd.index("-vf") + 1]
+        assert vf.endswith("subtitles='/tmp/subs.ass'")
+        assert vf.index("pad=") < vf.index("subtitles=")
+
+    def test_subtitles_windows_path_escaped(self):
+        assert escape_filter_path(r"D:\renders\a b.ass") == r"D\:/renders/a b.ass"
+        assert escape_filter_path("/x/it's.ass") == r"/x/it\'s.ass"
+        cmd = build_ffmpeg_cmd("/s.mp4", "/o.mp4", STUB_PLAN, "1080:1920", subtitles_path=r"C:\t\s.ass")
+        assert r"subtitles='C\:/t/s.ass'" in cmd[cmd.index("-vf") + 1]
+
+    def test_voiceover_replace_graph(self):
+        g = build_audio_filter_graph(voiceover={"path": "/v.mp3", "mode": "replace", "gain_db": 0})
+        assert g["has_audio_filter"] is True
+        assert g["filter_complex"] == "[1:a]anull[voice];[voice]anull[aout]"
+        assert g["map_args"] == ["-map", "0:v", "-map", "[aout]"]
+
+    def test_voiceover_mix_graph_with_gain(self):
+        g = build_audio_filter_graph(voiceover={"path": "/v.mp3", "mode": "mix", "gain_db": 3})
+        fc = g["filter_complex"]
+        assert "[1:a]volume=+3.0dB[voice]" in fc
+        assert "[orig][voice]amix=inputs=2:duration=first" in fc
+        assert fc.endswith("[speech]anull[aout]")
+
+    def test_music_only_with_ducking_keyed_by_original(self):
+        g = build_audio_filter_graph(music={"path": "/m.mp3", "gain_db": -12, "duck": True}, voice_input_index=1)
+        fc = g["filter_complex"]
+        assert "[1:a]volume=-12.0dB[music_raw]" in fc
+        assert "[orig]asplit=2[orig_key][orig_mix]" in fc
+        assert "[music_raw][orig_key]sidechaincompress=" in fc
+        assert fc.endswith("[orig_mix][music]amix=inputs=2:duration=first:dropout_transition=2[aout]")
+
+    def test_music_no_duck(self):
+        g = build_audio_filter_graph(music={"path": "/m.mp3", "gain_db": -9, "duck": False})
+        assert "sidechaincompress" not in g["filter_complex"]
+        assert "[orig][music]amix=inputs=2" in g["filter_complex"]
+
+    def test_voice_and_music_full_graph(self):
+        g = build_audio_filter_graph(voiceover={"path": "/v.mp3", "mode": "replace"},
+                                     music={"path": "/m.mp3", "duck": True}, voice_input_index=1, music_input_index=2)
+        fc = g["filter_complex"]
+        assert "[2:a]volume=-12.0dB[music_raw]" in fc
+        assert "[voice]asplit=2[voice_key][voice_mix]" in fc
+        assert "[music_raw][voice_key]sidechaincompress" in fc
+        assert fc.endswith("[voice_mix][music]amix=inputs=2:duration=first:dropout_transition=2[aout]")
+
+    def test_invalid_voice_mode_rejected(self):
+        import pytest
+        with pytest.raises(ValueError):
+            build_audio_filter_graph(voiceover={"path": "/v.mp3", "mode": "overlay"})
+
+    def test_no_extras_means_no_graph(self):
+        g = build_audio_filter_graph()
+        assert g == {"filter_complex": None, "map_args": [], "has_audio_filter": False}
+
+    def test_full_cmd_inputs_and_maps(self):
+        cmd = build_ffmpeg_cmd("/src.mp4", "/out.mp4", STUB_PLAN, "1080:1920",
+                               subtitles_path="/s.ass",
+                               voiceover={"path": "/v.mp3", "mode": "mix", "gain_db": 0},
+                               music={"path": "/m.mp3", "gain_db": -12, "duck": True})
+        # inputs: footage, voice, looped music
+        assert cmd[cmd.index("-i") + 1] == "/src.mp4"
+        assert cmd.count("-i") == 3
+        assert cmd[cmd.index("-stream_loop") + 1] == "-1"
+        assert "-vf" not in cmd
+        fc = cmd[cmd.index("-filter_complex") + 1]
+        assert fc.startswith("[0:v]scale=1080:1920") and "subtitles='/s.ass'[vout];" in fc
+        assert "[2:a]volume=-12.0dB[music_raw]" in fc
+        assert cmd[cmd.index("-map") + 1] == "[vout]"
+        assert "[aout]" in cmd and "-shortest" in cmd
+        assert cmd[-1] == "/out.mp4"
+
+    def test_music_without_voice_gets_input_index_1(self):
+        cmd = build_ffmpeg_cmd("/src.mp4", "/out.mp4", STUB_PLAN, "1080:1920", music={"path": "/m.mp3"})
+        fc = cmd[cmd.index("-filter_complex") + 1]
+        assert "[1:a]volume=-12.0dB[music_raw]" in fc and cmd.count("-i") == 2

@@ -8,6 +8,10 @@ Endpoints:
   POST /video/render              — FFmpeg render (async job)
   GET  /video/render/{job_id}     — render job status
   POST /video/generate-variations — Hook × Body × CTA matrix (§5.2 §4-2)
+  POST /video/subtitles           — SRT + ASS text from Whisper segments (roadmap 9-13)
+  POST /video/tts                 — text-to-speech audio file + VOICE_* atoms (roadmap 9-14)
+  render extras (9-13/9-14/9-15)  — subtitles {segments|transcript, style}, voiceover {audio_url, mode, gain_db},
+                                    music {track_url, gain_db, duck}
 
 Security: all endpoints require X-Internal-API-Key header.
 Marketer approval happens in Spring Boot before any creative is launched.
@@ -28,6 +32,8 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.services import job_store
+from app.services import subtitle_service, tts_service
+from app.services.music_service import DEFAULT_GAIN_DB as _MUSIC_GAIN_DB
 from app.services.video_service import (
     FORMAT_SCALE as _FORMAT_SCALE,
     STUB_TRANSCRIPT as _STUB_TRANSCRIPT,
@@ -248,6 +254,28 @@ Rules:
 # --------------------------------------------------------------------------- #
 # _FORMAT_SCALE and _build_ffmpeg_cmd imported from app.services.video_service
 
+class SubtitleSpec(BaseModel):
+    """Roadmap 9-13: Whisper segments (preferred) or a transcript with naive timing."""
+    segments: list[dict] | None = None
+    transcript: str | None = None
+    style: str = "white_bottom"       # subtitle_service.SUBTITLE_STYLES; "none" → skipped
+
+
+class VoiceoverSpec(BaseModel):
+    """Roadmap 9-14: a synthesized (or uploaded) voice track mixed into the render."""
+    audio_url: str
+    mode: str = "mix"                 # replace | mix
+    gain_db: float = 0.0
+
+
+class MusicSpec(BaseModel):
+    """Roadmap 9-15: licensed music bed from the tenant library, ducked under speech."""
+    track_url: str
+    track_id: str | None = None
+    gain_db: float = _MUSIC_GAIN_DB
+    duck: bool = True
+
+
 class RenderRequest(BaseModel):
     tenant_id: str
     footage_id: str
@@ -255,6 +283,9 @@ class RenderRequest(BaseModel):
     plan: list[dict]
     format: str = "9:16"
     text_overlays: dict[str, str] | None = None  # {segment: overlay_text}
+    subtitles: SubtitleSpec | None = None
+    voiceover: VoiceoverSpec | None = None
+    music: MusicSpec | None = None
 
 
 class RenderResponse(BaseModel):
@@ -293,6 +324,9 @@ async def _run_render(job_id: str, req: RenderRequest) -> None:
     await job_store.set_job(job_id, {"status": "running", "footage_id": req.footage_id})
     import time
     start = time.time()
+    extra_paths: list[str] = []      # temp files for voice-over / music inputs
+    subtitles_path = None
+    voiceover = None
 
     output_dir = Path(settings.video_output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -311,8 +345,19 @@ async def _run_render(job_id: str, req: RenderRequest) -> None:
 
         scale = _FORMAT_SCALE.get(req.format, "1080:1920")
 
-        # Build FFmpeg filter: scale → pad for aspect ratio
-        ffmpeg_cmd = _build_ffmpeg_cmd(src_path, output_path, req.plan, scale)
+        # Roadmap 9-13/9-14/9-15: optional subtitles, voice-over and music bed
+        subtitles_path = _prepare_subtitles(req, scale, output_dir, job_id)
+        voiceover = music = None
+        if req.voiceover:
+            extra_paths.append(await _download_to_temp(req.voiceover.audio_url, ".audio"))
+            voiceover = {"path": extra_paths[-1], "mode": req.voiceover.mode, "gain_db": req.voiceover.gain_db}
+        if req.music:
+            extra_paths.append(await _download_to_temp(req.music.track_url, ".audio"))
+            music = {"path": extra_paths[-1], "gain_db": req.music.gain_db, "duck": req.music.duck}
+
+        # Build FFmpeg filter: scale → pad for aspect ratio (+ subtitles / audio graph)
+        ffmpeg_cmd = _build_ffmpeg_cmd(src_path, output_path, req.plan, scale,
+                                       subtitles_path=subtitles_path, voiceover=voiceover, music=music)
 
         result = subprocess.run(ffmpeg_cmd, capture_output=True, timeout=300)
         if result.returncode != 0:
@@ -333,6 +378,9 @@ async def _run_render(job_id: str, req: RenderRequest) -> None:
             "render_time_ms": render_ms,
             "file_size_bytes": file_size,
             "format": req.format,
+            "subtitles": bool(subtitles_path),
+            "voiceover": bool(voiceover),
+            "music_track_id": req.music.track_id if req.music else None,
         })
         logger.info("Render %s completed in %dms → %s", job_id, render_ms, storage_url)
 
@@ -346,6 +394,36 @@ async def _run_render(job_id: str, req: RenderRequest) -> None:
     finally:
         if "src_path" in locals() and os.path.exists(src_path):
             os.unlink(src_path)
+        for p in extra_paths:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+
+
+async def _download_to_temp(url: str, suffix: str) -> str:
+    async with httpx.AsyncClient(timeout=300) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+        f.write(resp.content)
+        return f.name
+
+
+def _prepare_subtitles(req: "RenderRequest", scale: str, output_dir: Path, job_id: str) -> str | None:
+    """Write the ASS file for the render (roadmap 9-13). Returns its path or None."""
+    spec = req.subtitles
+    if spec is None or spec.style == "none":
+        return None
+    segments = spec.segments
+    if not segments and spec.transcript:
+        total = float(sum(seg.get("duration_sec", 5) for seg in req.plan)) or 30.0
+        segments = subtitle_service.segments_from_transcript(spec.transcript, total)
+    if not segments:
+        return None
+    w, h = (int(x) for x in scale.split(":"))
+    ass = subtitle_service.segments_to_ass(segments, style=spec.style, play_res=(w, h))
+    return subtitle_service.write_subtitle_file(ass, ".ass", str(output_dir), name=f"{job_id}")
 
 
 def _upload_to_r2(local_path: str, tenant_id: str, job_id: str) -> str:
@@ -421,3 +499,96 @@ async def generate_variations(
         total_variations=len(variations),
         variations=variations,
     )
+
+
+# --------------------------------------------------------------------------- #
+# 9-13: Subtitles — SRT / ASS text for download
+# --------------------------------------------------------------------------- #
+class SubtitlesRequest(BaseModel):
+    segments: list[dict] | None = None   # Whisper segments {start, end, text}
+    transcript: str | None = None        # fallback: naive timing over duration_sec
+    duration_sec: float = 30.0
+    style: str = "white_bottom"
+    format: str = "9:16"
+
+
+@router.post("/subtitles")
+async def build_subtitles(
+    req: SubtitlesRequest,
+    x_internal_api_key: str = Header(default=""),
+):
+    """Return SRT and ASS text built from Whisper segments (roadmap 9-13)."""
+    _require_key(x_internal_api_key)
+    segments = req.segments
+    if not segments and req.transcript:
+        segments = subtitle_service.segments_from_transcript(req.transcript, req.duration_sec)
+    if not segments:
+        raise HTTPException(status_code=400, detail="segments or transcript required")
+    style = req.style if req.style != "none" else "white_bottom"
+    if style not in subtitle_service.SUBTITLE_STYLES:
+        raise HTTPException(status_code=400, detail=f"unknown style '{req.style}'")
+    scale = _FORMAT_SCALE.get(req.format, "1080:1920")
+    w, h = (int(x) for x in scale.split(":"))
+    return {
+        "n_segments": len(segments),
+        "style": style,
+        "srt": subtitle_service.segments_to_srt(segments),
+        "ass": subtitle_service.segments_to_ass(segments, style=style, play_res=(w, h)),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# 9-14: Text-to-speech
+# --------------------------------------------------------------------------- #
+class TtsRequest(BaseModel):
+    tenant_id: str
+    text: str
+    voice: str | None = None             # default settings.tts_voice
+    speed: float = 1.0
+    provider: str | None = None          # openai | elevenlabs | None → settings.tts_provider
+
+
+@router.post("/tts")
+async def text_to_speech(
+    req: TtsRequest,
+    x_internal_api_key: str = Header(default=""),
+):
+    """Synthesize a voice-over (roadmap 9-14). Stores the file like renders (R2 or local) and
+    returns its url plus the VOICE_* atoms derived from the real synthesis settings."""
+    _require_key(x_internal_api_key)
+    voice = req.voice or settings.tts_voice
+    out_dir = Path(settings.video_output_dir) / "tts"
+    try:
+        res = tts_service.synthesize(
+            req.text, voice=voice, speed=req.speed, provider=req.provider or settings.tts_provider,
+            out_dir=str(out_dir), openai_key=settings.openai_api_key or None,
+            elevenlabs_key=settings.elevenlabs_api_key or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # provider failure
+        logger.warning("TTS failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"tts provider error: {exc}")
+
+    storage_url = res["path"]
+    if settings.r2_account_id and settings.r2_access_key_id:
+        storage_url = _upload_to_r2_key(res["path"], f"{req.tenant_id}/tts/{Path(res['path']).name}")
+    return {
+        **res,
+        "audio_url": storage_url,
+        "atoms": tts_service.voice_atoms_from_settings(voice, req.speed, res["provider"]),
+    }
+
+
+def _upload_to_r2_key(local_path: str, key: str) -> str:
+    import boto3  # lazy import
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=f"https://{settings.r2_account_id}.r2.cloudflarestorage.com",
+        aws_access_key_id=settings.r2_access_key_id,
+        aws_secret_access_key=settings.r2_secret_access_key,
+        region_name="auto",
+    )
+    s3.upload_file(local_path, settings.r2_bucket, key)
+    base = settings.r2_public_url or f"https://{settings.r2_bucket}.{settings.r2_account_id}.r2.dev"
+    return f"{base}/{key}"
