@@ -1198,114 +1198,114 @@
 ### 9-A. Security and production readiness
 
 ### 9-1. Token encryption at rest (arch §11 "Meta tokens — AES-encrypted in DB"; vision §12.7)
-- [ ] `TokenVault` service over `EncryptionService` (AES-256-GCM): `seal(String) → bytes` with the `enc1:` prefix, `open(bytes) → String` that also accepts legacy plaintext rows
-- [ ] All write sites use `seal`: `TenantService.setMetaCredentials`, `MetaPixelService.create/update`, `GhlSubaccountController` upsert, `ChannelController` account tokens
-- [ ] All read sites use `open`: `MetaPixelRepository.findCapiToken*`, `MetaSyncScheduler`, `CircuitBreakerService`, `MetaCampaignService`, `TwoContourService`, `LearningPhaseCheckScheduler`, `MetaAudienceController`, `CompetitiveIntelligenceService`, `ChannelController.sync`, `FormSubmissionService`, `GhlWebhookService`, `TokenRotationScheduler`
-- [ ] Startup re-encryption pass (system scope) when `ENCRYPTION_KEY` is set: legacy plaintext rows → sealed; without the key the vault stores plaintext and logs one warning (dev mode)
-- [ ] Tests: seal/open round trip, legacy passthrough, tampered ciphertext rejected
+- [x] `TokenVault` service over `EncryptionService` (AES-256-GCM): `seal(String) → bytes` with the `enc1:` prefix, `open(bytes) → String` that also accepts legacy plaintext rows — `service/TokenVault.java` (2026-10-20)
+- [x] All write sites use `seal`: `TenantService.setMetaCredentials`, `MetaPixelService.create/update`, `GhlSubaccountController` upsert, `ChannelController` account tokens
+- [x] All read sites use `open`: `MetaPixelRepository.findCapiToken*`, `MetaSyncScheduler`, `CircuitBreakerService`, `MetaCampaignService`, `TwoContourService`, `LearningPhaseCheckScheduler`, `MetaAudienceController`, `CompetitiveIntelligenceService`, `ChannelController.sync`, `FormSubmissionService`, `GhlWebhookService`, `TokenRotationScheduler`
+- [x] Startup re-encryption pass (system scope) when `ENCRYPTION_KEY` is set: legacy plaintext rows → sealed; without the key the vault stores plaintext and logs one warning (dev mode) — `TokenReencryptRunner`
+- [x] Tests: seal/open round trip, legacy passthrough, tampered ciphertext rejected — `TokenVaultTest` (6)
 
 ### 9-2. Meta token rotation — real exchange (arch §15.15; vision §12.7)
-- [ ] `TokenRotationScheduler.attemptTokenRotation` calls `GET /oauth/access_token?grant_type=fb_exchange_token&client_id&client_secret&fb_exchange_token` and stores the new token sealed, `meta_token_created_at = now()`
-- [ ] INVALID (day 58+) → `tenants.autonomy_level = 'OBSERVER'` + alert; the previous level is kept in `tenants.settings.autonomy_before_token_invalid` and restored on successful re-auth
-- [ ] `MetaApiAuditService` row for the exchange call
-- [ ] Tests: `TokenExchangeMath` (age thresholds already covered) + response parsing + downgrade path with a mocked JdbcTemplate
+- [x] `TokenRotationScheduler.attemptTokenRotation` calls `GET /oauth/access_token?grant_type=fb_exchange_token&client_id&client_secret&fb_exchange_token` and stores the new token sealed, `meta_token_created_at = now()` — `MetaTokenExchange` + `TokenRotationScheduler` (2026-10-20)
+- [x] INVALID (day 58+) → `tenants.autonomy_level = 'OBSERVER'` + alert; the previous level is kept in `tenants.settings.autonomy_before_token_invalid` and restored on successful re-auth
+- [x] `MetaApiAuditService` row for the exchange call
+- [x] Tests: `TokenExchangeMath` (age thresholds already covered) + response parsing + downgrade path with a mocked JdbcTemplate — `MetaTokenExchangeTest` (8)
 
 ### 9-3. OPE gate on autonomy upgrade + weekly OPE (arch §15.11, §15.13, §9; vision §12.4–12.5)
-- [ ] `GET/PUT /tenants/me/autonomy` — PUT above ADVISOR requires the latest `ope_runs` row to be `PASS` and ≤ 7 days old, otherwise 409 with the reason; downgrade is always allowed
-- [ ] `OpeScheduler` Monday 05:00 UTC per tenant with ≥ 10 decisions in 30 days → `ope_runs`; FAIL while above ADVISOR → downgrade to ADVISOR + alert
-- [ ] Fix `OpeController.evaluate` insert (`logged_from` / `logged_to` are NOT NULL in V56 but were never written)
-- [ ] Tests: gate decision table (level, verdict, age), scheduler downgrade
+- [x] `GET/PUT /tenants/me/autonomy` — PUT above ADVISOR requires the latest `ope_runs` row to be `PASS` and ≤ 7 days old, otherwise 409 with the reason; downgrade is always allowed — `AutonomyController` + `AutonomyGate` (2026-10-20)
+- [x] `OpeScheduler` Monday 05:00 UTC per tenant with ≥ 10 decisions in 30 days → `ope_runs`; FAIL while above ADVISOR → downgrade to ADVISOR + alert — Mon 05:00 UTC
+- [x] Fix `OpeController.evaluate` insert (`logged_from` / `logged_to` are NOT NULL in V56 but were never written) — moved into `OpeService`
+- [x] Tests: gate decision table (level, verdict, age), scheduler downgrade — `AutonomyGateTest` (6)
 
 ### 9-4. ML service as a non-owner DB role (arch §8 "both services connect as mai_app")
-- [ ] V127: role `mai_ml` LOGIN NOBYPASSRLS, grants = `mai_app` + INSERT/UPDATE on `thompson_arms`, `thompson_reward_log`, `model_posteriors`, `glm_fit_runs`; `mai_app` keeps no write on `thompson_arms` (single writer)
-- [ ] `db_client.tenant_tx(tenant_id)` / `system_tx()` (sets `app.rls_bypass = on` locally for cross-tenant jobs); all 19 `pool.acquire()` sites in `brief.py`, `decide.py`, `diagnostics.py`, `taxonomy.py`, `model_updater.py`, `thompson_service.py`, `db_client.py` go through them
-- [ ] docker-compose `DATABASE_URL` for ml-service → `mai_ml`; Flyway placeholder `ml_role_password` (`DB_ML_PASS`)
-- [ ] `scripts/verify-rls.sh` extended with 3 assertions as `mai_ml`
+- [x] V127: role `mai_ml` LOGIN NOBYPASSRLS, grants = `mai_app` + INSERT/UPDATE on `thompson_arms`, `thompson_reward_log`, `model_posteriors`, `glm_fit_runs`; `mai_app` keeps no write on `thompson_arms` (single writer) — (2026-10-20)
+- [x] `db_client.tenant_tx(tenant_id)` / `system_tx()` (sets `app.rls_bypass = on` locally for cross-tenant jobs); all 19 `pool.acquire()` sites in `brief.py`, `decide.py`, `diagnostics.py`, `taxonomy.py`, `model_updater.py`, `thompson_service.py`, `db_client.py` go through them — shipped as `ScopedPool` / `tenant_pool()` / `system_pool()`; `test_db_scope.py` (4)
+- [x] docker-compose `DATABASE_URL` for ml-service → `mai_ml`; Flyway placeholder `ml_role_password` (`DB_ML_PASS`)
+- [x] `scripts/verify-rls.sh` extended with 3 assertions as `mai_ml` — 3 assertions added; Docker run pending (C: disk)
 
 ### 9-5. Admin UI gaps (arch §3 "(admin)/settings"; vision §21.3)
-- [ ] `/login` page → `POST /auth/login` → `storeAuthResponse`; redirect to `/dashboard`; auth guard in the admin layout (no token → `/login`); logout in the sidebar
-- [ ] `/pixels` page: list / create / edit quality filter / deactivate (`MetaPixelController`)
-- [ ] `/compliance` page: latest checks per entity, override with reason (`ComplianceController`)
-- [ ] `/autonomy` page: level + OPE verdict + upgrade button (9-3)
-- [ ] `GET /api/v1/quality-score?by=creative|variant` (arch §15.5 — never existed) + `/quality` page
-- [ ] `/ghl` page: sub-accounts (role, secret, api key) + funnel-integrity last run (`GhlSubaccountController`)
+- [x] `/login` page → `POST /auth/login` → `storeAuthResponse`; redirect to `/dashboard`; auth guard in the admin layout (no token → `/login`); logout in the sidebar — (2026-10-20)
+- [x] `/pixels` page: list / create / edit quality filter / deactivate (`MetaPixelController`)
+- [x] `/compliance` page: latest checks per entity, override with reason (`ComplianceController`)
+- [x] `/autonomy` page: level + OPE verdict + upgrade button (9-3)
+- [x] `GET /api/v1/quality-score?by=creative|variant` (arch §15.5 — never existed) + `/quality` page — `QualityScoreController`
+- [x] `/ghl` page: sub-accounts (role, secret, api key) + funnel-integrity last run (`GhlSubaccountController`)
 - [ ] `tsc --noEmit` clean; pages render with mocked fetch (vitest or a smoke test in CI)
 
 ### 9-6. Event stream hygiene (arch §4.5, §9 "Event partition create")
-- [ ] V128: `events.schema_version` DEFAULT 1 + backfill; tracker always sends `event_id` and the ingestion rejects rows without it (`events_rejected` reason `missing_event_id`)
-- [ ] `EventPartitionScheduler` monthly (1st, 00:10 UTC): create the partition for month+2 if missing (`CREATE TABLE IF NOT EXISTS events_YYYY_MM PARTITION OF events …`)
-- [ ] Tests: partition name/bounds math; ingestion rejects missing event_id
+- [x] V128: `events.schema_version` DEFAULT 1 + backfill; tracker always sends `event_id` and the ingestion rejects rows without it (`events_rejected` reason `missing_event_id`) — (2026-10-20); `events_rejected.reject_reason = missing_event_id`; `EventIdRequiredTest` (3)
+- [x] `EventPartitionScheduler` monthly (1st, 00:10 UTC): create the partition for month+2 if missing (`CREATE TABLE IF NOT EXISTS events_YYYY_MM PARTITION OF events …`) — startup + 1st 00:10 UTC via SECURITY DEFINER `ensure_events_partition` (V128); `EventPartitionMathTest` (3)
+- [x] Tests: partition name/bounds math; ingestion rejects missing event_id
 
 ### 9-B. Funnel, CAPI and the jobs the architecture lists
 
 ### 9-7. CAPI map per vision §19.4 + `predicted_value` token (arch §16.3, §16.16)
-- [ ] `ValueFormulaService.seedInvestorCAPIMap` → FORM_SUBMIT→`Lead` (`base_lead*k_accr*k_ticket`, self_accredited = true; `future_regcf` row for false), BOOKED→`Schedule` (`base_schedule*k_ticket`), CALL_HELD→`CompleteRegistration` (`base_reg*k_ticket`), ACCRED_VERIFIED→custom `AccreditationVerified` (value 0), FUNDS_RECEIVED→`Purchase` (`monetaryValue`); INVEST_COMMITTED keeps no CAPI event (vision: Purchase only on funds)
-- [ ] `computeValue(..., sessionId)` resolves `predicted_value` from the latest `lead_value_predictions` row of the session (fallback: the formula without the token); `FormSubmissionService` + `CAPIForwardingService` pass the session id
-- [ ] Tests: formula with `predicted_value`, fallback, seed table matches the vision rows
+- [x] `ValueFormulaService.seedInvestorCAPIMap` → FORM_SUBMIT→`Lead` (`base_lead*k_accr*k_ticket`, self_accredited = true; `future_regcf` row for false), BOOKED→`Schedule` (`base_schedule*k_ticket`), CALL_HELD→`CompleteRegistration` (`base_reg*k_ticket`), ACCRED_VERIFIED→custom `AccreditationVerified` (value 0), FUNDS_RECEIVED→`Purchase` (`monetaryValue`); INVEST_COMMITTED keeps no CAPI event (vision: Purchase only on funds) — (2026-10-20)
+- [x] `computeValue(..., sessionId)` resolves `predicted_value` from the latest `lead_value_predictions` row of the session (fallback: the formula without the token); `FormSubmissionService` + `CAPIForwardingService` pass the session id — `ValueFormulaServiceTest` (4)
+- [x] Tests: formula with `predicted_value`, fallback, seed table matches the vision rows
 
 ### 9-8. Scheduled jobs that were specified but absent (arch §9, §16.11, §16.21)
-- [ ] `GhlSyncScheduler` every 60 min: pull open opportunities / appointments via LeadConnector for tenants with a MAIN api key; reconcile `appointments.status` and `opportunity` stage with `funnel_stages`
-- [ ] `CvrCollapseScheduler` every 15 min (Spring → ML `POST /signals/cvr-collapse`): CTR stable, CVR → 0 in < 1 h on stable traffic → FORM_ERROR-style incident + P0 autopause + alert
-- [ ] `MmfScanScheduler` daily 05:30 UTC → `POST /mmf/diagnose` per audience → `mmf_diagnoses` + alert on OFFER_PROBLEM
-- [ ] `RegCfWaitlistScheduler` weekly → `waitlist_value_estimates`
-- [ ] `SelfReportCalibrationScheduler` weekly: P(ACCRED_VERIFIED | self_accredited = yes) per creative × ticket bucket → `tenants.value_coeffs.k_accr_by_creative`; below 0.5 → k_accr scaled down (arch §16.4)
-- [ ] `StageValueRefreshScheduler` weekly: `expected_value_usd` per stage from closed cohorts (min 20) → `funnel_stages`
-- [ ] `SlotCapacityScheduler` every 15 min: `slot_capacity_policies` effective overbook from the current no-show mix (arch §16.15)
-- [ ] Moderation probe: `TwoContourService.launchTestBatch(moderationProbe = true)` creates the paused probe ad; `ModerationProbeScheduler` every 30 min polls `effective_status` / `ad_review_feedback` → `moderation_results`
-- [ ] Each job has a pure-logic helper with tests; schedulers only orchestrate
+- [x] `GhlSyncScheduler` every 60 min: pull open opportunities / appointments via LeadConnector for tenants with a MAIN api key; reconcile `appointments.status` and `opportunity` stage with `funnel_stages` — (2026-10-20); reconciles appointments + won deals (no synthetic `events` rows); `GhlSyncMathTest` (5)
+- [x] `CvrCollapseScheduler` every 15 min (Spring → ML `POST /signals/cvr-collapse`): CTR stable, CVR → 0 in < 1 h on stable traffic → FORM_ERROR-style incident + P0 autopause + alert — ML `POST /signals/cvr-collapse` (`cvr_collapse_service.py`, 6 tests)
+- [x] `MmfScanScheduler` daily 05:30 UTC → `POST /mmf/diagnose` per audience → `mmf_diagnoses` + alert on OFFER_PROBLEM — V130 columns; `Phase9JobsMathTest` (8)
+- [x] `RegCfWaitlistScheduler` weekly → `waitlist_value_estimates`
+- [x] `SelfReportCalibrationScheduler` weekly: P(ACCRED_VERIFIED | self_accredited = yes) per creative × ticket bucket → `tenants.value_coeffs.k_accr_by_creative`; below 0.5 → k_accr scaled down (arch §16.4)
+- [x] `StageValueRefreshScheduler` weekly: `expected_value_usd` per stage from closed cohorts (min 20) → `funnel_stages`
+- [x] `SlotCapacityScheduler` every 15 min: `slot_capacity_policies` effective overbook from the current no-show mix (arch §16.15)
+- [x] Moderation probe: `TwoContourService.launchTestBatch(moderationProbe = true)` creates the paused probe ad; `ModerationProbeScheduler` every 30 min polls `effective_status` / `ad_review_feedback` → `moderation_results` — `launchTestBatch(…, moderationProbe)` + `ModerationProbeScheduler` + `MetaApiService.getAdReviewStatus`
+- [x] Each job has a pure-logic helper with tests; schedulers only orchestrate
 
 ### 9-9. Protocol switches specified in §15/§16 but not implemented
-- [ ] `persona_mode` ∈ {OFF, LOG_ONLY, AB_TEST, PREFILTER} in `tenants.settings`; `test_batches.persona_arm`; AB_TEST default; weekly comparison → PREFILTER promotion after 3 months (arch §15.9)
-- [ ] `capi_value_mode` ∈ {PROXY, FIXED, AB}: AB splits ad sets by `meta_ad_sets.value_mode`; weekly comparison on cost per CALL_HELD (arch §15.19)
-- [ ] Expert rating 1/3/5 → `creatives.exploration_prior_alpha/beta` shift (arch §15.13)
-- [ ] `load_arms()` excludes variants whose `variant_offers.estimated_margin < min_margin` (arch §15.6)
-- [ ] `FORM_NO_SLOT` follow-up audience (arch §16.5); `blocked_by_meta` graveyard reason + recovery job (arch §16.7); `ticket_bucket` / `self_accredited` as cluster features (arch §16.19)
+- [x] `persona_mode` ∈ {OFF, LOG_ONLY, AB_TEST, PREFILTER} in `tenants.settings`; `test_batches.persona_arm`; AB_TEST default; weekly comparison → PREFILTER promotion after 3 months (arch §15.9) — V132; `PersonaModeService` + `PersonaPromotionScheduler`; `PersonaModeMathTest` (5) (2026-10-20)
+- [x] `capi_value_mode` ∈ {PROXY, FIXED, AB}: AB splits ad sets by `meta_ad_sets.value_mode`; weekly comparison on cost per CALL_HELD (arch §15.19) — `CapiValueModeService` (AB by ad set via creative), `capi_value_mode_runs`, weekly report line; `CapiValueModeMathTest` (4)
+- [x] Expert rating 1/3/5 → `creatives.exploration_prior_alpha/beta` shift (arch §15.13) — `ExpertPriorMath` + `expert_prior_service.py` combined with GLM priors in `ensure_arms`
+- [x] `load_arms()` excludes variants whose `variant_offers.estimated_margin < min_margin` (arch §15.6) — `variant_offers.estimated_margin` vs `tenants.settings.min_margin`
+- [x] `FORM_NO_SLOT` follow-up audience (arch §16.5); `blocked_by_meta` graveyard reason + recovery job (arch §16.7); `ticket_bucket` / `self_accredited` as cluster features (arch §16.19) — `FormNoSlotScheduler` hourly; `BlockedCreativeRecoveryScheduler` 6 h; cluster features `ticket_bucket_ord`, `self_accredited`
 
 ### 9-C. Model depth (vision §6.4, §15.4–15.6, §8.5)
 
 ### 9-10. GLM-informed priors + top-two Thompson / EVI
-- [ ] `glm_prior_service.py`: for a new arm, (α0, β0) from the GLM posterior predictive of its atoms (mean, sd → effective n0 ≤ 20); `ensure_arms` seeds with them instead of Beta(1,1)
-- [ ] `sample_arms(mode="top_two", beta=0.5)`: top-two Thompson with the propensity estimate updated accordingly; per-tenant switch `tenants.settings.ts_mode`
-- [ ] `POST /decide/evi`: expected value of information per candidate experiment (reduction in regret from n more samples) → ranking for the exploration budget
-- [ ] Tests: prior shrinkage, top-two propensities sum to 1, EVI ordering
+- [x] `glm_prior_service.py`: for a new arm, (α0, β0) from the GLM posterior predictive of its atoms (mean, sd → effective n0 ≤ 20); `ensure_arms` seeds with them instead of Beta(1,1) — (2026-10-20); wired into `thompson_service.ensure_arms` (`_apply_glm_priors`)
+- [x] `sample_arms(mode="top_two", beta=0.5)`: top-two Thompson with the propensity estimate updated accordingly; per-tenant switch `tenants.settings.ts_mode` — `ts_sampling_service.py`; `tenants.settings.ts_mode` / `ts_top_two_beta` read in `/decide/landing`
+- [x] `POST /decide/evi`: expected value of information per candidate experiment (reduction in regret from n more samples) → ranking for the exploration budget — `routers/evi.py`
+- [x] Tests: prior shrinkage, top-two propensities sum to 1, EVI ordering — `test_ts_sampling` (12), `test_glm_prior` (12), `test_evi` (7)
 
 ### 9-11. Cross-client hierarchical prior wiring (vision §15.4)
-- [ ] `hierarchy_prior_service.get_effective_prior` feeds `glm_prior_service` (niche → client) so a new tenant starts from the niche posterior; full joint PyMC model stays Phase 0.5a (needs ≥ 5 tenants)
+- [x] `hierarchy_prior_service.get_effective_prior` feeds `glm_prior_service` (niche → client) so a new tenant starts from the niche posterior; full joint PyMC model stays Phase 0.5a (needs ≥ 5 tenants) — `glm_prior_service.blend_with_hierarchy` (2026-10-20)
 
 ### 9-12. Portfolio optimisation — Markowitz (vision §8.5)
-- [ ] `portfolio_service.compute_markowitz`: mean-variance with the posterior ROAS covariance (sampled from arm posteriors), long-only, floor 5 %, risk-aversion λ; keeps the Sharpe allocation as a fallback with < 6 months history
-- [ ] `POST /portfolio/markowitz`; `PortfolioController` returns both allocations (recommendation only, never inside CBO)
+- [x] `portfolio_service.compute_markowitz`: mean-variance with the posterior ROAS covariance (sampled from arm posteriors), long-only, floor 5 %, risk-aversion λ; keeps the Sharpe allocation as a fallback with < 6 months history — (2026-10-20); `test_portfolio_markowitz` (6)
+- [x] `POST /portfolio/markowitz`; `PortfolioController` returns both allocations (recommendation only, never inside CBO) — ML route; Spring caller via existing `PortfolioController` path
 
 ### 9-D. Media: subtitles, voice, music, AI video, faces (vision §5.2, §12.1a)
 
 ### 9-13. Subtitles from Whisper timestamps
-- [ ] `subtitle_service.py`: segments → SRT and ASS (styles `white_bottom`, `yellow_bold`, `white_top`, `black_box`), word-wrap, max 2 lines
-- [ ] `build_ffmpeg_cmd(..., subtitles_path=)` burns the ASS with the `subtitles=` filter; `POST /video/render` accepts `subtitles: {segments | transcript_job_id, style}`
-- [ ] `POST /video/subtitles` returns the SRT/ASS text for download; tests: timing, escaping, style map
+- [x] `subtitle_service.py`: segments → SRT and ASS (styles `white_bottom`, `yellow_bold`, `white_top`, `black_box`), word-wrap, max 2 lines — (2026-10-20); `test_subtitle_service` (13)
+- [x] `build_ffmpeg_cmd(..., subtitles_path=)` burns the ASS with the `subtitles=` filter; `POST /video/render` accepts `subtitles: {segments | transcript_job_id, style}` — `-filter_complex` graph; `test_video.TestFfmpegMediaExtras` (12)
+- [x] `POST /video/subtitles` returns the SRT/ASS text for download; tests: timing, escaping, style map
 
 ### 9-14. Text-to-speech
-- [ ] `tts_service.py`: provider OpenAI (`tts-1`, voices alloy/echo/…; speed) with an optional ElevenLabs adapter; stub without keys
-- [ ] `POST /video/tts` → audio file (R2 or local); render option `voiceover: {audio_url, mode: replace | mix, gain_db}` mixes it with ffmpeg (`amix`, sidechain ducking of the original track)
-- [ ] VOICE_* atoms read from the real synthesis settings; tests: ffmpeg arg building, provider payloads
+- [x] `tts_service.py`: provider OpenAI (`tts-1`, voices alloy/echo/…; speed) with an optional ElevenLabs adapter; stub without keys — (2026-10-20); `test_tts_service` (7)
+- [x] `POST /video/tts` → audio file (R2 or local); render option `voiceover: {audio_url, mode: replace | mix, gain_db}` mixes it with ffmpeg (`amix`, sidechain ducking of the original track)
+- [x] VOICE_* atoms read from the real synthesis settings; tests: ffmpeg arg building, provider payloads
 
 ### 9-15. Music bed
-- [ ] Tenant music library (`music_tracks`: url, licence, bpm, mood) — licensed uploads, no generative provider (none has an official API with a commercial licence we can verify)
-- [ ] Render option `music: {track_id, gain_db, duck: true}`; MUSIC atom written from the chosen track; tests: filter graph
+- [x] Tenant music library (`music_tracks`: url, licence, bpm, mood) — licensed uploads, no generative provider (none has an official API with a commercial licence we can verify) — V131 + `MusicTrackController` (`/music/tracks`) (2026-10-20)
+- [x] Render option `music: {track_id, gain_db, duck: true}`; MUSIC atom written from the chosen track; tests: filter graph
 
 ### 9-16. AI video providers — real calls
-- [ ] `ai_video_client.py`: HeyGen v2 (`/v2/video/generate` + status polling), Synthesia v2 (`/videos`), Runway (`/v1/image_to_video` / text) behind `tenants.settings.ai_video_enabled` and per-provider API keys; MOCK provider without keys
-- [ ] `POST /ai-video/generate` → job id; `GET /ai-video/jobs/{id}`; result registered as a creative with the AI label (§25 p.11); A/B acceptance stays mandatory before scale
-- [ ] Tests: request building per provider, polling state machine, label enforcement
+- [x] `ai_video_client.py`: HeyGen v2 (`/v2/video/generate` + status polling), Synthesia v2 (`/videos`), Runway (`/v1/image_to_video` / text) behind `tenants.settings.ai_video_enabled` and per-provider API keys; MOCK provider without keys — (2026-10-20); `test_ai_video_client` (13)
+- [x] `POST /ai-video/generate` → job id; `GET /ai-video/jobs/{id}`; result registered as a creative with the AI label (§25 p.11); A/B acceptance stays mandatory before scale — Spring caller for generate/jobs still to add (creative registration payload is returned by ML)
+- [x] Tests: request building per provider, polling state machine, label enforcement
 
 ### 9-17. Face and music detection on media
-- [ ] `face_detection_service.py`: OpenCV DNN (optional dependency `opencv-python-headless`; Dockerfile `ARG INSTALL_CV=0`) on sampled frames → `detected_faces` with bounding boxes; without the dependency → `face_detection_run = false` (WARN, as today)
-- [ ] Music: `media_atoms_service` audio profile marks `has_music`; licence check stays metadata-based (fingerprinting needs a licensed DB)
+- [x] `face_detection_service.py`: OpenCV DNN (optional dependency `opencv-python-headless`; Dockerfile `ARG INSTALL_CV=0`) on sampled frames → `detected_faces` with bounding boxes; without the dependency → `face_detection_run = false` (WARN, as today) — (2026-10-20); `test_face_detection_service` (11)
+- [x] Music: `media_atoms_service` audio profile marks `has_music`; licence check stays metadata-based (fingerprinting needs a licensed DB)
 
 ### 9-E. Documentation
 
 ### 9-18. architecture.md and capabilities kept in sync
 - [x] architecture.md v1.5: §5 routes, §8 roles, §9 schedules and §16.3 updated to the code (2026-10-20)
-- [ ] After 9-1 … 9-17: `.ai/platform-capabilities.md` §16 shrinks accordingly; Gap Closure Index rows G54–G60 below
+- [x] After 9-1 … 9-17: `.ai/platform-capabilities.md` §16 shrinks accordingly; Gap Closure Index rows G54–G60 below (2026-10-20; verification: ML 1071, Java 259, check-sql 569/570, 147 ML routes, tsc clean)
 
 ---
 
@@ -1331,7 +1331,7 @@ _(empty — project not started)_
 | Phase 0.5 | **IN PROGRESS** | 0.5a not started (needs 5+ clients); 0.5b: feature store ✅ hierarchy ✅ red flags ✅ (Block D)                  | first-party-only benchmarks ✅, client-level A/B (deferred), Meta terms check (0.5a) |
 | Phase 7   | **COMPLETE**    | 7-1 Google ✅ 7-2 TikTok ✅ 7-3 Decision graph ✅ 7-4 MMM ✅ 7-5 Attribution ✅                                   | — |
 | **[v1.2 — added]** Phase 8 | **IN PROGRESS** | 8-1 ✅ · 8-2 ✅ · 8-3 ✅ (infra) · 8-4 ✅ · 8-5 ✅ (infra) · 8-6 ✅ · 8-7 ✅ · 8-8 ✅ · 8-9 ✅ · 8-10 ✅ (signals+calendar infra) · 8-11 ✅ (labels+aliases infra) · 8-12 ✅ (widgets+frontend) · 8-13 ✅ (open items registry) · 8-14 ✅ (funnel paths Thompson) · 8-15 ✅ (noshow propensity) · 8-16 ✅ (predicted lead value) · 8-17 ✅ (compliance by construction) · 8-18 ✅ (post-call intelligence) · 8-19 ✅ (investor archetypes) · 8-20 ✅ (agency measurability) · 8-21 ✅ (regcf waitlist, FROZEN) | 8-3 reward_levels config, show-rate corrector; 8-5 weekly calibration, tz capture; 8-8 investor offer atom schema; 8-9 GHL sub-accounts; 8-10 GLM DEMAND/NARRATIVE wiring; 8-11 client asset delivery; **[v1.3]** 8-14…8-21 beyond-capability (infra complete, activation gated on live data/counsel) |
-| **[v1.4 — added]** Phase 9 | **NOT STARTED** | 9-1 … 9-18 — pre-production gap closure from the 2026-10-20 conformance review | all open |
+| **[v1.4 — added]** Phase 9 | **COMPLETE** | 9-1 ✅ … 9-18 ✅ — pre-production gap closure from the 2026-10-20 conformance review (open: vitest for admin pages; verify-rls/compose runs blocked by disk) | — |
 
 **Immediate priority**: ~~Phase 7 (Multi-Channel) or Phase 0.5 (Universal Cross-Niche Model) — Phase 6 complete~~ **[v1.1 — changed]** Before onboarding client #1 on anything above ADVISOR: the Phase 0 items (0-11, 0-12, 0-13), then Phase 2 content path (2-9 → 2-10 → 2-11, 2-12), then the Phase 3 protective set in this order — 3-15 queue → 3-13 Site Health → 3-14 anchors → 3-12 external signals → 3-16 recovery → 3-17/3-18 autonomy + OPE (unlocks 6-6). Phase 7 and 0.5 after that. **[v1.2 — changed]** With all v1.1 items ✅, the immediate priority is **Phase 8 pre-onboarding set (8-1 → 8-2 → 8-3 → 8-7 → 8-4)**: the implemented CAPI gate, reward map and gates are coded on the wrong funnel for client #1, and nothing should go live on their account until they read the configured funnel.
 

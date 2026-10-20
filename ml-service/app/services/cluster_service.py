@@ -35,8 +35,23 @@ FEATURE_NAMES = [
     "is_mobile",              # 0/1 mobile device
     "is_repeat_visit",        # 0/1 has prior session
     "event_count",            # total number of events in session
+    "ticket_bucket_ord",      # roadmap 9-9 / arch §16.19: 0..4 ordinal of sessions.ticket_bucket
+    "self_accredited",        # 0/1 sessions.self_accredited
 ]
 N_FEATURES = len(FEATURE_NAMES)
+
+_TICKET_ORDINAL = {"LT25K": 0.0, "25_50K": 1.0, "50_100K": 2.0, "100_250K": 3.0, "GT250K": 4.0}
+
+
+def ticket_bucket_ordinal(bucket) -> float:
+    """Ordinal 0..4 for the five investor ticket buckets; unknown/None → 0."""
+    return _TICKET_ORDINAL.get(str(bucket).upper(), 0.0) if bucket else 0.0
+
+
+def _investor_features(session: dict) -> tuple[float, float]:
+    accredited = session.get("self_accredited")
+    acc = 1.0 if accredited is True or str(accredited).lower() in ("1", "true", "t", "yes") else 0.0
+    return ticket_bucket_ordinal(session.get("ticket_bucket")), acc
 
 # Rule-based archetype labels (used when k-means has no trained model yet)
 RULE_ARCHETYPES = {
@@ -66,6 +81,7 @@ def extract_features(events: list[dict], session: dict) -> np.ndarray:
         np.ndarray of shape (N_FEATURES,) — float32
     """
     feat: dict[str, float] = {name: 0.0 for name in FEATURE_NAMES}
+    feat["ticket_bucket_ord"], feat["self_accredited"] = _investor_features(session or {})
 
     if not events:
         return np.array([feat[n] for n in FEATURE_NAMES], dtype=np.float32)

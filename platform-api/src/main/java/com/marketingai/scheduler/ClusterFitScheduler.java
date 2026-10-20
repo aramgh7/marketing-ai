@@ -56,7 +56,8 @@ public class ClusterFitScheduler {
         // Pull qualified sessions with their events (last 30 days)
         List<Map<String, Object>> sessions = jdbc.queryForList("""
                 SELECT s.id AS session_id, s.device, s.started_at, s.last_event_at,
-                       s.crm_user_id, s.converted
+                       s.crm_user_id, s.converted,
+                       s.ticket_bucket, s.self_accredited          -- roadmap 9-9 / arch §16.19
                 FROM sessions s
                 WHERE s.tenant_id = ?
                   AND s.consent_level = 'full'

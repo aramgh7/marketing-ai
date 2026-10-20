@@ -1,6 +1,7 @@
 package com.marketingai.controller;
 
 import com.marketingai.security.TenantContext;
+import com.marketingai.service.ExpertPriorMath;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -41,12 +42,20 @@ public class ExpertRatingController {
                 VALUES (?, ?, 'CREATIVE', ?, ?, ?, ?, now())
                 """, ratingId, tenantId, id, body.rating(), body.veto(), body.reason());
 
+        // Roadmap 9-9 / arch §15.13: the rating becomes the exploration prior of new arms for this creative
+        ExpertPriorMath.Prior prior = ExpertPriorMath.shift(body.rating(), body.veto());
+        jdbc.update("""
+                UPDATE creatives SET exploration_prior_alpha = ?, exploration_prior_beta = ?
+                WHERE id = ? AND tenant_id = ?
+                """, (float) prior.alpha(), (float) prior.beta(), id, tenantId);
+
         return Map.of(
                 "id", ratingId,
                 "creative_id", id,
                 "rating", body.rating(),
                 "veto", body.veto(),
-                "reason", body.reason() != null ? body.reason() : ""
+                "reason", body.reason() != null ? body.reason() : "",
+                "exploration_prior", Map.of("alpha", prior.alpha(), "beta", prior.beta())
         );
     }
 

@@ -26,6 +26,7 @@ public class CAPIForwardingService {
     private final CAPIEventLogRepository capiRepo;
 
     private final TokenVault vault;   // roadmap 9-1: sealed secrets
+    private final CapiValueModeService capiValueModeService;   // roadmap 9-9: PROXY | FIXED | AB
     private final MetaPixelRepository pixelRepo;
     private final RestTemplate restTemplate;
     private final org.springframework.jdbc.core.JdbcTemplate jdbc;
@@ -296,9 +297,12 @@ public class CAPIForwardingService {
             double proxyValue;
             if ("monetaryValue".equals(formula) && monetaryValue != null) {
                 proxyValue = monetaryValue;
+            } else if ("FIXED".equals(capiValueModeService.effectiveModeForSession(tenant.getId(), sessionId))) {
+                // roadmap 9-9 / arch §15.19: FIXED arm = base value with every multiplier at 1
+                proxyValue = valueFormulaService.computeValue(tenant.getId(), formula, Boolean.TRUE, null, null);
             } else {
                 proxyValue = valueFormulaService.computeValue(
-                        tenant.getId(), formula, selfAccredited, ticketBucket);
+                        tenant.getId(), formula, selfAccredited, ticketBucket, sessionId);   // 9-7: predicted_value
             }
 
             String roleKey  = (String) mapping.get("pixel_role");

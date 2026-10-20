@@ -33,6 +33,7 @@ import numpy as np
 from app.config import settings
 from app.services.db_client import get_pool, system_pool, tenant_pool
 from app.services.glm_prior_service import prior_for_variant
+from app.services.expert_prior_service import prior_for_arm
 from app.services.job_store import get_redis
 
 CACHE_PREFIX = "posterior"
@@ -164,8 +165,6 @@ async def _apply_glm_priors(conn, tenant_id: str, context_key: str) -> int:
             "WHERE tenant_id = $1::uuid AND model_stage = 'CVR'",
             tenant_id,
         )
-        if not posteriors:
-            return 0
         base = await conn.fetchrow(
             """
             SELECT COUNT(*) FILTER (WHERE converted) AS conv, COUNT(*) AS n
@@ -178,8 +177,10 @@ async def _apply_glm_priors(conn, tenant_id: str, context_key: str) -> int:
         base_sd = GLM_PRIOR_BASE_SD
         fresh = await conn.fetch(
             """
-            SELECT ta.id::text AS id, lv.creative_id::text AS creative_id
+            SELECT ta.id::text AS id, lv.creative_id::text AS creative_id,
+                   c.exploration_prior_alpha AS exp_alpha, c.exploration_prior_beta AS exp_beta
             FROM   thompson_arms ta JOIN landing_variants lv ON lv.id = ta.variant_id
+            LEFT JOIN creatives c ON c.id = lv.creative_id
             WHERE  ta.tenant_id = $1::uuid AND ta.context_key = $2
               AND  ta.total_samples = 0 AND ta.alpha = 1 AND ta.beta = 1
             """,
@@ -195,12 +196,15 @@ async def _apply_glm_priors(conn, tenant_id: str, context_key: str) -> int:
                 arm["creative_id"], tenant_id,
             )
             prior = prior_for_variant(atom_posts, [dict(a) for a in atoms], base_rate, base_sd)
-            if not prior.get("matched_atoms"):
+            # roadmap 9-9 / arch §15.13: expert rating prior (creatives.exploration_prior_*) combined with the GLM one
+            stored = (arm["exp_alpha"], arm["exp_beta"]) if arm["exp_alpha"] is not None else None
+            resolved = prior_for_arm(prior, None, stored=stored)
+            if resolved["source"] == "FLAT":
                 continue
             await conn.execute(
                 "UPDATE thompson_arms SET alpha = $1, beta = $2, updated_at = now() "
                 "WHERE id = $3::uuid AND total_samples = 0",
-                float(prior["alpha0"]), float(prior["beta0"]), arm["id"],
+                float(resolved["alpha0"]), float(resolved["beta0"]), arm["id"],
             )
             updated += 1
         return updated
@@ -260,10 +264,24 @@ async def load_arms(tenant_id: str, context_key: str = "global") -> list[dict]:
             WHERE  ta.tenant_id  = $1::uuid
               AND  ta.context_key = $2
               AND  lv.status      = 'ACTIVE'
+              -- roadmap 9-9 / arch §15.6: margin floor — variants without an offer row stay eligible
+              AND  COALESCE((SELECT MIN(vo.estimated_margin) FROM variant_offers vo WHERE vo.variant_id = lv.id), 1e9)
+                   >= COALESCE((SELECT (t.settings->>'min_margin')::float8 FROM tenants t WHERE t.id = $1::uuid), -1e9)
             """,
             tenant_id,
             context_key,
         )
+        excluded = await conn.fetchval(
+            """
+            SELECT COUNT(*) FROM thompson_arms ta JOIN landing_variants lv ON lv.id = ta.variant_id
+            WHERE ta.tenant_id = $1::uuid AND ta.context_key = $2 AND lv.status = 'ACTIVE'
+            """,
+            tenant_id, context_key,
+        )
+        if excluded is not None and int(excluded) > len(rows):
+            import logging
+            logging.getLogger(__name__).info(
+                "load_arms: %d variant(s) excluded by min_margin for tenant %s", int(excluded) - len(rows), tenant_id)
 
     if not rows:
         return []

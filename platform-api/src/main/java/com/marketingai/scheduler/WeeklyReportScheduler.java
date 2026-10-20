@@ -39,6 +39,7 @@ public class WeeklyReportScheduler {
     private final RestTemplate restTemplate;
     private final JdbcTemplate jdbc;
     private final NoshowReportService noshowReportService;
+    private final com.marketingai.service.CapiValueModeService capiValueModeService;   // roadmap 9-9
 
     @Autowired(required = false)
     private JavaMailSender mailSender;
@@ -172,6 +173,11 @@ public class WeeklyReportScheduler {
         sb.append("─── Appointments (roadmap 8-3) ───\n");
         sb.append(noShowLine(tenant)).append("\n");
         sb.append(noshowReportService.weeklyLines(tenant.getId())).append("\n");   // roadmap 8-15
+        try {
+            sb.append(capiValueModeService.weeklyLine(tenant.getId())).append("\n");   // roadmap 9-9
+        } catch (Exception e) {
+            log.debug("capi_value_mode weekly line skipped: {}", e.getMessage());
+        }
 
         sb.append("─── Note ───\n");
         sb.append(AnalyticsService.DISCLAIMER).append("\n");
