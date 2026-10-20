@@ -45,6 +45,7 @@ public class MetaCampaign {
     private Float maxSpendPerAdset;
 
     /** Monthly budget ceiling — L3 triggers when total spend reaches this (§12.5a) */
+    @Column(name = "monthly_budget_ceiling")
     private Float monthlyCeilingBudget;
 
     /** Target CPA for L2 Bayesian trigger (§12.5a) */

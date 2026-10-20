@@ -114,3 +114,11 @@ def compute_ope(
         "clipped_mass": round(clipped_mass, 4),
         "verdict": verdict,
     }
+
+
+def passes_ope_gate(result: dict, min_ess: float = 200.0) -> bool:
+    """True when an OPE result clears the promotion gate (verdict PASS and ESS >= min_ess).
+
+    Used by /analyze/ope/ips; INSUFFICIENT_DATA and FAIL never pass.
+    """
+    return result.get("verdict") == "PASS" and float(result.get("ess", 0.0)) >= min_ess

@@ -13,7 +13,7 @@ from typing import Optional
 
 import numpy as np
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.services.db_client import get_pool
 from app.services.model_updater import run_fit
