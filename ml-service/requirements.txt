@@ -25,3 +25,5 @@ scikit-learn==1.5.2
 joblib==1.4.2
 # optional — MLflow experiment tracking (vision §15.10); omit if not configured
 # mlflow>=2.15.0
+# optional — face detection on frames (roadmap 9-17); Dockerfile ARG INSTALL_CV=1
+# opencv-python-headless==4.10.0.84

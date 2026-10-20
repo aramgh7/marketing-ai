@@ -5,7 +5,7 @@ Architecture §15.4, roadmap 4-5.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 
 def check_face_detection(asset_url: str, metadata: dict) -> dict:
@@ -50,6 +50,15 @@ def check_music_licence(metadata: dict) -> dict:
     tracks: list[dict] = metadata.get("audio_tracks", [])
 
     if not tracks:
+        # Roadmap 9-17: the ffmpeg audio profile (media_atoms_service.has_music) says there is a
+        # music bed, but nobody declared a track/licence for it → WARN, licence stays metadata-based
+        if metadata.get("has_music") is True:
+            return {
+                "check_type": "MUSIC",
+                "result": "WARN",
+                "findings": [{"rule": "MUSIC_UNDECLARED", "severity": "WARN",
+                               "suggestion": "Audio profile detected a music bed; declare the track and its licence"}],
+            }
         return {"check_type": "MUSIC", "result": "PASS", "findings": []}
 
     findings = []
@@ -92,12 +101,27 @@ def check_ai_label(metadata: dict) -> dict:
     }
 
 
-def run_media_compliance_checks(asset_url: str, metadata: dict) -> dict:
+def run_media_compliance_checks(asset_url: str, metadata: dict, frames: list | None = None,
+                                detector: Callable | None = None) -> dict:
     """
     Run all three media checks and return combined result.
     FAIL overrides WARN overrides PASS.
     Returns {result, checks: {FACE, MUSIC, AI_LABEL}, findings: [...]}
+
+    Roadmap 9-17: when `frames` (JPEG bytes/paths) are given and the caller did not supply
+    `detected_faces`, face detection runs here and its output is merged into the metadata
+    (`face_detection` key in the result shows what ran). Detected faces have no model release
+    until the marketer attaches one, so a real face → FAIL, as the policy requires.
     """
+    metadata = dict(metadata or {})
+    detection: dict | None = None
+    if frames is not None and "detected_faces" not in metadata:
+        from app.services.face_detection_service import detect_faces  # local import keeps this module light
+        detection = detect_faces(frames, detector=detector)
+        metadata["face_detection_run"] = detection["face_detection_run"]
+        if detection["face_detection_run"]:
+            metadata["detected_faces"] = detection["detected_faces"]
+
     face = check_face_detection(asset_url, metadata)
     music = check_music_licence(metadata)
     ai_label = check_ai_label(metadata)
@@ -125,4 +149,5 @@ def run_media_compliance_checks(asset_url: str, metadata: dict) -> dict:
         },
         "findings": all_findings,
         "individual": [face, music, ai_label],
+        "face_detection": detection,
     }

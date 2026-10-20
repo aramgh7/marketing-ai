@@ -91,6 +91,11 @@ def music_label(has_audio: bool, mean_volume_db: float | None, silence_share: fl
     return "background"
 
 
+def has_music(label: str | None) -> bool:
+    """Roadmap 9-17: a music bed is present when the MUSIC atom is background or dominant."""
+    return label in ("background", "dominant")
+
+
 def media_atoms(cuts: int, duration_sec: float | None, has_audio: bool,
                 mean_volume_db: float | None, silence_share: float | None) -> list[dict]:
     """Atom dicts in the creative_dna format (type/value/confidence/extracted_by)."""
@@ -99,9 +104,11 @@ def media_atoms(cuts: int, duration_sec: float | None, has_audio: bool,
     if pace:
         out.append({"type": "EDIT_PACE", "value": pace, "confidence": 0.90, "extracted_by": "ffmpeg",
                     "meta": {"cuts": cuts, "cuts_per_minute": cuts_per_minute(cuts, duration_sec)}})
-    out.append({"type": "MUSIC", "value": music_label(has_audio, mean_volume_db, silence_share),
+    label = music_label(has_audio, mean_volume_db, silence_share)
+    out.append({"type": "MUSIC", "value": label,
                 "confidence": 0.85 if has_audio else 1.0, "extracted_by": "ffmpeg",
-                "meta": {"mean_volume_db": mean_volume_db, "silence_share": silence_share}})
+                "meta": {"mean_volume_db": mean_volume_db, "silence_share": silence_share,
+                         "has_music": has_music(label)}})
     return out
 
 
