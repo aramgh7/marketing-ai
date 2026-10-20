@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Header, HTTPException, Query
 
 from app.config import settings
-from app.services.db_client import get_pool  # shared pool — P1-1 fix
+from app.services.db_client import tenant_pool  # RLS-scoped (roadmap 9-4)
 from app.security import check_internal_key
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ async def diagnostics(
     """
     _require_internal_key(x_internal_api_key)
 
-    pool = await get_pool()  # shared pool (P1-1)
+    pool = await tenant_pool(tenant_id)
 
     async with pool.acquire() as conn:
         async with conn.transaction():

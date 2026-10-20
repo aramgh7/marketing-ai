@@ -31,7 +31,8 @@ from typing import Optional
 import numpy as np
 
 from app.config import settings
-from app.services.db_client import get_pool
+from app.services.db_client import get_pool, system_pool, tenant_pool
+from app.services.glm_prior_service import prior_for_variant
 from app.services.job_store import get_redis
 
 CACHE_PREFIX = "posterior"
@@ -120,7 +121,7 @@ async def ensure_arms(tenant_id: str, context_key: str) -> int:
     cold arm set for every cluster/channel and defeated the documented fallback to the
     channel-global arms. It is now an explicit call made only for the canonical key.
     """
-    pool = await get_pool()
+    pool = await tenant_pool(tenant_id)
     async with pool.acquire() as conn:
         status = await conn.execute(
             """
@@ -139,10 +140,73 @@ async def ensure_arms(tenant_id: str, context_key: str) -> int:
             tenant_id,
             context_key,
         )
+        try:
+            created = int(status.split()[-1])
+        except (ValueError, IndexError):
+            created = 0
+        if created:
+            await _apply_glm_priors(conn, tenant_id, context_key)   # roadmap 9-10
     await get_redis().delete(f"{CACHE_PREFIX}:{tenant_id}:{context_key}")
+    return created
+
+
+GLM_PRIOR_BASE_RATE = 0.03   # fallback CVR when the tenant has no closed sessions yet
+GLM_PRIOR_BASE_SD   = 0.02
+
+
+async def _apply_glm_priors(conn, tenant_id: str, context_key: str) -> int:
+    """Roadmap 9-10 (vision §15.6): new arms start from the GLM posterior predictive of their atoms
+    instead of Beta(1,1). Only untouched arms (total_samples = 0, alpha = beta = 1) are changed, so a
+    re-run never overwrites learned counts. Without GLM posteriors nothing happens."""
     try:
-        return int(status.split()[-1])
-    except (ValueError, IndexError):
+        posteriors = await conn.fetch(
+            "SELECT atom_type, atom_value, mean, std AS sd FROM glm_posteriors "
+            "WHERE tenant_id = $1::uuid AND model_stage = 'CVR'",
+            tenant_id,
+        )
+        if not posteriors:
+            return 0
+        base = await conn.fetchrow(
+            """
+            SELECT COUNT(*) FILTER (WHERE converted) AS conv, COUNT(*) AS n
+            FROM   sessions WHERE tenant_id = $1::uuid AND started_at > now() - INTERVAL '90 days'
+            """,
+            tenant_id,
+        )
+        n = int(base["n"] or 0) if base else 0
+        base_rate = (int(base["conv"] or 0) + 1) / (n + 2) if n >= 50 else GLM_PRIOR_BASE_RATE
+        base_sd = GLM_PRIOR_BASE_SD
+        fresh = await conn.fetch(
+            """
+            SELECT ta.id::text AS id, lv.creative_id::text AS creative_id
+            FROM   thompson_arms ta JOIN landing_variants lv ON lv.id = ta.variant_id
+            WHERE  ta.tenant_id = $1::uuid AND ta.context_key = $2
+              AND  ta.total_samples = 0 AND ta.alpha = 1 AND ta.beta = 1
+            """,
+            tenant_id, context_key,
+        )
+        atom_posts = [dict(r) for r in posteriors]
+        updated = 0
+        for arm in fresh:
+            if not arm["creative_id"]:
+                continue
+            atoms = await conn.fetch(
+                "SELECT atom_type, atom_value FROM creative_atoms WHERE creative_id = $1::uuid AND tenant_id = $2::uuid",
+                arm["creative_id"], tenant_id,
+            )
+            prior = prior_for_variant(atom_posts, [dict(a) for a in atoms], base_rate, base_sd)
+            if not prior.get("matched_atoms"):
+                continue
+            await conn.execute(
+                "UPDATE thompson_arms SET alpha = $1, beta = $2, updated_at = now() "
+                "WHERE id = $3::uuid AND total_samples = 0",
+                float(prior["alpha0"]), float(prior["beta0"]), arm["id"],
+            )
+            updated += 1
+        return updated
+    except Exception as exc:  # priors are an optimisation, never a failure of /decide
+        import logging
+        logging.getLogger(__name__).warning("GLM priors skipped: %s", exc)
         return 0
 
 
@@ -159,7 +223,7 @@ async def load_arms(tenant_id: str, context_key: str = "global") -> list[dict]:
     if cached:
         return json.loads(cached)
 
-    pool = await get_pool()
+    pool = await tenant_pool(tenant_id)
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -281,7 +345,7 @@ async def log_decision(
     is_holdout: bool = False,
 ) -> str:
     """Insert into decision_log and cache for reward lookups. Returns decision_id."""
-    pool = await get_pool()
+    pool = await tenant_pool(tenant_id)
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -333,7 +397,7 @@ async def apply_churn_penalty(
     weighted_sum: sum of exp(-0.02 * days_since_decision) over churned sessions.
     Cap: penalty ≤ 30% of current (α+β) so a single churn wave can't kill a good arm.
     """
-    pool = await get_pool()
+    pool = await tenant_pool(tenant_id)
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -396,7 +460,7 @@ async def apply_churn_penalty(
 
 async def _load_decision(decision_id: str) -> Optional[dict]:
     """Audit 2.2: the Redis decision key lives 1 h, CRM rewards arrive days later."""
-    pool = await get_pool()
+    pool = await system_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -446,7 +510,7 @@ async def apply_reward(decision_id: str, reward_type: str, tenant_configured: bo
     if not dec.get("arm_id"):
         raise ValueError(f"Decision {decision_id} has no resolvable arm")
 
-    pool = await get_pool()
+    pool = await system_pool()
     now = datetime.now(timezone.utc)
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -507,7 +571,7 @@ async def sweep_no_response(
     Each swept decision is logged as NO_RESPONSE_7D, so the sweep is idempotent and a
     late positive reward can reverse it (see apply_reward).
     """
-    pool = await get_pool()
+    pool = await system_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
@@ -566,7 +630,7 @@ async def apply_followup_outcome(tenant_id: str, appointment_id: str, outcome: s
     if outcome not in ("SHOWED", "NO_SHOW"):
         raise ValueError("outcome must be SHOWED or NO_SHOW")
     field = "alpha" if outcome == "SHOWED" else "beta"
-    pool = await get_pool()
+    pool = await tenant_pool(tenant_id)
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute(_SET_TENANT, tenant_id)
@@ -598,7 +662,7 @@ async def get_benchmark(tenant_id: str, days: int = 30) -> dict:
     Lift      = (treatment_cvr - holdout_cvr) / holdout_cvr * 100.
     P(better) = Monte Carlo integral over Beta posteriors (N=10 000).
     """
-    pool = await get_pool()
+    pool = await tenant_pool(tenant_id)
     async with pool.acquire() as conn:
         counts = await conn.fetchrow(
             """

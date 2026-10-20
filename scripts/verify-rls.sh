@@ -7,6 +7,7 @@
 #   3. system scope        -> all rows (explicit bypass used by schedulers)
 #   4. tenant scope insert for another tenant -> rejected by policy
 #   5. mai_app cannot UPDATE thompson_arms (single writer = ML service)
+#   6. mai_ml (ML service, V127): no scope -> 0 rows; tenant scope -> own rows; can UPDATE thompson_arms
 # Usage: scripts/verify-rls.sh    (needs Docker; ~1-3 min)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -14,6 +15,7 @@ MIG="$ROOT/platform-api/src/main/resources/db/migration"
 NAME="mai-rls-check-$$"
 PORT="${RLS_CHECK_PORT:-5440}"
 APP_PASS="mai_app_local"
+ML_PASS="mai_ml_local"
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
@@ -24,12 +26,13 @@ for _ in $(seq 1 30); do docker exec "$NAME" pg_isready -U mai -d marketingai >/
 case "$(uname -s)" in MINGW*|MSYS*) MIG="$(cygpath -m "$MIG")"; export MSYS_NO_PATHCONV=1;; esac
 docker run --rm -v "$MIG:/flyway/sql" flyway/flyway:10 \
   -url="jdbc:postgresql://host.docker.internal:$PORT/marketingai" -user=mai -password=mai_local \
-  -placeholders.app_role_password="$APP_PASS" migrate | grep -E "Successfully|ERROR" || true
+  -placeholders.app_role_password="$APP_PASS" -placeholders.ml_role_password="$ML_PASS" migrate | grep -E "Successfully|ERROR" || true
 
 T1=11111111-1111-1111-1111-111111111111
 T2=22222222-2222-2222-2222-222222222222
 owner() { docker exec -i "$NAME" psql -U mai -d marketingai -v ON_ERROR_STOP=1 -qtA "$@"; }
 app()   { docker exec -i -e PGPASSWORD="$APP_PASS" "$NAME" psql -U mai_app -d marketingai -qtA "$@"; }
+ml()    { docker exec -i -e PGPASSWORD="$ML_PASS" "$NAME" psql -U mai_ml -d marketingai -qtA "$@"; }
 
 owner <<SQL
 INSERT INTO tenants (id, name, slug) VALUES ('$T1','T1','t1'), ('$T2','T2','t2');
@@ -50,5 +53,9 @@ cross=$(app -c "SELECT set_config('app.current_tenant','$T1',false); INSERT INTO
 check "tenant scope: cross-tenant insert rejected" "1" "$cross"
 arm=$(app -c "SELECT set_config('app.rls_bypass','on',false); UPDATE thompson_arms SET alpha = alpha + 1" 2>&1 | grep -c "permission denied" || true)
 check "mai_app cannot write thompson_arms" "1" "$arm"
+check "mai_ml no scope: sessions visible"  "0"  "$(ml -c "SELECT count(*) FROM sessions")"
+check "mai_ml tenant scope: own rows only" "s1" "$(ml -c "SELECT set_config('app.current_tenant','$T1',false); SELECT string_agg(id, ',') FROM sessions" | tail -1)"
+mlarm=$(ml -c "SELECT set_config('app.rls_bypass','on',false); UPDATE thompson_arms SET alpha = alpha + 1" 2>&1 | grep -c "permission denied" || true)
+check "mai_ml can write thompson_arms"      "0"  "$mlarm"
 
 exit $fail

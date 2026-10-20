@@ -6,7 +6,8 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel
 
 from app.config import settings
-from app.services.db_client import get_pool
+from app.services.db_client import tenant_pool
+from app.services.ts_sampling_service import select_sampler
 from app.services.cluster_service import personalise_block_order
 from app.services.decide_service import derive_context_key
 from app.services.cluster_refinement_service import build_refinement_plan, apply_refinement
@@ -43,15 +44,26 @@ def _holdout_bucket(session_id: Optional[str]) -> int:
 
 async def _get_holdout_config(tenant_id: str) -> tuple[bool, float]:
     """Return (holdout_enabled, holdout_rate) for a tenant."""
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT holdout_enabled, holdout_rate FROM tenants WHERE id = $1::uuid",
-            tenant_id,
-        )
+    cfg = await _get_decide_config(tenant_id)
+    return cfg["holdout_enabled"], cfg["holdout_rate"]
+
+
+async def _get_decide_config(tenant_id: str) -> dict:
+    """Holdout + sampler settings (roadmap 9-10: tenants.settings.ts_mode / ts_top_two_beta)."""
+    pool = await tenant_pool(tenant_id)
+    row = await pool.fetchrow(
+        "SELECT holdout_enabled, holdout_rate, settings->>'ts_mode' AS ts_mode, "
+        "settings->>'ts_top_two_beta' AS ts_beta FROM tenants WHERE id = $1::uuid",
+        tenant_id,
+    )
     if not row:
-        return True, 0.04
-    return bool(row["holdout_enabled"]), float(row["holdout_rate"])
+        return {"holdout_enabled": True, "holdout_rate": 0.04, "ts_mode": "standard", "ts_beta": 0.5}
+    try:
+        beta = float(row["ts_beta"]) if row["ts_beta"] else 0.5
+    except ValueError:
+        beta = 0.5
+    return {"holdout_enabled": bool(row["holdout_enabled"]), "holdout_rate": float(row["holdout_rate"]),
+            "ts_mode": (row["ts_mode"] or "standard").lower(), "ts_beta": min(max(beta, 0.05), 0.95)}
 
 
 class DecideRequest(BaseModel):
@@ -152,7 +164,8 @@ async def decide_landing(req: DecideRequest):
     if not arms:
         raise HTTPException(status_code=404, detail="No active variants for this tenant")
 
-    holdout_enabled, holdout_rate = await _get_holdout_config(req.tenant_id)
+    cfg = await _get_decide_config(req.tenant_id)
+    holdout_enabled, holdout_rate = cfg["holdout_enabled"], cfg["holdout_rate"]
     bucket     = _holdout_bucket(req.session_id)
     is_holdout = holdout_enabled and bucket < int(holdout_rate * 10_000)
 
@@ -171,10 +184,13 @@ async def decide_landing(req: DecideRequest):
             }
             for arm in arms
         ]
+    elif cfg["ts_mode"] == "top_two":
+        # roadmap 9-10: top-two Thompson (Russo 2016) — challenger is forced to differ from the leader
+        chosen, candidates = select_sampler("top_two")(arms, beta=cfg["ts_beta"])
     else:
         chosen, candidates = sample_arms(arms)
 
-    context_with_key = {**req.context, "context_key": effective_key}
+    context_with_key = {**req.context, "context_key": effective_key, "ts_mode": cfg["ts_mode"]}
     decision_id = await log_decision(
         req.tenant_id,
         req.session_id,

@@ -17,7 +17,7 @@ from uuid import uuid4
 import pandas as pd
 
 from app.models.bayesian_glm import GlmDataset, FitResult, fit_all, prepare_dataset
-from app.services.db_client import get_pool
+from app.services.db_client import tenant_pool
 
 log = logging.getLogger(__name__)
 
@@ -208,7 +208,7 @@ async def run_fit(tenant_id: str, draws: int = 1000, tune: int = 1000, chains: i
       4. Persist posteriors + run metadata
     Returns a summary dict suitable for JSON response.
     """
-    pool = await get_pool()
+    pool = await tenant_pool(tenant_id)
     run_id = await _insert_run(tenant_id, pool)
     log.info("GLM fit started: tenant=%s run=%s", tenant_id, run_id)
 

@@ -12,6 +12,7 @@ spring:
     locations: classpath:db/migration
     placeholders:
       app_role_password: ${DB_APP_PASS:mai_app_local}
+      ml_role_password: ${DB_ML_PASS:mai_ml_local}    # V127: ml-service role mai_ml (roadmap 9-4)
   data:
     redis:
       host: ${REDIS_HOST:localhost}

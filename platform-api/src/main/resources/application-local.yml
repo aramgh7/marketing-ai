@@ -19,6 +19,7 @@ spring:
     password: ${DB_PASS:mai_local}
     placeholders:
       app_role_password: ${DB_APP_PASS:mai_app_local}   # V116: ALTER ROLE mai_app LOGIN PASSWORD
+      ml_role_password: ${DB_ML_PASS:mai_ml_local}    # V127: ml-service role mai_ml (roadmap 9-4)
 
 logging:
   level:

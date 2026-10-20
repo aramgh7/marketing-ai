@@ -43,6 +43,7 @@ services:
       DB_PASS: mai_local
       DB_APP_USER: mai_app              # application role — RLS enforced
       DB_APP_PASS: ${DB_APP_PASS:-mai_app_local}
+      DB_ML_PASS: ${DB_ML_PASS:-mai_ml_local}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       ML_SERVICE_URL: http://ml-service:8000
@@ -64,7 +65,8 @@ services:
     ports:
       - "127.0.0.1:8000:8000"   # internal service: loopback only (audit §3.4 — was published on all interfaces)
     environment:
-      DATABASE_URL: postgresql://mai:mai_local@postgres:5432/marketingai
+      # Roadmap 9-4: non-owner RLS role (V127); the password is the Flyway placeholder ml_role_password
+      DATABASE_URL: postgresql://mai_ml:${DB_ML_PASS:-mai_ml_local}@postgres:5432/marketingai
       REDIS_URL: redis://redis:6379/0
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

@@ -17,7 +17,7 @@ from app.services.taxonomy_service import (
     should_confirm, COSINE_MERGE_THRESHOLD, cosine_similarity,
     parse_pgvector, centroid_to_pgvector,
 )
-from app.services.db_client import get_pool
+from app.services.db_client import system_pool  # atom_registry is cross-tenant (roadmap 9-4)
 from app.security import check_internal_key
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ async def align_atom(
 ) -> AlignResponse:
     """Align a creative atom to the registry; create CANDIDATE if no match."""
     _check_key(x_internal_api_key)
-    pool = await get_pool()
+    pool = await system_pool()
     api_key = os.getenv("OPENAI_API_KEY")
     embedding = get_embedding(req.atom_value, api_key=api_key)
 
@@ -137,7 +137,7 @@ async def recalibrate(
 ) -> RecalibrateResponse:
     """Weekly: merge near-duplicate centroids, confirm mature candidates."""
     _check_key(x_internal_api_key)
-    pool = await get_pool()
+    pool = await system_pool()
     merged = 0
     confirmed = 0
 

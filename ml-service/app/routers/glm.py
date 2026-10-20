@@ -15,7 +15,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.services.db_client import get_pool
+from app.services.db_client import tenant_pool
 from app.services.model_updater import run_fit
 from app.services.glm_interactions_service import rank_interactions_by_bf
 from app.services.glm_prior_service import prior_for_variant, blend_with_hierarchy
@@ -83,7 +83,7 @@ class PredictResponse(BaseModel):
 # ─── Helper ──────────────────────────────────────────────────────────────────
 
 async def _load_posteriors(tenant_id: str, stage: str | None = None) -> list[dict]:
-    pool = await get_pool()
+    pool = await tenant_pool(tenant_id)
     if stage:
         rows = await pool.fetch(
             """
@@ -149,7 +149,7 @@ async def list_fit_runs(
     tenant_id: str,
     limit: int = Query(10, ge=1, le=100),
 ) -> list[dict]:
-    pool = await get_pool()
+    pool = await tenant_pool(tenant_id)
     rows = await pool.fetch(
         """
         SELECT id::text, status, n_obs_ctr, n_obs_cvr, n_obs_aov,
