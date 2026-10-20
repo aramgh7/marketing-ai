@@ -1,5 +1,6 @@
 package com.marketingai.scheduler;
 
+import com.marketingai.service.NoshowReportService;
 import java.util.Map;
 import org.springframework.jdbc.core.JdbcTemplate;
 import com.marketingai.service.NoshowStats;
@@ -37,6 +38,7 @@ public class WeeklyReportScheduler {
     private final AppProperties appProperties;
     private final RestTemplate restTemplate;
     private final JdbcTemplate jdbc;
+    private final NoshowReportService noshowReportService;
 
     @Autowired(required = false)
     private JavaMailSender mailSender;
@@ -168,7 +170,8 @@ public class WeeklyReportScheduler {
         sb.append("\n");
 
         sb.append("─── Appointments (roadmap 8-3) ───\n");
-        sb.append(noShowLine(tenant)).append("\n\n");
+        sb.append(noShowLine(tenant)).append("\n");
+        sb.append(noshowReportService.weeklyLines(tenant.getId())).append("\n");   // roadmap 8-15
 
         sb.append("─── Note ───\n");
         sb.append(AnalyticsService.DISCLAIMER).append("\n");

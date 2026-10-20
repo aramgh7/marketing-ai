@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.security import sign_model_bytes, verify_model_signature
+from app.services.noshow_report_service import build_report
 from app.services.cluster_service import extract_features, FEATURE_NAMES
 from app.services.propensity_service import (
     extract_propensity_features,
@@ -128,3 +129,16 @@ def fit(req: FitRequest) -> FitResponse:
         model_b64=base64.b64encode(model_bytes).decode(),
         model_sig=sign_model_bytes(model_bytes),
     )
+
+
+class NoshowReportRequest(BaseModel):
+    """Roadmap 8-15: show rate by risk tier, team-slot fill, rolling-holdout AUC."""
+    tenant_id: str
+    rows: list[dict[str, Any]] = []     # {noshow_prob, risk_tier, outcome, scored_at, scheduled_at}
+    slots: list[dict[str, Any]] = []    # {slot_at, capacity, booked, showed}
+    min_lead_days: float = 1.0
+
+
+@router.post("/report")
+def noshow_report(req: NoshowReportRequest) -> dict:
+    return build_report(req.rows, req.slots, req.min_lead_days)

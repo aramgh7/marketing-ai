@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.service.NoshowReportService;
 import com.marketingai.config.AppProperties;
 import com.marketingai.service.BookingWindowService;
 import lombok.RequiredArgsConstructor;
@@ -31,6 +32,7 @@ public class PropensityController {
     private final AppProperties       appProperties;
     private final JdbcTemplate        jdbc;
     private final BookingWindowService bookingWindowService;
+    private final NoshowReportService noshowReportService;
 
     // ─────────────────────────────────────────────────────────────────────────
     // POST /api/v1/propensity/score — score a single session
@@ -154,6 +156,14 @@ public class PropensityController {
     // ─────────────────────────────────────────────────────────────────────────
 
     /** GET /api/v1/propensity/booking-window — dynamic slot window by risk tier (roadmap 8-15). */
+    /** Roadmap 8-15: show rate by risk tier, team-slot fill rate, AUC on a rolling holdout. */
+    @GetMapping("/report")
+    public ResponseEntity<Map<String, Object>> report(
+            @RequestAttribute("tenantId") UUID tenantId,
+            @RequestParam(defaultValue = "30") int days) {
+        return ResponseEntity.ok(noshowReportService.report(tenantId, days));
+    }
+
     @GetMapping("/booking-window")
     public ResponseEntity<Map<String, Object>> bookingWindow(
             @RequestAttribute("tenantId") UUID tenantId,

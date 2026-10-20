@@ -1134,7 +1134,7 @@
 - [x] `noshow_scores` table (RLS); `NoshowPropensityService.scoreOnBooked()`; HIGH-risk arms: `get_followup_audience_override()` returns ghl_tag + preferred channels
 - [x] `slot_capacity_policies` table (enabled=false default); `POST /propensity/slot-fill` — P(no one shows) = Π(noshow_prob_i)
 - [x] `GET /api/v1/propensity/booking-window?session_id=` → dynamic calendar window: HIGH=1-3d, MED=1-5d, LOW=2-7d; `BookingWindowService` reads noshow_scores **[v1.3]**
-- [ ] Report: show rate by risk tier; team-slot fill rate; AUC on rolling holdout
+- [x] Report: show rate by risk tier; team-slot fill rate; AUC on rolling holdout — `noshow_report_service.py` (Jeffreys CI per tier, rank-based AUC on scores made ≥ 1 day before the call with the 0.70 gate, slot fill = showed / capacity from `slot_capacity_policies`; 6 tests) + `POST /propensity/report`; `NoshowReportService` collects rows/slots; `GET /api/v1/propensity/report?days=`; lines in the weekly report (2026-10-20)
 
 ### 8-16. Predicted Lead Value at Day 0 (vision §19.18.3; arch §16.16) — extends 8-2 `value_formula`, 3-21
 
