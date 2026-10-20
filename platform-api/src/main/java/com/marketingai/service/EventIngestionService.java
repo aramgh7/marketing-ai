@@ -66,6 +66,7 @@ public class EventIngestionService {
             String reject = rejectReason(e, variantTenants, creativeTenants, knownTenants);
             if (reject != null) {
                 log.debug("event rejected ({}): tenant={} variant={} type={}", reject, e.getTenantId(), e.getVariantId(), e.getEventType());
+                quarantine(e, reject);
                 skipped++;
                 continue;
             }
@@ -113,6 +114,8 @@ public class EventIngestionService {
     static String rejectReason(EventDto e, Map<UUID, UUID> variantTenants,
                                Map<UUID, UUID> creativeTenants, Set<UUID> knownTenants) {
         if (e.getTenantId() == null) return "missing_tenant";
+        // Roadmap 9-6 (arch §4.5): the client-generated event_id is the dedup / CAPI key — never optional
+        if (e.getEventId() == null || e.getEventId().isBlank()) return "missing_event_id";
         if (e.getEventType() != null && SERVER_ONLY_TYPES.contains(e.getEventType())) return "server_only_event_type";
         if (e.getVariantId() != null) {
             UUID owner = variantTenants.get(e.getVariantId());
@@ -125,6 +128,22 @@ public class EventIngestionService {
             return owner.equals(e.getTenantId()) ? null : "creative_tenant_mismatch";
         }
         return knownTenants.contains(e.getTenantId()) ? null : "unknown_tenant";
+    }
+
+    /** Roadmap 9-6: rejected rows are kept in events_rejected so a broken tracker is visible, not silent. */
+    private void quarantine(EventDto e, String reason) {
+        if (e.getTenantId() == null) return;
+        try {
+            String data = "{\"event_id\":" + jsonString(e.getEventId()) + ",\"session_id\":" + jsonString(e.getSessionId()) + "}";
+            jdbc.update("INSERT INTO events_rejected (tenant_id, event_type, event_data, reject_reason) VALUES (?, ?, ?::jsonb, ?)",
+                    e.getTenantId(), e.getEventType() == null ? "UNKNOWN" : e.getEventType(), data, reason);
+        } catch (Exception ex) {
+            log.debug("events_rejected insert skipped: {}", ex.getMessage());
+        }
+    }
+
+    private static String jsonString(String v) {
+        return v == null ? "null" : "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
     }
 
     /** Client-supplied monetary values are never trusted; revenue comes from the CRM webhook. */

@@ -15,8 +15,10 @@ import java.util.UUID;
  * CAPI Chain v2 value formula evaluator (vision §19.4 / arch §16.4).
  * Computes proxy values using k_accr × k_ticket multipliers stored in tenants.value_coeffs.
  *
- * Formula tokens: base_lead, base_schedule, base_reg + k_accr + k_ticket
+ * Formula tokens: base_lead, base_schedule, base_reg + k_accr + k_ticket + predicted_value
  * e.g. "4000*k_accr*k_ticket" → resolved from coeffs JSONB
+ * predicted_value (roadmap 9-7; arch §16.16) = the session's latest lead_value_predictions row;
+ * without a prediction the factor is dropped (token alone → base_lead*k_accr*k_ticket).
  *
  * SECURITY: Spring Boot NEVER writes thompson_arms alpha/beta.
  */
@@ -51,6 +53,50 @@ public class ValueFormulaService {
         JsonNode kTicketNode = coeffs.path("k_ticket");
         if (kTicketNode.isMissingNode()) return 1.0;
         return kTicketNode.path(ticketBucket).asDouble(1.0);
+    }
+
+    public static final String PREDICTED_VALUE_TOKEN = "predicted_value";
+
+    /** Roadmap 9-7: formula evaluation with the session-level predicted_value token. */
+    public double computeValue(UUID tenantId, String formula, Boolean selfAccredited, String ticketBucket,
+                               String sessionId) {
+        if (formula == null || formula.isBlank()) return 0.0;
+        String f = formula.trim();
+        if (f.contains(PREDICTED_VALUE_TOKEN)) {
+            Double predicted = sessionId == null ? null : lookupPredictedValue(tenantId, sessionId);
+            if (predicted != null) {
+                f = f.replace(PREDICTED_VALUE_TOKEN, String.valueOf(predicted));
+            } else {
+                f = withoutToken(f, PREDICTED_VALUE_TOKEN);
+                if (f.isBlank()) f = "base_lead*k_accr*k_ticket";
+            }
+        }
+        return computeValue(tenantId, f, selfAccredited, ticketBucket);
+    }
+
+    /** Drop one multiplicative factor from a "a*b*c" formula. */
+    static String withoutToken(String formula, String token) {
+        StringBuilder sb = new StringBuilder();
+        for (String part : formula.split("\\*")) {
+            String t = part.trim();
+            if (t.isEmpty() || t.equals(token)) continue;
+            if (sb.length() > 0) sb.append('*');
+            sb.append(t);
+        }
+        return sb.toString();
+    }
+
+    private Double lookupPredictedValue(UUID tenantId, String sessionId) {
+        try {
+            var rows = jdbc.queryForList(
+                    "SELECT predicted_value FROM lead_value_predictions WHERE tenant_id = ? AND session_id = ? "
+                    + "ORDER BY predicted_at DESC LIMIT 1", Double.class, tenantId, sessionId);
+            if (rows.isEmpty() || rows.get(0) == null) return null;
+            double v = rows.get(0);
+            return v > 0 ? v : null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**
@@ -109,19 +155,25 @@ public class ValueFormulaService {
     // ─── Investor CAPI map seed ───────────────────────────────────────────────
 
     /**
-     * Seed capi_event_map for the investor funnel (InteliGel Reg D 506(c)).
-     * Non-accredited → future_regcf pixel ONLY (§19.4 critical rule).
+     * Seed capi_event_map for the investor funnel (InteliGel Reg D 506(c)) — vision §19.4 / arch §16.3
+     * (roadmap 9-7): FORM_SUBMIT → Lead(value), BOOKED → Schedule, CALL_HELD → CompleteRegistration,
+     * ACCRED_VERIFIED → custom AccreditationVerified (no value, audiences only), FUNDS_RECEIVED → Purchase
+     * (the only Purchase per lead). Non-accredited → future_regcf pixel ONLY (§19.4 critical rule).
+     * NO_SHOW and INVEST_COMMITTED send nothing.
      */
     @Transactional
     public void seedInvestorCAPIMap(UUID tenantId) {
         Object[][] entries = {
-            // stage_key,          pixel_role,        meta_event_name,       value_formula,                   send_condition
-            {"BOOKED",             "investor_primary", "Lead",                "base_lead*k_accr*k_ticket",      "self_accredited = true"},
-            {"BOOKED",             "future_regcf",    "Lead",                "base_lead*0.3",                  "self_accredited = false"},
-            {"CALL_HELD",          "investor_primary", "Schedule",            "base_schedule*k_accr*k_ticket",  "self_accredited = true"},
-            {"ACCRED_VERIFIED",    "investor_primary", "CompleteRegistration","base_reg*k_ticket",              "self_accredited = true"},
-            {"INVEST_COMMITTED",   "investor_primary", "Purchase",            "monetaryValue",                  "self_accredited = true"},
+            // stage_key,          pixel_role,         meta_event_name,         value_formula,               send_condition
+            {"FORM_SUBMIT",        "investor_primary", "Lead",                  "base_lead*k_accr*k_ticket", "self_accredited = true"},
+            {"FORM_SUBMIT",        "future_regcf",     "Lead",                  "0",                         "self_accredited = false"},
+            {"BOOKED",             "investor_primary", "Schedule",              "base_schedule*k_ticket",    "self_accredited = true"},
+            {"CALL_HELD",          "investor_primary", "CompleteRegistration",  "base_reg*k_ticket",         null},
+            {"ACCRED_VERIFIED",    "investor_primary", "AccreditationVerified", "0",                         null},
+            {"FUNDS_RECEIVED",     "investor_primary", "Purchase",              "monetaryValue",             null},
         };
+        // Rows seeded by the pre-9-7 map that the vision does not have
+        jdbc.update("DELETE FROM capi_event_map WHERE tenant_id = ? AND stage_key = 'INVEST_COMMITTED'", tenantId);
 
         for (Object[] e : entries) {
             jdbc.update("""

@@ -197,6 +197,67 @@ public class AiVideoController {
         }
     }
 
+    // ── 9-16: real provider jobs ──────────────────────────────────────────────
+
+    /** Submit a generation job; the tenant flag travels with the request (ML refuses without it). */
+    @PostMapping("/generate")
+    public ResponseEntity<Map<String, Object>> generate(
+            @RequestAttribute("tenantId") UUID tenantId,
+            @RequestBody Map<String, Object> body) {
+        checkAiVideoEnabled(tenantId);
+        Map<String, Object> req = new java.util.HashMap<>(body);
+        req.put("tenant_id", tenantId.toString());
+        req.put("ai_video_enabled", true);
+        return ResponseEntity.accepted().body(callFastApi("/ai-video/generate", req));
+    }
+
+    /** Poll a job; a COMPLETED job is registered once as a creative with the AI label (vision §25 p.11). */
+    @GetMapping("/jobs/{jobId}")
+    public ResponseEntity<Map<String, Object>> job(
+            @RequestAttribute("tenantId") UUID tenantId,
+            @PathVariable String jobId) {
+        Map<String, Object> job = callFastApiGet("/ai-video/jobs/" + jobId);
+        if (!tenantId.toString().equals(String.valueOf(job.get("tenant_id")))) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "job not found");
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> creative = (Map<String, Object>) job.get("creative");
+        if ("COMPLETED".equals(job.get("status")) && creative != null && creative.get("file_url") != null) {
+            String externalId = "ai-video:" + jobId;
+            Integer exists = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM creatives WHERE tenant_id = ? AND external_id = ?", Integer.class, tenantId, externalId);
+            if (exists == null || exists == 0) {
+                UUID creativeId = UUID.randomUUID();
+                jdbc.update("""
+                        INSERT INTO creatives (id, tenant_id, external_id, type, title, file_url, status,
+                                               is_ai_generated, has_ai_disclosure, ai_provider)
+                        VALUES (?, ?, ?, 'VIDEO', ?, ?, 'UPLOADED', TRUE, FALSE, ?)
+                        """, creativeId, tenantId, externalId,
+                        "[AI] " + String.valueOf(job.getOrDefault("title", "AI video")),
+                        String.valueOf(creative.get("file_url")), String.valueOf(job.get("provider")));
+                job = new java.util.HashMap<>(job);
+                job.put("creative_id", creativeId.toString());
+            }
+        }
+        return ResponseEntity.ok(job);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> callFastApiGet(String path) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-Internal-API-Key", appProperties.getInternalApiKey());
+        try {
+            Map<String, Object> result = restTemplate.exchange(appProperties.getMlServiceUrl() + path,
+                    org.springframework.http.HttpMethod.GET, new HttpEntity<>(headers), Map.class).getBody();
+            if (result == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "job not found");
+            return result;
+        } catch (ResponseStatusException e) {
+            throw e;
+        } catch (Exception ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "ML service error: " + ex.getMessage());
+        }
+    }
+
     @SuppressWarnings("unchecked")
     private Map<String, Object> callFastApi(String path, Object body) {
         HttpHeaders headers = new HttpHeaders();

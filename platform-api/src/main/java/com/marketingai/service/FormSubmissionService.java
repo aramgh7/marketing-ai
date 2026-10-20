@@ -76,7 +76,7 @@ public class FormSubmissionService {
         if (selfAccredited != null && ticketBucket != null) {
             String formula = lookupFormula(tenantId, "FORM_SUBMIT");
             double predictedValue = formula != null
-                ? valueFormulaService.computeValue(tenantId, formula, selfAccredited, ticketBucket)
+                ? valueFormulaService.computeValue(tenantId, formula, selfAccredited, ticketBucket, sessionId)
                 : 0.0;
             if (predictedValue > 0) {
                 jdbc.update("""

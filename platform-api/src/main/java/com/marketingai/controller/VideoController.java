@@ -159,6 +159,24 @@ public class VideoController {
         return result;
     }
 
+    /** Roadmap 9-13: SRT/ASS from Whisper segments (or a transcript with naive timing). */
+    @PostMapping("/subtitles")
+    public Map<?, ?> subtitles(@RequestAttribute("tenantId") UUID tenantId,
+                               @RequestBody Map<String, Object> body) {
+        body = new HashMap<>(body);
+        body.put("tenant_id", tenantId.toString());
+        return orEmpty(mlPost("/video/subtitles", body));
+    }
+
+    /** Roadmap 9-14: text-to-speech voice-over; returns audio_url + VOICE_* atoms for the render step. */
+    @PostMapping("/tts")
+    public Map<?, ?> tts(@RequestAttribute("tenantId") UUID tenantId,
+                         @RequestBody Map<String, Object> body) {
+        body = new HashMap<>(body);
+        body.put("tenant_id", tenantId.toString());
+        return orEmpty(mlPost("/video/tts", body));
+    }
+
     @GetMapping("/render/{jobId}/status")
     public Map<?, ?> getRenderStatus(
             @RequestAttribute("tenantId") UUID tenantId,

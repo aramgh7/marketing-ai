@@ -26,6 +26,7 @@ class EventIngestionValidationTest {
 
     private static EventDto ev(UUID tenant, UUID variant, UUID creative, String type) {
         EventDto e = new EventDto();
+        e.setEventId("evt-" + java.util.UUID.randomUUID());   // roadmap 9-6: event_id is mandatory
         e.setTenantId(tenant);
         e.setVariantId(variant);
         e.setCreativeId(creative);
