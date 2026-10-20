@@ -1157,8 +1157,8 @@
 - [x] `post_call_service.py`: `route_followup_arm()` (COMMITTED→wire, NO_SHOW→recovery, COLD→none, objection-tag routing), `compute_objection_rates()`, `summarise_call_batch()`
 - [x] FastAPI: `POST /post-call/route-followup`, `POST /post-call/objection-rates`, `POST /post-call/summary`
 - [x] `PostCallController`: `POST /api/v1/post-call/notes` (upserts objection_summary, routes arm via FastAPI), `GET /notes`, `GET /summary`, `GET /objections`
-- [ ] `call_recordings` webhook (GHL / Zoom); Whisper transcription + PII redaction — deferred (8-18 complex, requires GHL recording consent per US state)
-- [ ] Follow-up audience `HELD`: material-sequence variants after call (deferred — needs live data)
+- [x] `call_recordings` webhook (GHL / Zoom); Whisper transcription + PII redaction — `POST /webhooks/call-recordings/{tenantId}` (per-location secret) → `call_recordings` (V125); `CallRecordingConsent` (all-party states need `consent_granted`, unknown state conservative; 4 tests); ML `POST /post-call/transcribe-recording` (Whisper via `transcription_service`, stub without key) → `pii_redaction_service` (email/phone/SSN/card/address/account placeholders, keyword objection tags, extractive summary; 6 tests); only the redacted transcript is stored; recording tags pre-fill `POST /post-call/notes`; `GET /post-call/recordings` (2026-10-20)
+- [x] Follow-up audience `HELD`: material-sequence variants after call — `followup_variants.audience` accepts `HELD` (V125), assignments unique per (appointment, audience); `PostCallController` Thompson-assigns a HELD variant after INTERESTED_FOLLOW / COMMITTED outcomes (2026-10-20)
 
 ### 8-19. Investor Archetypes (vision §19.18.6; arch §16.19) — extends 5-1, 5-4, 5-5, 5-8
 

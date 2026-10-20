@@ -35,6 +35,14 @@ public class PostCallController {
         String outcome  = (String) body.get("call_outcome");
         String nextStep = (String) body.getOrDefault("next_step", "NONE");
         Object tagsRaw  = body.getOrDefault("objection_tags", List.of());
+        UUID apptId = body.get("appointment_id") != null ? UUID.fromString((String) body.get("appointment_id")) : null;
+
+        // Roadmap 8-18: a transcribed recording pre-fills the objection tags the coordinator left empty
+        String tagsSource = "coordinator";
+        if (apptId != null && (!(tagsRaw instanceof List<?> l) || l.isEmpty())) {
+            List<String> fromRecording = recordingTags(tenantId, apptId);
+            if (!fromRecording.isEmpty()) { tagsRaw = fromRecording; tagsSource = "recording"; }
+        }
 
         jdbc.update("""
             INSERT INTO call_notes
@@ -69,7 +77,88 @@ public class PostCallController {
         // Route follow-up arm via FastAPI
         routeFollowupArm(tenantId, id, tagsRaw, outcome);
 
-        return ResponseEntity.ok(Map.of("id", id));
+        // Roadmap 8-18: HELD audience — material sequence after a held call
+        Map<String, Object> heldAssignment = null;
+        if (apptId != null && ("INTERESTED_FOLLOW".equals(outcome) || "COMMITTED".equals(outcome))) {
+            heldAssignment = assignHeldSequence(tenantId, apptId, body);
+        }
+
+        Map<String, Object> resp = new java.util.HashMap<>();
+        resp.put("id", id);
+        resp.put("objection_tags", tagsRaw);
+        resp.put("tags_source", tagsSource);
+        if (heldAssignment != null) resp.put("held_followup", heldAssignment);
+        return ResponseEntity.ok(resp);
+    }
+
+    /** Redacted transcripts + tags for an appointment (coordinator view). */
+    @GetMapping("/recordings")
+    public ResponseEntity<List<Map<String, Object>>> recordings(
+            @RequestAttribute("tenantId") UUID tenantId,
+            @RequestParam("appointment_id") UUID appointmentId) {
+        return ResponseEntity.ok(jdbc.queryForList("""
+            SELECT id, provider, status, consent_state, state_code, duration_sec,
+                   transcript_redacted, pii_counts, objection_tags, summary, received_at, transcribed_at
+            FROM call_recordings WHERE tenant_id = ? AND appointment_id = ?
+            ORDER BY received_at DESC
+            """, tenantId, appointmentId).stream().map(r -> {
+                r.put("pii_counts", com.marketingai.util.Jsonb.asMap(r.get("pii_counts")));
+                r.put("objection_tags", com.marketingai.util.Jsonb.asList(r.get("objection_tags")));
+                return r;
+            }).toList());
+    }
+
+    private List<String> recordingTags(UUID tenantId, UUID appointmentId) {
+        try {
+            List<Object> rows = jdbc.queryForList("""
+                SELECT objection_tags FROM call_recordings
+                WHERE tenant_id = ? AND appointment_id = ? AND status = 'TRANSCRIBED'
+                ORDER BY transcribed_at DESC LIMIT 1
+                """, Object.class, tenantId, appointmentId);
+            if (rows.isEmpty()) return List.of();
+            List<String> tags = new java.util.ArrayList<>();
+            for (Object o : com.marketingai.util.Jsonb.asList(rows.get(0))) {
+                if (o instanceof Map<?, ?> m && m.get("tag") != null) tags.add(m.get("tag").toString());
+            }
+            return tags;
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    /**
+     * Thompson-select a HELD-audience follow-up variant (material sequence after the call) and
+     * record the assignment next to the BOOKED one (unique per appointment × audience).
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> assignHeldSequence(UUID tenantId, UUID apptId, Map<String, Object> body) {
+        try {
+            List<Map<String, Object>> variants = jdbc.queryForList("""
+                SELECT id, name, alpha, beta, is_control, lifecycle_state
+                FROM followup_variants
+                WHERE tenant_id = ? AND audience = 'HELD' AND (lifecycle_state = 'APPROVED' OR is_control = true)
+                """, tenantId);
+            if (variants.isEmpty()) return Map.of("status", "no_held_variants");
+            Map<String, Object> ml = restTemplate.postForObject(
+                appProperties.getMlServiceUrl() + "/decide/followup",
+                Map.of("tenant_id", tenantId.toString(), "appointment_id", apptId.toString(),
+                       "country_code", String.valueOf(body.getOrDefault("country_code", "")),
+                       "ticket_bucket", String.valueOf(body.getOrDefault("ticket_bucket", "")),
+                       "exploration_rate", 0.15, "variants", variants),
+                Map.class);
+            if (ml == null || ml.get("variant_id") == null) return Map.of("status", "ml_unavailable");
+            UUID assignId = UUID.randomUUID();
+            int n = jdbc.update("""
+                INSERT INTO followup_assignments (id, tenant_id, appointment_id, variant_id, context_key, outcome, audience)
+                VALUES (?, ?, ?, ?::uuid, ?, 'UNKNOWN', 'HELD')
+                ON CONFLICT (appointment_id, audience) DO NOTHING
+                """, assignId, tenantId, apptId, ml.get("variant_id"), ml.get("context_key"));
+            return Map.of("status", n > 0 ? "assigned" : "already_assigned",
+                          "variant_id", ml.get("variant_id"), "context_key", String.valueOf(ml.get("context_key")));
+        } catch (Exception e) {
+            log.warn("HELD follow-up assignment failed for appointment {}: {}", apptId, e.getMessage());
+            return Map.of("status", "error", "error", String.valueOf(e.getMessage()));
+        }
     }
 
     @GetMapping("/notes")
