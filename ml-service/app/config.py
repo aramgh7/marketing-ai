@@ -5,6 +5,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://mai:mai_local@localhost:5432/marketingai"
     redis_url: str = "redis://localhost:6379/0"
     anthropic_api_key: str = ""
+    # Claude model ids (one place to bump; audit §16: no stale ids scattered across routers)
+    llm_model_fast: str = "claude-haiku-5-5"       # classification, sentiment, VoC extraction
+    llm_model_default: str = "claude-sonnet-5-5"   # content generation, briefs
+    llm_model_vision: str = "claude-opus-5-5"      # Creative DNA: image frames + transcript
     openai_api_key: str = ""
     platform_api_url: str = "http://localhost:8080"
     internal_api_key: str = "local-internal-key"

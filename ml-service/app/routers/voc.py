@@ -11,6 +11,8 @@ from typing import Optional
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
+from app.config import settings
+
 from app.services.voc_service import (
     redact_pii, build_extraction_prompt, parse_extraction_response,
     fallback_extract, CATEGORIES,
@@ -68,7 +70,7 @@ async def extract_objections(
             client = anthropic.Anthropic(api_key=anthropic_key)
             prompt = build_extraction_prompt(redacted, req.niche)
             message = client.messages.create(
-                model="claude-haiku-4-5",
+                model=settings.llm_model_fast,
                 max_tokens=1024,
                 messages=[{"role": "user", "content": prompt}],
             )

@@ -10,7 +10,8 @@ from app.config import settings
 class LLMClient:
     """Synchronous text completion client for pure-logic services."""
 
-    def complete(self, prompt: str, model: str = "claude-haiku-5-5") -> str:
+    def complete(self, prompt: str, model: str | None = None) -> str:
+        model = model or settings.llm_model_fast
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
         message = client.messages.create(
             model=model,
@@ -78,7 +79,7 @@ async def analyze_image_url(image_url: str) -> dict[str, str]:
 
     client = get_client()
     message = await client.messages.create(
-        model="claude-opus-4-5",
+        model=settings.llm_model_vision,
         max_tokens=512,
         system=IMAGE_SYSTEM,
         messages=[{
@@ -103,7 +104,7 @@ async def analyze_transcript(transcript: str) -> dict[str, str]:
     """Analyze transcript text with Claude."""
     client = get_client()
     message = await client.messages.create(
-        model="claude-opus-4-5",
+        model=settings.llm_model_vision,
         max_tokens=512,
         system=TRANSCRIPT_SYSTEM,
         messages=[{
