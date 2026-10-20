@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.security.TenantContext;
 import com.marketingai.dto.event.EventBatchRequest;
 import com.marketingai.dto.event.EventBatchResponse;
 import com.marketingai.service.EventIngestionService;
@@ -34,8 +35,10 @@ public class EventController {
         String userAgent  = httpRequest.getHeader("User-Agent");
         Integer cfBotScore = parseCfBotScore(httpRequest.getHeader("CF-Bot-Score"));
 
-        EventBatchResponse response = ingestionService.ingest(
-                req.getEvents(), ip, userAgent, cfBotScore);
+        // Public endpoint: events carry their tenant_id; ingestion runs in system scope
+        // (server-side tenant validation is audit §10 step 6).
+        EventBatchResponse response = TenantContext.callAsSystem(() ->
+                ingestionService.ingest(req.getEvents(), ip, userAgent, cfBotScore));
         return ResponseEntity.ok(response);
     }
 

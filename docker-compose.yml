@@ -39,8 +39,10 @@ services:
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: marketingai
-      DB_USER: mai
+      DB_USER: mai                      # Flyway (schema owner)
       DB_PASS: mai_local
+      DB_APP_USER: mai_app              # application role — RLS enforced
+      DB_APP_PASS: ${DB_APP_PASS:-mai_app_local}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       ML_SERVICE_URL: http://ml-service:8000

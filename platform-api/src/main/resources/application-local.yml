@@ -2,8 +2,9 @@ spring:
   datasource:
     # stringtype=unspecified: allows String parameters to be coerced to JSONB by PostgreSQL
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:marketingai}?stringtype=unspecified
-    username: ${DB_USER:mai}
-    password: ${DB_PASS:mai_local}
+    # Non-owner application role: RLS policies are enforced (FORCE) for it. Flyway below keeps the owner role.
+    username: ${DB_APP_USER:mai_app}
+    password: ${DB_APP_PASS:mai_app_local}
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
@@ -16,6 +17,8 @@ spring:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:marketingai}
     user: ${DB_USER:mai}
     password: ${DB_PASS:mai_local}
+    placeholders:
+      app_role_password: ${DB_APP_PASS:mai_app_local}   # V116: ALTER ROLE mai_app LOGIN PASSWORD
 
 logging:
   level:

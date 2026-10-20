@@ -23,7 +23,7 @@ async def save_atoms(tenant_id: str, creative_id: str, atoms: list[dict]) -> Non
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await conn.execute("SET LOCAL app.current_tenant = $1", tenant_id)
+            await conn.execute("SELECT set_config('app.current_tenant', $1, true)", tenant_id)
             # Remove previous auto-extracted atoms (keep manual ones)
             await conn.execute(
                 "DELETE FROM creative_atoms WHERE creative_id = $1 AND extracted_by != 'manual'",
@@ -49,7 +49,7 @@ async def update_creative_status(tenant_id: str, creative_id: str, status: str) 
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await conn.execute("SET LOCAL app.current_tenant = $1", tenant_id)
+            await conn.execute("SELECT set_config('app.current_tenant', $1, true)", tenant_id)
             await conn.execute(
                 "UPDATE creatives SET status = $1 WHERE id = $2 AND tenant_id = $3",
                 status,

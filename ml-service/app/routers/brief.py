@@ -51,7 +51,7 @@ async def generate_brief(
 
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await conn.execute("SET LOCAL app.current_tenant = $1", req.tenant_id)
+            await conn.execute("SELECT set_config('app.current_tenant', $1, true)", req.tenant_id)
 
             atoms = await conn.fetch(
                 """
@@ -192,7 +192,7 @@ async def generate_data_driven_brief(
 
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await conn.execute("SET LOCAL app.current_tenant = $1", req.tenant_id)
+            await conn.execute("SELECT set_config('app.current_tenant', $1, true)", req.tenant_id)
 
             # 1. Top atoms from posteriors (α − β > 0 indicates positive signal)
             top_atoms = await conn.fetch(

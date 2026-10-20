@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.security.TenantContext;
 import com.marketingai.dto.webhook.GhlWebhookPayload;
 import com.marketingai.service.GhlWebhookService;
 import lombok.RequiredArgsConstructor;
@@ -28,7 +29,8 @@ public class GhlWebhookController {
             @PathVariable UUID tenantId,
             @RequestBody GhlWebhookPayload payload) {
 
-        webhookService.process(tenantId, payload);
+        // Path tenant is the RLS scope for everything this webhook touches.
+        TenantContext.runAs(tenantId.toString(), () -> webhookService.process(tenantId, payload));
         return ResponseEntity.ok(Map.of("status", "received"));
     }
 }

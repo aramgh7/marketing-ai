@@ -39,7 +39,7 @@ async def diagnostics(
 
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await conn.execute("SET LOCAL app.current_tenant = $1", tenant_id)
+            await conn.execute("SELECT set_config('app.current_tenant', $1, true)", tenant_id)
 
             funnel = await conn.fetch(
                 """

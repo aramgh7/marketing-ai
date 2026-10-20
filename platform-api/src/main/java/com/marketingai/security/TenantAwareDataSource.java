@@ -5,9 +5,16 @@ import org.springframework.jdbc.datasource.AbstractDataSource;
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.SQLException;
-import java.sql.Statement;
-import java.util.UUID;
 
+/**
+ * Wraps the Hikari pool so every handed-out connection applies the thread's {@link TenantContext}
+ * scope to the PostgreSQL session before each statement (see {@link TenantScopedConnection}).
+ *
+ * Audit 3.1: the previous version ran {@code SET LOCAL} inside {@code getConnection()}. HikariCP hands
+ * out connections in autocommit mode and Spring begins the transaction afterwards, so PostgreSQL
+ * discarded the setting ("SET LOCAL can only be used in transaction blocks") and
+ * {@code app.current_tenant} was never set for any query.
+ */
 public class TenantAwareDataSource extends AbstractDataSource {
 
     private final DataSource delegate;
@@ -18,37 +25,11 @@ public class TenantAwareDataSource extends AbstractDataSource {
 
     @Override
     public Connection getConnection() throws SQLException {
-        Connection conn = delegate.getConnection();
-        applyTenant(conn);
-        return conn;
+        return TenantScopedConnection.wrap(delegate.getConnection());
     }
 
     @Override
     public Connection getConnection(String username, String password) throws SQLException {
-        Connection conn = delegate.getConnection(username, password);
-        applyTenant(conn);
-        return conn;
-    }
-
-    private void applyTenant(Connection conn) throws SQLException {
-        String tenantId = TenantContext.get();
-        // arch v1.1 §8: SET LOCAL is transaction-scoped — resets automatically when the
-        // transaction ends. Plain SET persists on the pooled connection and leaks the tenant
-        // to whoever gets that connection next from HikariCP.
-        String sql = (tenantId != null && isValidUuid(tenantId))
-                ? "SET LOCAL app.current_tenant = '" + tenantId + "'"
-                : "SET LOCAL app.current_tenant = ''";
-        try (Statement stmt = conn.createStatement()) {
-            stmt.execute(sql);
-        }
-    }
-
-    private boolean isValidUuid(String value) {
-        try {
-            UUID.fromString(value);
-            return true;
-        } catch (IllegalArgumentException e) {
-            return false;
-        }
+        return TenantScopedConnection.wrap(delegate.getConnection(username, password));
     }
 }

@@ -14,4 +14,5 @@ for _ in $(seq 1 30); do docker exec "$NAME" pg_isready -U mai -d marketingai >/
 # Windows Git Bash mangles /flyway/sql unless path conversion is disabled.
 case "$(uname -s)" in MINGW*|MSYS*) MIG="$(cygpath -m "$MIG")"; export MSYS_NO_PATHCONV=1;; esac
 docker run --rm -v "$MIG:/flyway/sql" flyway/flyway:10 \
-  -url="jdbc:postgresql://host.docker.internal:$PORT/marketingai" -user=mai -password=mai_local migrate
+  -url="jdbc:postgresql://host.docker.internal:$PORT/marketingai" -user=mai -password=mai_local \
+  -placeholders.app_role_password=mai_app_local migrate
