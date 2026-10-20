@@ -16,14 +16,23 @@ def _clip_weight(w: float, w_max: float) -> float:
     return min(w, w_max)
 
 
-def _bootstrap_ci(values: list[float], n_boot: int = 500, alpha: float = 0.05,
-                  seed: int = 42) -> tuple[float, float]:
+def _bootstrap_snips_ci(weights: list[float], rewards: list[float], n_boot: int = 500,
+                        alpha: float = 0.05, seed: int = 42) -> tuple[float, float]:
+    """Percentile bootstrap of the self-normalised estimator Σwr/Σw over resampled decisions.
+
+    Audit 6.2: the previous version bootstrapped per-decision values in which the weights cancelled,
+    i.e. a CI for the logged reward rate rather than for SNIPS.
+    """
     rng = random.Random(seed)
+    n = len(weights)
     stats = []
-    n = len(values)
     for _ in range(n_boot):
-        sample = [values[rng.randint(0, n - 1)] for _ in range(n)]
-        stats.append(sum(sample) / n)
+        sw = swr = 0.0
+        for _k in range(n):
+            i = rng.randint(0, n - 1)
+            sw += weights[i]
+            swr += weights[i] * rewards[i]
+        stats.append(swr / sw if sw > 1e-9 else 0.0)
     stats.sort()
     lo_idx = int(alpha / 2 * n_boot)
     hi_idx = int((1 - alpha / 2) * n_boot)
@@ -90,17 +99,17 @@ def compute_ope(
     ess = (weight_sum ** 2) / max(w2, 1e-9)
 
     # Bootstrap CI on SNIPS
+    rewards = [float(d.get("reward", 0) or 0) for d in decisions]
     if n >= 10:
-        ci_low, ci_high = _bootstrap_ci(
-            [ips_terms[i] / max(weights[i], 1e-9) * (weight_sum / n)
-             for i in range(n)])
+        ci_low, ci_high = _bootstrap_snips_ci(weights, rewards)
     else:
         ci_low, ci_high = snips * 0.8, snips * 1.2
 
-    # Verdict: current policy is at least as good as logged if SNIPS >= baseline
-    # Baseline = logged policy mean reward (approximately 1.0 in ratio)
-    # Pass if SNIPS >= 0.95 (within 5% of logged) AND ESS sufficient
-    verdict = "PASS" if snips >= 0.95 and ess >= min_ess else "FAIL"
+    # Verdict (audit 6.1): SNIPS is an absolute reward *rate* of the current policy (typically
+    # 0.03-0.05), so it is compared with the logged policy's mean reward, not with 0.95.
+    # PASS when the current policy keeps >= 95 % of the logged reward rate AND ESS is sufficient.
+    baseline = mean_reward
+    verdict = "PASS" if snips >= 0.95 * baseline and ess >= min_ess else "FAIL"
     if len(decisions) < 30:
         verdict = "INSUFFICIENT_DATA"
 
@@ -112,6 +121,7 @@ def compute_ope(
         "ci_high": round(ci_high, 4),
         "ess": round(ess, 1),
         "clipped_mass": round(clipped_mass, 4),
+        "logged_mean_reward": round(mean_reward, 4),
         "verdict": verdict,
     }
 

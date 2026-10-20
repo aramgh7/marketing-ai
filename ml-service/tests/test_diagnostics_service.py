@@ -37,11 +37,11 @@ def test_bh_single_not_significant():
 
 
 def test_bh_multiple_correction():
-    # 5 p-values all at 0.04 — BH at FDR=0.10 should accept some
+    # 5 p-values all at 0.04 at FDR=0.10: the largest rank k with p(k) <= 0.10*k/5 is k=5
+    # (0.04 <= 0.10), so BH rejects all five (audit 6.8 — the old code stopped at rank 1).
     p_vals = [0.04, 0.04, 0.04, 0.04, 0.04]
     flags = benjamini_hochberg(p_vals, fdr=0.10)
-    # BH threshold for rank 1 = 0.10*1/5 = 0.02 → 0.04 > 0.02 → none rejected
-    assert all(f is False for f in flags)
+    assert all(f is True for f in flags)
 
 
 def test_bh_rejects_clearly_significant():

@@ -94,6 +94,7 @@ class CVRCollapseRequest(BaseModel):
     n_conversions: int
     n_sessions: int
     threshold_drop: float = 0.3
+    baseline_n: Optional[int] = None   # baseline sessions (audit 6.6)
 
 
 @router.post("/cvr-collapse")
@@ -105,4 +106,5 @@ async def cvr_collapse(req: CVRCollapseRequest, x_internal_api_key: Optional[str
         n_conversions=req.n_conversions,
         n_sessions=req.n_sessions,
         threshold_drop=req.threshold_drop,
+        baseline_n=req.baseline_n,
     )

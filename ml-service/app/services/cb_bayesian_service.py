@@ -33,17 +33,9 @@ def compute_cpa_exceedance_probability(
             "reason": "Insufficient data (no clicks or spend)",
         }
 
-    observed_cpa = total_spend / max(conversions, 1)
-
-    if conversions == 0:
-        # Zero conversions — CPA is effectively infinite; fire if spend is meaningful
-        p_exceed = 1.0 if total_spend > threshold * 0.5 else 0.5
-        return {
-            "p_exceed": p_exceed,
-            "should_trigger": p_exceed > 0.90,
-            "observed_cpa": None,
-            "reason": f"Zero conversions; spend={total_spend:.2f}; threshold={threshold:.2f}",
-        }
+    # Audit 6.5: no special case for zero conversions — Beta(1, clicks+1) already encodes it.
+    # (The old branch fired on 1 click / $101 and stayed silent on 500 clicks / $99.)
+    observed_cpa = total_spend / conversions if conversions > 0 else None
 
     alpha_cvr = float(conversions) + 1.0
     beta_cvr  = float(clicks - conversions) + 1.0
@@ -64,12 +56,12 @@ def compute_cpa_exceedance_probability(
         p_exceed = exceed_count / n_samples
 
     except Exception:
-        p_exceed = 1.0 if observed_cpa > threshold else 0.0
+        p_exceed = 1.0 if (observed_cpa is None or observed_cpa > threshold) else 0.0
 
     return {
         "p_exceed": round(p_exceed, 4),
         "should_trigger": p_exceed > 0.90,
-        "observed_cpa": round(observed_cpa, 2),
+        "observed_cpa": round(observed_cpa, 2) if observed_cpa is not None else None,
         "threshold_cpa": round(threshold, 2),
         "target_cpa": target_cpa,
         "cpa_multiplier": cpa_multiplier,

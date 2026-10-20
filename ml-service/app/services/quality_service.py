@@ -98,12 +98,19 @@ def detect_cvr_collapse(
     n_conversions: int,
     n_sessions: int,
     threshold_drop: float = 0.3,
+    baseline_n: int | None = None,
 ) -> dict:
     """
     CVR-collapse detector for 3-13 site health full.
     collapsed=True if relative drop >= threshold AND two-proportion z-test p < 0.05.
+
+    Audit 6.6: the z-test used n_conversions as the baseline sample size (ZeroDivisionError on a
+    full collapse, huge SE otherwise). `baseline_n` is the number of baseline sessions; when the
+    caller does not know it, the current window size is assumed.
     """
     relative_drop = (baseline_cvr - current_cvr) / max(baseline_cvr, 1e-9)
+    n1 = n_sessions
+    n2 = baseline_n if baseline_n and baseline_n > 0 else n_sessions
 
     # Two-proportion z-test (normal approximation)
     if n_sessions < 10 or baseline_cvr <= 0:
@@ -114,10 +121,8 @@ def detect_cvr_collapse(
             "verdict": "INSUFFICIENT_DATA",
         }
 
-    pooled = (current_cvr * n_sessions + baseline_cvr * n_conversions) / (
-        n_sessions + n_conversions
-    )
-    se = math.sqrt(pooled * (1 - pooled) * (1 / n_sessions + 1 / n_conversions))
+    pooled = (current_cvr * n1 + baseline_cvr * n2) / (n1 + n2)
+    se = math.sqrt(max(pooled * (1 - pooled), 0.0) * (1 / n1 + 1 / n2))
     if se < 1e-10:
         z = 0.0
     else:

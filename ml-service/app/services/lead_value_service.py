@@ -53,7 +53,8 @@ def calibrate_value_model(
     """OLS calibration: predicted vs realised. Acceptance: slope ∈ [0.8, 1.2]."""
     valid = [
         p for p in predictions
-        if p.get("predicted_value") and p.get("realised_value") and p["predicted_value"] > 0
+        if p.get("predicted_value") is not None and p.get("realised_value") is not None
+        and p["predicted_value"] > 0
     ]
 
     if len(valid) < min_samples:

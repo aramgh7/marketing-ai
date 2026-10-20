@@ -97,7 +97,11 @@ def _pivot_atoms(atoms: list[dict]) -> pd.DataFrame:
     if not atoms:
         return pd.DataFrame(columns=["creative_id"])
     df = pd.DataFrame(atoms)
-    return df.pivot(index="creative_id", columns="atom_type", values="atom_value").reset_index()
+    wide = df.pivot(index="creative_id", columns="atom_type", values="atom_value").reset_index()
+    return normalise_atom_columns(wide)
+
+
+from app.services.glm_features import normalise_atom_columns  # noqa: E402
 
 
 async def _build_dataframe(tenant_id: str, pool) -> pd.DataFrame | None:

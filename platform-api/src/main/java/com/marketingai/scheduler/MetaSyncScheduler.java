@@ -1,5 +1,6 @@
 package com.marketingai.scheduler;
 
+import com.marketingai.service.MetaSyncMath;
 import com.marketingai.entity.MetaAdSet;
 import com.marketingai.entity.MetaCampaign;
 import com.marketingai.entity.Tenant;
@@ -46,9 +47,12 @@ public class MetaSyncScheduler {
 
                 Map<String, String> insights = metaApi.getInsights(token, campaign.getMetaCampaignId());
                 float spend = Float.parseFloat(insights.getOrDefault("spend", "0"));
+                Instant now = Instant.now();
+                // Audit 6.3: date_preset=today is cumulative — add only the delta since the last same-day sync
+                float delta = MetaSyncMath.spendDelta(spend, campaign.getSpendToday(), campaign.getSyncedAt(), now);
                 campaign.setSpendToday(spend);
-                campaign.setSpendTotal((campaign.getSpendTotal() == null ? 0f : campaign.getSpendTotal()) + spend);
-                campaign.setSyncedAt(Instant.now());
+                campaign.setSpendTotal((campaign.getSpendTotal() == null ? 0f : campaign.getSpendTotal()) + delta);
+                campaign.setSyncedAt(now);
                 campaignRepo.save(campaign);
                 synced++;
 
@@ -71,13 +75,22 @@ public class MetaSyncScheduler {
                 long clicks = Long.parseLong(insights.getOrDefault("clicks", "0"));
                 long conversions = Long.parseLong(insights.getOrDefault("conversions", "0"));
 
+                Instant now = Instant.now();
+                Instant prevAt = adSet.getSyncedAt();
+                // Audit 6.3: insights are day-to-date; advance totals by the delta since the previous same-day sync
+                adSet.setSpendTotal((adSet.getSpendTotal() == null ? 0f : adSet.getSpendTotal())
+                        + MetaSyncMath.spendDelta(spend, adSet.getSpendToday(), prevAt, now));
+                adSet.setImpressionsTotal((adSet.getImpressionsTotal() == null ? 0L : adSet.getImpressionsTotal())
+                        + MetaSyncMath.countDelta(impressions, adSet.getImpressionsToday(), prevAt, now));
+                adSet.setClicksTotal((adSet.getClicksTotal() == null ? 0L : adSet.getClicksTotal())
+                        + MetaSyncMath.countDelta(clicks, adSet.getClicksToday(), prevAt, now));
+                adSet.setConversionsTotal((adSet.getConversionsTotal() == null ? 0L : adSet.getConversionsTotal())
+                        + MetaSyncMath.countDelta(conversions, adSet.getConversionsToday(), prevAt, now));
                 adSet.setSpendToday(spend);
-                adSet.setSpendTotal((adSet.getSpendTotal() == null ? 0f : adSet.getSpendTotal()) + spend);
-                // Accumulate totals (today's delta added each sync cycle)
-                adSet.setImpressionsTotal((adSet.getImpressionsTotal() == null ? 0L : adSet.getImpressionsTotal()) + impressions);
-                adSet.setClicksTotal((adSet.getClicksTotal() == null ? 0L : adSet.getClicksTotal()) + clicks);
-                adSet.setConversionsTotal((adSet.getConversionsTotal() == null ? 0L : adSet.getConversionsTotal()) + conversions);
-                adSet.setSyncedAt(Instant.now());
+                adSet.setImpressionsToday(impressions);
+                adSet.setClicksToday(clicks);
+                adSet.setConversionsToday(conversions);
+                adSet.setSyncedAt(now);
                 adSetRepo.save(adSet);
             } catch (Exception e) {
                 log.warn("MetaSyncScheduler: failed to sync ad set {}: {}", adSet.getId(), e.getMessage());

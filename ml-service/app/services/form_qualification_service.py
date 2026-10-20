@@ -137,7 +137,7 @@ def calibrate_value_coefficients(
         predicted = entry.get("predicted_value")
         actual    = entry.get("actual_value")
         bucket    = entry.get("ticket_bucket")
-        if predicted and actual and bucket and float(predicted) > 0:
+        if predicted is not None and actual is not None and bucket and float(predicted) > 0:
             bucket_data[bucket].append(float(actual) / float(predicted))
 
     suggestions = {}

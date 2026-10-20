@@ -14,6 +14,15 @@ SYMPTOMS = [
     "LPV_CLICK_GAP", "MARKET_SHIFT", "CREATIVE_FATIGUE",
 ]
 
+# Audit 6.7: for these symptoms the bad direction is a RISE of the observed metric
+# (bounce rate, fatigue index, LPV/click gap); every other symptom is a drop.
+RISE_IS_BAD = {"BOUNCE_SPIKE", "CREATIVE_FATIGUE", "LPV_CLICK_GAP"}
+
+
+def symptom_p_value(symptom: str, z: float) -> float:
+    """One-tailed p-value in the direction that is bad for this symptom."""
+    return z_to_p_value(-z) if symptom in RISE_IS_BAD else z_to_p_value(z)
+
 
 def compute_z_score(observed: float, baseline: float, baseline_std: float, n: int) -> float:
     if baseline_std <= 0 or n <= 0:
@@ -38,18 +47,24 @@ def z_to_p_value(z: float) -> float:
 
 
 def benjamini_hochberg(p_values: list[float], fdr: float = 0.10) -> list[bool]:
-    """BH procedure for FDR control. Returns True = significant after correction."""
+    """BH procedure for FDR control. Returns True = significant after correction.
+
+    Audit 6.8: reject every hypothesis up to the LARGEST rank k with p(k) <= k·q/n. The previous
+    loop stopped at the first non-significant rank, which under-rejects
+    (p = [0.04, 0.05, 0.06], q = 0.10 -> BH rejects all three; the old code rejected none).
+    """
     n = len(p_values)
     if n == 0:
         return []
     indexed = sorted(enumerate(p_values), key=lambda x: x[1])
+    k_max = 0
+    for rank, (_idx, p) in enumerate(indexed, start=1):
+        if p <= fdr * rank / n:
+            k_max = rank
     rejected = [False] * n
-    for rank, (idx, p) in enumerate(indexed, start=1):
-        threshold = fdr * rank / n
-        if p <= threshold:
+    for rank, (idx, _p) in enumerate(indexed, start=1):
+        if rank <= k_max:
             rejected[idx] = True
-        else:
-            break
     return rejected
 
 
@@ -82,7 +97,7 @@ def run_diagnostics(
             obs.get("baseline_std", obs["baseline"] * 0.1 + 1e-6),
             obs["n"],
         )
-        p_values.append(z_to_p_value(z))
+        p_values.append(symptom_p_value(obs.get("symptom", ""), z))
 
     significant_flags = benjamini_hochberg(p_values, fdr)
 

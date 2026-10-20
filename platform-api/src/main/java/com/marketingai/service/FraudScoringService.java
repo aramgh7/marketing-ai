@@ -79,13 +79,8 @@ public class FraudScoringService {
 
             List<String> reasons = new ArrayList<>();
 
-            // Rule 1: PAGE_VIEW with no interaction (bot-like — no scroll/click/hover)
-            if (types.contains("PAGE_VIEW")
-                    && !types.contains("SCROLL")
-                    && !types.contains("CLICK")
-                    && !types.contains("HOVER")) {
-                reasons.add("NO_INTERACTION");
-            }
+            // Rule 1 (NO_INTERACTION) moved to reviewRecentSessions: the tracker flushes every 5 s,
+            // so the first batch of almost every real visitor has only PAGE_VIEW (audit 6.4).
 
             // Rule 2: Known bot user-agent
             if (isBotUserAgent(userAgent)) {
@@ -112,17 +107,30 @@ public class FraudScoringService {
     public void reviewRecentSessions() {
         // Sessions completed in the last 2h, not yet flagged
         List<Map<String, Object>> sessions = jdbc.queryForList("""
-                SELECT id, tenant_id, ip_address, user_agent,
-                       started_at, last_event_at
-                FROM sessions
-                WHERE last_event_at > now() - interval '2 hours'
-                  AND is_suspicious = false
+                SELECT s.id, s.tenant_id, s.ip_address, s.user_agent,
+                       s.started_at, s.last_event_at,
+                       (s.last_event_at < now() - interval '30 minutes') AS closed,
+                       EXISTS (
+                           SELECT 1 FROM events e
+                           WHERE e.session_id = s.id AND e.tenant_id = s.tenant_id
+                             AND e.event_type IN ('SCROLL','CLICK','HOVER','BLOCK_VIEW','FORM_START',
+                                                  'FORM_SUBMIT','VIDEO_PROGRESS','FIRST_CLICK','CTA_CLICK')
+                       ) AS interacted
+                FROM sessions s
+                WHERE s.last_event_at > now() - interval '2 hours'
+                  AND s.is_suspicious = false
                 """);
 
         for (Map<String, Object> row : sessions) {
             String sid       = (String) row.get("id");
             UUID   tenantId  = (UUID)   row.get("tenant_id");
             List<String> reasons = new ArrayList<>();
+
+            // Rule 1: closed session that never produced a single interaction event (audit 6.4:
+            // evaluated retrospectively on the whole session, not on the first 5-second batch)
+            if (Boolean.TRUE.equals(row.get("closed")) && !Boolean.TRUE.equals(row.get("interacted"))) {
+                reasons.add("NO_INTERACTION");
+            }
 
             // Rule 4: Session too short (under 2 seconds total)
             Timestamp startedAt = (Timestamp) row.get("started_at");

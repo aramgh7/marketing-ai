@@ -81,6 +81,11 @@ async def align_atom(
                    RETURNING id::text""",
                 req.atom_type, req.atom_value, emb_str,
             )
+            await conn.execute(
+                "INSERT INTO atom_registry_tenants (registry_id, tenant_id) VALUES ($1::uuid, $2::uuid) "
+                "ON CONFLICT DO NOTHING",
+                registry_id, req.tenant_id,
+            )
             result["registry_id"] = registry_id
         else:
             rid = result["registry_id"]
@@ -99,10 +104,20 @@ async def align_atom(
                    WHERE id = $2::uuid""",
                 centroid_to_pgvector(new_centroid), rid,
             )
-            tenant_count_row = await conn.fetchrow(
-                "SELECT tenant_count FROM atom_registry WHERE id = $1::uuid", rid,
+            # Audit 6.11: tenant_count was frozen at 1, so should_confirm (>= 2 tenants) never fired.
+            await conn.execute(
+                "INSERT INTO atom_registry_tenants (registry_id, tenant_id) VALUES ($1::uuid, $2::uuid) "
+                "ON CONFLICT DO NOTHING",
+                rid, req.tenant_id,
             )
-            if should_confirm(n, tenant_count_row["tenant_count"] or 0):
+            tenant_count = await conn.fetchval(
+                """UPDATE atom_registry
+                   SET tenant_count = (SELECT COUNT(*) FROM atom_registry_tenants t WHERE t.registry_id = $1::uuid)
+                   WHERE id = $1::uuid
+                   RETURNING tenant_count""",
+                rid,
+            )
+            if should_confirm(n, tenant_count or 0):
                 await conn.execute(
                     "UPDATE atom_registry SET status = 'CONFIRMED' "
                     "WHERE id = $1::uuid AND status = 'CANDIDATE'",

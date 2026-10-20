@@ -83,6 +83,11 @@ public class MetaAdSet {
     @Column(nullable = false)
     private Long impressionsTotal = 0L;
 
+    /** Day-to-date snapshots from the last sync (V119) — needed to compute deltas (audit 6.3). */
+    private Long impressionsToday = 0L;
+    private Long clicksToday = 0L;
+    private Long conversionsToday = 0L;
+
     @Column(nullable = false)
     private Long clicksTotal = 0L;
 
