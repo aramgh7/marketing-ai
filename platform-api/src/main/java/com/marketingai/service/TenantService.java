@@ -42,7 +42,7 @@ public class TenantService {
                 UPDATE tenants
                 SET autonomy_level = settings->>'autonomy_before_token_invalid',
                     settings = settings - 'autonomy_before_token_invalid'
-                WHERE id = ? AND settings ? 'autonomy_before_token_invalid'
+                WHERE id = ? AND settings->>'autonomy_before_token_invalid' IS NOT NULL
                 """, tenantId);
         log.info("Meta credentials updated for tenant {}", tenantId);
     }
