@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.util.Jsonb;
 import com.marketingai.config.AppProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -24,7 +25,7 @@ import java.util.*;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/v1/cluster")
+@RequestMapping("/cluster")
 @RequiredArgsConstructor
 public class ClusterController {
 
@@ -215,9 +216,10 @@ public class ClusterController {
     private List<Map<String, Object>> buildCentroidDicts(List<Map<String, Object>> rows) {
         List<Map<String, Object>> result = new ArrayList<>();
         for (Map<String, Object> row : rows) {
-            Object centroidObj = row.get("centroid");
-            if (centroidObj instanceof Map<?,?> map) {
-                Map<String, Object> cd = new HashMap<>((Map<String, Object>) map);
+            // jsonb arrives as PGobject, never as Map (audit §5: centroids were always empty)
+            Map<String, Object> map = Jsonb.asMap(row.get("centroid"));
+            if (!map.isEmpty()) {
+                Map<String, Object> cd = new HashMap<>(map);
                 cd.put("_cluster_idx", ((Number) row.getOrDefault("cluster_idx", 0)).intValue());
                 result.add(cd);
             }

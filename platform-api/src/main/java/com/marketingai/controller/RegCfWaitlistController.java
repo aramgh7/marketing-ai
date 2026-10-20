@@ -16,7 +16,7 @@ import java.util.*;
  * DO NOT add any code that sends leads to Meta audiences from this controller.
  */
 @RestController
-@RequestMapping("/api/v1/regcf-waitlist")
+@RequestMapping("/regcf-waitlist")
 @RequiredArgsConstructor
 @Slf4j
 public class RegCfWaitlistController {

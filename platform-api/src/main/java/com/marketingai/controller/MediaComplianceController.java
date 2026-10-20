@@ -22,7 +22,7 @@ import java.util.*;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/v1/compliance/media")
+@RequestMapping("/compliance/media")
 @RequiredArgsConstructor
 public class MediaComplianceController {
 

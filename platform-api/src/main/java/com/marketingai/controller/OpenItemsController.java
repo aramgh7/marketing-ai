@@ -10,7 +10,7 @@ import java.util.*;
  * Returns a structured registry of 7 open questions for the onboarding call.
  */
 @RestController
-@RequestMapping("/api/v1/open-items")
+@RequestMapping("/open-items")
 public class OpenItemsController {
 
     private static final List<Map<String, Object>> OPEN_ITEMS = List.of(

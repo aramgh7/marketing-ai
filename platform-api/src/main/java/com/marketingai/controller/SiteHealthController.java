@@ -12,7 +12,7 @@ import java.util.Map;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/v1/site-health")
+@RequestMapping("/site-health")
 @RequiredArgsConstructor
 public class SiteHealthController {
 

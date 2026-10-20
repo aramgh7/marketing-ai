@@ -20,7 +20,7 @@ export default function BriefsPage() {
       await apiFetch(`/api/v1/briefs/${id}/approve`, { method: "PUT" });
       setBriefs((prev) =>
         prev.map((b) =>
-          b.id === id ? { ...b, is_draft: false, status: "APPROVED" } : b
+          b.id === id ? { ...b, status: "APPROVED" } : b
         )
       );
     } catch {
@@ -71,23 +71,23 @@ export default function BriefsPage() {
                     </div>
                   </td>
                   <td className="px-6 py-4 text-gray-500">
-                    {b.brief_type ?? "VIDEO"}
+                    {b.briefType ?? b.brief_type ?? "VIDEO"}
                   </td>
                   <td className="px-6 py-4">
                     <StatusBadge
                       status={
-                        b.status ?? (b.is_draft ? "DRAFT" : "APPROVED")
+                        b.status ?? "DRAFT"
                       }
                     />
                   </td>
                   <td className="px-6 py-4 text-gray-400 text-xs">
-                    {b.cluster_label ?? "—"}
+                    {b.clusterLabel ?? b.cluster_label ?? "—"}
                   </td>
                   <td className="px-6 py-4 text-gray-400">
-                    {new Date(b.created_at).toLocaleDateString()}
+                    {(b.createdAt ?? b.created_at) ? new Date(b.createdAt ?? b.created_at).toLocaleDateString() : "—"}
                   </td>
                   <td className="px-6 py-4 flex gap-3">
-                    {b.is_draft && (
+                    {(b.status ?? "DRAFT") === "DRAFT" && (
                       <button
                         onClick={() => approve(b.id)}
                         className="text-indigo-600 hover:underline text-xs font-medium"

@@ -2,12 +2,15 @@
 
 interface AccreditationCheckboxProps {
   required?: boolean;
+  /** id of the lead form this control belongs to (HTML `form` attribute) — audit 4.9 */
+  formId?: string;
   labelText?: string;
   onChange?: (checked: boolean) => void;
 }
 
 export default function AccreditationCheckbox({
   required = false,
+  formId,
   labelText = "I confirm that I am an accredited investor as defined under SEC Rule 501(a)",
   onChange,
 }: AccreditationCheckboxProps) {
@@ -18,6 +21,7 @@ export default function AccreditationCheckbox({
           type="checkbox"
           name="self_accredited"
           required={required}
+          form={formId}
           className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
           onChange={(e) => onChange?.(e.target.checked)}
         />

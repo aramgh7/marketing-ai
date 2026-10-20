@@ -11,7 +11,7 @@ import org.springframework.web.client.RestTemplate;
 import java.util.*;
 
 @RestController
-@RequestMapping("/api/v1/benchmarks")
+@RequestMapping("/benchmarks")
 @RequiredArgsConstructor
 @Slf4j
 public class NicheBenchmarkController {

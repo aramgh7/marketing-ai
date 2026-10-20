@@ -19,7 +19,7 @@ import java.util.*;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/v1/geo-lift")
+@RequestMapping("/geo-lift")
 @RequiredArgsConstructor
 public class GeoLiftController {
 

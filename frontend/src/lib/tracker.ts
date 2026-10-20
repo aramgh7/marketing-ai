@@ -60,19 +60,23 @@ class EventTracker {
   private consentLevel: ConsentLevel = "none";
   private scrollDepth = 0;
   private scrollAttached = false;
-  private utms: Record<string, string> = {};
+  private utms_: Record<string, string> = {};
+  private pageViewSent = false;
 
   /** Call once on landing page mount. */
   init(tenantId: string, sessionId: string): void {
     this.tenantId = tenantId;
     this.sessionId = sessionId;
     this.consentLevel = getConsentLevel();
-    this.utms = extractUtms();
+    this.utms_ = extractUtms();
 
     // React immediately when consent changes
     onConsentChange((level) => {
       this.consentLevel = level;
       if (level === "full") this.attachScrollListener();
+      // Audit 7.9: the first PAGE_VIEW is dropped before consent; send it once consent arrives so
+      // first-visit converters stay in the impression denominator.
+      if (!this.pageViewSent && level !== "none") this.trackPageView();
     });
 
     this.trackPageView();
@@ -89,8 +93,8 @@ class EventTracker {
     eventType: string,
     eventData?: Record<string, unknown>,
     opts?: { blockEventId?: string; revenue?: number; variantId?: string }
-  ): void {
-    if (!this.isAllowed(eventType)) return;
+  ): boolean {
+    if (!this.isAllowed(eventType)) return false;
 
     const ev: RawEvent = {
       sessionId: this.sessionId,
@@ -99,7 +103,7 @@ class EventTracker {
       consentLevel: this.consentLevel,
       eventTime: new Date().toISOString(),
       eventId: crypto.randomUUID(),
-      ...this.utms,
+      ...this.utms_,
       ...(eventData ? { eventData } : {}),
       ...(opts?.blockEventId ? { blockEventId: opts.blockEventId } : {}),
       ...(opts?.revenue !== undefined ? { revenue: opts.revenue } : {}),
@@ -108,6 +112,21 @@ class EventTracker {
 
     this.queue.push(ev);
     if (this.queue.length >= MAX_BATCH_SIZE) void this.flush();
+    return true;
+  }
+
+  /** Current consent level (for form submissions). */
+  consent(): ConsentLevel {
+    return this.consentLevel;
+  }
+
+  /** UTM parameters captured at init, snake_case for API payloads. */
+  utms(): Record<string, string> {
+    const out: Record<string, string> = {};
+    if (this.utms_.utmSource) out.utm_source = this.utms_.utmSource;
+    if (this.utms_.utmMedium) out.utm_medium = this.utms_.utmMedium;
+    if (this.utms_.utmCampaign) out.utm_campaign = this.utms_.utmCampaign;
+    return out;
   }
 
   async flush(): Promise<void> {
@@ -141,10 +160,11 @@ class EventTracker {
   }
 
   private trackPageView(): void {
-    this.track("PAGE_VIEW", {
+    const sent = this.track("PAGE_VIEW", {
       href: typeof window !== "undefined" ? window.location.href : "",
       referrer: typeof document !== "undefined" ? document.referrer : "",
     });
+    if (sent) this.pageViewSent = true;
   }
 
   private attachScrollListener(): void {

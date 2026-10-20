@@ -17,7 +17,7 @@ import java.util.UUID;
  * GET  /api/v1/creatives/{id}/expert-rating — list ratings
  */
 @RestController
-@RequestMapping("/api/v1/creatives")
+@RequestMapping("/creatives")
 @RequiredArgsConstructor
 public class ExpertRatingController {
 

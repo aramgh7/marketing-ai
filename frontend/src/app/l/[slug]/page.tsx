@@ -13,7 +13,7 @@ interface VariantData {
   tenantId: string;
   slug: string;
   name: string;
-  blocks: string; // raw JSON string
+  blocks: string | LandingBlock[]; // @JsonRawValue -> already an array; older payloads may be a string
 }
 
 async function fetchVariant(slug: string): Promise<VariantData | null> {
@@ -46,9 +46,12 @@ export default async function LandingPage({ params }: PageProps) {
   const decisionId =
     cookieStore.get("_decision")?.value ?? "";
 
+  // Audit 7.1: JSON.parse on an already-parsed array threw and left the landing blank.
   let parsedBlocks: LandingBlock[] = [];
   try {
-    parsedBlocks = JSON.parse(variant.blocks ?? "[]");
+    parsedBlocks = Array.isArray(variant.blocks)
+      ? variant.blocks
+      : JSON.parse(variant.blocks ?? "[]");
   } catch {
     parsedBlocks = [];
   }

@@ -13,7 +13,7 @@ import java.util.*;
  * Import client dashboard labels as informed priors; manage creative aliases.
  */
 @RestController
-@RequestMapping("/api/v1/creative-setup")
+@RequestMapping("/creative-setup")
 @RequiredArgsConstructor
 @Slf4j
 public class CreativeSetupController {

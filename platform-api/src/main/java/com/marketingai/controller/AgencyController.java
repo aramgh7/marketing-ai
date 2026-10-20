@@ -17,7 +17,7 @@ import java.util.stream.Collectors;
  * Multi-tenant agency dashboard + creative source performance comparison.
  */
 @RestController
-@RequestMapping("/api/v1/agency")
+@RequestMapping("/agency")
 @RequiredArgsConstructor
 @Slf4j
 public class AgencyController {

@@ -16,7 +16,7 @@ import java.util.UUID;
  * Funnel as Configuration REST API (vision §19.3 / arch §16.3).
  */
 @RestController
-@RequestMapping("/api/v1/funnel")
+@RequestMapping("/funnel")
 @RequiredArgsConstructor
 public class FunnelController {
 

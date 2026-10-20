@@ -14,7 +14,7 @@ import java.util.*;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/v1/micro-conversion")
+@RequestMapping("/micro-conversion")
 @RequiredArgsConstructor
 public class MicroConversionController {
 

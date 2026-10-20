@@ -73,6 +73,13 @@ public class BriefService {
         return toResponse(briefRepository.save(brief), false);
     }
 
+    @Transactional
+    public BriefResponse setStatus(UUID id, String status) {
+        CreatorBrief brief = findOrThrow(id);
+        brief.setStatus(status);
+        return toResponse(briefRepository.save(brief), false);
+    }
+
     // ─── Pair two briefs (video ↔ landing) ───────────────────────────────────
 
     @Transactional

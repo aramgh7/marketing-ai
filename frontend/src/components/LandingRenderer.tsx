@@ -6,7 +6,7 @@ import HeroBlock, { HeroBlockData } from "./blocks/HeroBlock";
 import ProblemBlock, { ProblemBlockData } from "./blocks/ProblemBlock";
 import ProofBlock, { ProofBlockData } from "./blocks/ProofBlock";
 import PricingBlock, { PricingBlockData } from "./blocks/PricingBlock";
-import CTABlock, { CTABlockData } from "./blocks/CTABlock";
+import CTABlock, { CTABlockData, LEAD_FORM_ID } from "./blocks/CTABlock";
 import FAQBlock, { FAQBlockData } from "./blocks/FAQBlock";
 import BookingCalendar from "./blocks/BookingCalendar";
 import AccreditationCheckbox from "./blocks/AccreditationCheckbox";
@@ -31,7 +31,7 @@ interface Props {
   decisionId: string;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080/api/v1";
+import { API_BASE } from "@/lib/api";
 
 export default function LandingRenderer({
   blocks,
@@ -58,10 +58,12 @@ export default function LandingRenderer({
         entries.forEach((entry) => {
           if (entry.isIntersecting) {
             const blockId = (entry.target as HTMLElement).dataset.blockId;
-            if (blockId) {
-              Tracker.track("BLOCK_VIEW", { block_id: blockId }, { blockEventId: blockId, variantId });
-            }
-            observer.unobserve(entry.target);
+            // Audit 7.9: only stop observing once the view was actually recorded; before consent
+            // the event is dropped and the block must be re-reported later.
+            const sent = blockId
+              ? Tracker.track("BLOCK_VIEW", { block_id: blockId }, { blockEventId: blockId, variantId })
+              : true;
+            if (sent) observer.unobserve(entry.target);
           }
         });
       },
@@ -79,15 +81,47 @@ export default function LandingRenderer({
 
   const trackFormSubmit = async (values: Record<string, string>) => {
     Tracker.track("FORM_SUBMIT", { fields: Object.keys(values) }, { variantId });
+
+    // Audit 4.9: the lead data itself was never sent anywhere. Qualifier controls
+    // (accreditation, ticket) are bound to the form via the `form` attribute, so they are in
+    // `values`; formData keeps the React-side copy as a fallback.
+    const submission = {
+      tenant_id: tenantId,
+      variant_id: variantId,
+      session_id: sessionId,
+      decision_id: decisionId || null,
+      first_name: values.name ?? values.first_name ?? null,
+      email: values.email ?? null,
+      phone: values.phone ?? null,
+      self_accredited:
+        values.self_accredited !== undefined
+          ? values.self_accredited === "on" || values.self_accredited === "true"
+          : (formData.self_accredited as boolean | undefined) ?? null,
+      ticket_bucket: values.ticket_bucket || (formData.ticket_bucket as string | undefined) || null,
+      consent_level: Tracker.consent(),
+      ...Tracker.utms(),
+    };
     try {
-      await fetch(`${API_BASE}/public/reward`, {
+      await fetch(`${API_BASE}/public/form/submit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ decisionId, rewardType: "FORM_SUBMIT" }),
+        body: JSON.stringify(submission),
         keepalive: true,
       });
     } catch {
-      // Reward failure must never crash the landing page
+      // Submission failure is logged server-side via CRM; never crash the landing page
+    }
+    if (decisionId) {
+      try {
+        await fetch(`${API_BASE}/public/reward`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ decisionId, rewardType: "FORM_SUBMIT" }),
+          keepalive: true,
+        });
+      } catch {
+        // Reward failure must never crash the landing page
+      }
     }
   };
 
@@ -100,7 +134,7 @@ export default function LandingRenderer({
               <HeroBlock
                 key={block.id}
                 blockId={block.id}
-                data={block.data as HeroBlockData}
+                data={block.data as unknown as HeroBlockData}
                 onCta={trackCta}
               />
             );
@@ -109,7 +143,7 @@ export default function LandingRenderer({
               <ProblemBlock
                 key={block.id}
                 blockId={block.id}
-                data={block.data as ProblemBlockData}
+                data={block.data as unknown as ProblemBlockData}
               />
             );
           case "PROOF":
@@ -117,7 +151,7 @@ export default function LandingRenderer({
               <ProofBlock
                 key={block.id}
                 blockId={block.id}
-                data={block.data as ProofBlockData}
+                data={block.data as unknown as ProofBlockData}
               />
             );
           case "PRICING":
@@ -125,7 +159,7 @@ export default function LandingRenderer({
               <PricingBlock
                 key={block.id}
                 blockId={block.id}
-                data={block.data as PricingBlockData}
+                data={block.data as unknown as PricingBlockData}
                 onCta={trackCta}
               />
             );
@@ -134,7 +168,7 @@ export default function LandingRenderer({
               <CTABlock
                 key={block.id}
                 blockId={block.id}
-                data={block.data as CTABlockData}
+                data={block.data as unknown as CTABlockData}
                 onFormStart={trackFormStart}
                 onFormSubmit={trackFormSubmit}
               />
@@ -144,7 +178,7 @@ export default function LandingRenderer({
               <FAQBlock
                 key={block.id}
                 blockId={block.id}
-                data={block.data as FAQBlockData}
+                data={block.data as unknown as FAQBlockData}
               />
             );
           case "booking_calendar":
@@ -160,6 +194,7 @@ export default function LandingRenderer({
             return (
               <div key={block.id} data-block-id={block.id}>
                 <AccreditationCheckbox
+                  formId={LEAD_FORM_ID}
                   required={(block.data.required as boolean) ?? false}
                   labelText={block.data.label_text as string | undefined}
                   onChange={(checked) =>
@@ -172,6 +207,7 @@ export default function LandingRenderer({
             return (
               <div key={block.id} data-block-id={block.id}>
                 <TicketSelector
+                  formId={LEAD_FORM_ID}
                   label={block.data.label as string | undefined}
                   required={(block.data.required as boolean) ?? false}
                   onChange={(bucket) =>

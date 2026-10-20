@@ -18,7 +18,7 @@ import java.util.*;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/v1/predict/cpm")
+@RequestMapping("/predict/cpm")
 @RequiredArgsConstructor
 public class CpmController {
 

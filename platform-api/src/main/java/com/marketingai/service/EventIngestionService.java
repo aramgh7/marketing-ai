@@ -25,7 +25,9 @@ public class EventIngestionService {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     /** Drop these event types when consent = analytics_only or none. */
-    private static final Set<String> BEHAVIORAL = Set.of("SCROLL", "HOVER", "BLOCK_VIEW");
+    private static final Set<String> BEHAVIORAL = Set.of(
+            "SCROLL", "HOVER", "BLOCK_VIEW", "CLICK", "VIDEO_PROGRESS", "FIRST_CLICK",
+            "QUIZ_ANSWER", "CALC_INTERACT", "RETURN_VISIT");  // mirrors frontend/src/lib/tracker.ts (audit 7.8)
 
     /** These are allowed even with consent = none. */
     private static final Set<String> CONVERSION = Set.of(

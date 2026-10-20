@@ -47,6 +47,12 @@ public class BriefController {
         return ResponseEntity.ok(briefService.update(id, req));
     }
 
+    /** Approve a draft brief (audit 7.5: the admin UI called this endpoint, it did not exist). */
+    @PutMapping("/{id}/approve")
+    public ResponseEntity<BriefResponse> approve(@PathVariable UUID id) {
+        return ResponseEntity.ok(briefService.setStatus(id, "APPROVED"));
+    }
+
     /** Re-run atom suggestions from latest descriptive stats. */
     @PostMapping("/{id}/regenerate")
     public ResponseEntity<BriefResponse> regenerate(@PathVariable UUID id) {

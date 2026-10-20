@@ -14,7 +14,7 @@ import java.util.Map;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/v1/product-facts")
+@RequestMapping("/product-facts")
 @RequiredArgsConstructor
 public class ProductFactController {
 

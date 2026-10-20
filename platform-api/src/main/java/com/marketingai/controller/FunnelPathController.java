@@ -15,7 +15,7 @@ import java.util.*;
  * 4 paths for Client #1 investor funnel.
  */
 @RestController
-@RequestMapping("/api/v1/funnel-paths")
+@RequestMapping("/funnel-paths")
 @RequiredArgsConstructor
 @Slf4j
 public class FunnelPathController {

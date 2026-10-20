@@ -1,24 +1,31 @@
+"use client";
+import { useEffect, useState } from "react";
 import StatCard from "@/components/admin/StatCard";
+import { apiFetch } from "@/lib/api";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://platform-api:8080";
-
+// Audit 7.6: was a server component with no Authorization header -> every widget empty.
 async function fetchJson(path: string): Promise<any> {
   try {
-    const res = await fetch(`${API}${path}`, { cache: "no-store" });
-    if (!res.ok) return null;
-    return res.json();
+    return await apiFetch<any>(path);
   } catch {
     return null;
   }
 }
 
-export default async function Month1Page() {
-  const [pixelData, costData, noshowData, openItems] = await Promise.all([
-    fetchJson("/api/v1/month1/pixel-protection"),
-    fetchJson("/api/v1/month1/cost-per-held-call"),
-    fetchJson("/api/v1/month1/noshow-rate"),
-    fetchJson("/api/v1/open-items"),
-  ]);
+export default function Month1Page() {
+  const [data, setData] = useState<any[] | null>(null);
+
+  useEffect(() => {
+    Promise.all([
+      fetchJson("/month1/pixel-protection"),
+      fetchJson("/month1/cost-per-held-call"),
+      fetchJson("/month1/noshow-rate"),
+      fetchJson("/open-items"),
+    ]).then(setData);
+  }, []);
+
+  if (!data) return <div className="p-8 text-gray-400">Loading Month-1 deliverables…</div>;
+  const [pixelData, costData, noshowData, openItems] = data;
 
   const pp      = pixelData  ?? {};
   const cost    = costData   ?? {};

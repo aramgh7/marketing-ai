@@ -18,7 +18,7 @@ import java.util.UUID;
  * GET /api/v1/onboarding/capi-emq-check — CAPI EMQ first-party pre-check
  */
 @RestController
-@RequestMapping("/api/v1/onboarding")
+@RequestMapping("/onboarding")
 @RequiredArgsConstructor
 @Slf4j
 public class OnboardingController {

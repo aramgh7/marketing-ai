@@ -16,7 +16,7 @@ import java.util.*;
  * Classifies leads into archetypes; upserts result; drives path/follow-up/brief routing.
  */
 @RestController
-@RequestMapping("/api/v1/investor-archetypes")
+@RequestMapping("/investor-archetypes")
 @RequiredArgsConstructor
 @Slf4j
 public class InvestorArchetypeController {

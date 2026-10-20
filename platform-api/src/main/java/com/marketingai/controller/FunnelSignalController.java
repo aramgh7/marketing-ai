@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.util.Jsonb;
 import com.marketingai.config.AppProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -15,7 +16,7 @@ import java.util.*;
  * Manages funnel_signal_config on the tenant and funnel_calendar_events.
  */
 @RestController
-@RequestMapping("/api/v1/funnel-signals")
+@RequestMapping("/funnel-signals")
 @RequiredArgsConstructor
 @Slf4j
 public class FunnelSignalController {
@@ -32,7 +33,7 @@ public class FunnelSignalController {
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT funnel_signal_config FROM tenants WHERE id = ?", tenantId);
         if (rows.isEmpty()) return ResponseEntity.notFound().build();
-        return ResponseEntity.ok(Map.of("funnel_signal_config", rows.get(0).get("funnel_signal_config")));
+        return ResponseEntity.ok(Map.of("funnel_signal_config", Jsonb.asMap(rows.get(0).get("funnel_signal_config"))));
     }
 
     @PutMapping("/config")
@@ -145,7 +146,8 @@ public class FunnelSignalController {
     @SuppressWarnings("unchecked")
     private List<String> extractNewsTags(Object configObj, String funnelKey) {
         try {
-            if (configObj instanceof Map<?,?> map) {
+            Map<String, Object> map = Jsonb.asMap(configObj);  // jsonb arrives as PGobject (audit §5)
+            if (!map.isEmpty()) {
                 Object funnelCfg = map.get(funnelKey);
                 if (funnelCfg instanceof Map<?,?> fc) {
                     Object tags = fc.get("news_tags");

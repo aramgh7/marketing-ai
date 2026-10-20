@@ -10,7 +10,7 @@ import java.util.Map;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/v1/reward")
+@RequestMapping("/reward")
 @RequiredArgsConstructor
 public class RewardController {
 

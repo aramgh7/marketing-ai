@@ -23,7 +23,7 @@ import java.util.*;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/v1/propensity")
+@RequestMapping("/propensity")
 @RequiredArgsConstructor
 public class PropensityController {
 

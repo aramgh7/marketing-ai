@@ -67,7 +67,8 @@ const CONSENT_COOKIE_MAX_AGE = 60 * 60 * 24 * 365; // 1 year
 export function setConsentLevel(level: ConsentLevel): void {
   if (typeof window === "undefined") return;
   localStorage.setItem(STORAGE_KEY, level);
-  document.cookie = `${CONSENT_COOKIE}=${level}; max-age=${CONSENT_COOKIE_MAX_AGE}; path=/; samesite=lax`;
+  const secure = window.location.protocol === "https:" ? "; secure" : "";
+  document.cookie = `${CONSENT_COOKIE}=${level}; max-age=${CONSENT_COOKIE_MAX_AGE}; path=/; samesite=lax${secure}`;
   window.dispatchEvent(new CustomEvent("mai:consent", { detail: level }));
 }
 

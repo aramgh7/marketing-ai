@@ -60,10 +60,11 @@ public class AuthService {
         user = userRepo.save(user);
 
         String token = jwtUtil.generate(user.getId(), tenant.getId(), user.getRole());
-        return new AuthResponse(token, user.getId(), tenant.getId(), user.getRole(), user.getEmail());
+        String refresh = issueRefreshToken(user.getId(), tenant.getId());
+        return new AuthResponse(token, user.getId(), tenant.getId(), user.getRole(), user.getEmail(), refresh);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public AuthResponse login(LoginRequest req) {
         User user = userRepo.findByEmail(req.getEmail())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid credentials"));
@@ -76,7 +77,8 @@ public class AuthService {
         }
 
         String token = jwtUtil.generate(user.getId(), user.getTenant().getId(), user.getRole());
-        return new AuthResponse(token, user.getId(), user.getTenant().getId(), user.getRole(), user.getEmail());
+        String refresh = issueRefreshToken(user.getId(), user.getTenant().getId());
+        return new AuthResponse(token, user.getId(), user.getTenant().getId(), user.getRole(), user.getEmail(), refresh);
     }
 
     // ─── Refresh Token ────────────────────────────────────────────────────────
@@ -109,11 +111,7 @@ public class AuthService {
         String newAccess  = jwtUtil.generate(userId, tenantId, user.getRole());
         String newRefresh = issueRefreshToken(userId, tenantId);
 
-        AuthResponse resp = new AuthResponse(newAccess, userId, tenantId, user.getRole(), user.getEmail());
-        // Attach refresh token in the access token field — callers should use the separate refresh field
-        // We add a custom field by extending AuthResponse or returning a wrapper.
-        // For now, embed refresh token in a response wrapper via an extended class.
-        return new AuthResponseWithRefresh(newAccess, userId, tenantId, user.getRole(), user.getEmail(), newRefresh);
+        return new AuthResponse(newAccess, userId, tenantId, user.getRole(), user.getEmail(), newRefresh);
     }
 
     @Transactional
@@ -149,15 +147,4 @@ public class AuthService {
         }
     }
 
-    // ─── Inner DTO with refresh token ────────────────────────────────────────
-
-    public static class AuthResponseWithRefresh extends AuthResponse {
-        private final String refreshToken;
-        public AuthResponseWithRefresh(String token, UUID userId, UUID tenantId,
-                                        String role, String email, String refreshToken) {
-            super(token, userId, tenantId, role, email);
-            this.refreshToken = refreshToken;
-        }
-        public String getRefreshToken() { return refreshToken; }
-    }
 }

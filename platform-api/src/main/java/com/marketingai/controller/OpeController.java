@@ -22,7 +22,7 @@ import java.util.*;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/v1/benchmark")
+@RequestMapping("/ope")
 @RequiredArgsConstructor
 public class OpeController {
 

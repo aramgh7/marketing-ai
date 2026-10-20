@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { apiFetch } from "@/lib/api";
 
 interface FunnelStage {
   stage_key: string;
@@ -36,9 +37,9 @@ export default function FunnelAdminPage() {
 
   useEffect(() => {
     Promise.all([
-      fetch("/api/v1/funnel/me").then(r => r.json()),
-      fetch("/api/v1/reward/ladder").then(r => r.json()),
-      fetch("/api/v1/onboarding/checklist").then(r => r.json()),
+      apiFetch<any>("/funnel/me"),
+      apiFetch<any>("/reward/ladder"),
+      apiFetch<any>("/onboarding/checklist"),
     ])
       .then(([funnel, ladder, cl]) => {
         setStages(funnel.stages || []);

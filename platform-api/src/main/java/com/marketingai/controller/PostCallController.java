@@ -16,7 +16,7 @@ import java.util.*;
  * Coordinator submits structured call outcomes; objection tags route follow-up arms.
  */
 @RestController
-@RequestMapping("/api/v1/post-call")
+@RequestMapping("/post-call")
 @RequiredArgsConstructor
 @Slf4j
 public class PostCallController {

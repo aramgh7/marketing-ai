@@ -20,7 +20,7 @@ import java.util.*;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/v1/voc")
+@RequestMapping("/voc")
 @RequiredArgsConstructor
 public class VocController {
 

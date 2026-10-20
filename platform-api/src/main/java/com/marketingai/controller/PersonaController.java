@@ -18,7 +18,7 @@ import java.util.UUID;
  * DELETE /api/v1/personas/{id}
  */
 @RestController
-@RequestMapping("/api/v1/personas")
+@RequestMapping("/personas")
 @RequiredArgsConstructor
 public class PersonaController {
 

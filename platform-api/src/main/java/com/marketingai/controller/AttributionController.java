@@ -11,7 +11,7 @@ import org.springframework.web.client.RestTemplate;
 import java.util.*;
 
 @RestController
-@RequestMapping("/api/v1/attribution")
+@RequestMapping("/attribution")
 @RequiredArgsConstructor
 @Slf4j
 public class AttributionController {

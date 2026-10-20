@@ -18,7 +18,7 @@ import java.util.UUID;
  * Returns Quality Gate savings and date-to-significance estimates.
  */
 @RestController
-@RequestMapping("/api/v1/analytics/month1")
+@RequestMapping("/analytics/month1")
 @RequiredArgsConstructor
 public class Month1DashboardController {
 

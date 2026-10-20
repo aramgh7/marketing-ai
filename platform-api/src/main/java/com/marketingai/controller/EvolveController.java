@@ -17,7 +17,7 @@ import java.util.*;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/v1/evolve")
+@RequestMapping("/evolve")
 @RequiredArgsConstructor
 public class EvolveController {
 

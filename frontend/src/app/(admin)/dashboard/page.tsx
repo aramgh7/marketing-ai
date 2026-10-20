@@ -1,27 +1,27 @@
+"use client";
+import { useEffect, useState } from "react";
 import StatCard from "@/components/admin/StatCard";
 import StatusBadge from "@/components/admin/StatusBadge";
+import { apiFetch } from "@/lib/api";
 
-async function getCampaigns(): Promise<any[]> {
-  const base =
-    process.env.NEXT_PUBLIC_API_URL ?? "http://platform-api:8080";
-  try {
-    const res = await fetch(`${base}/api/v1/campaigns`, {
-      cache: "no-store",
-    });
-    if (!res.ok) return [];
-    return res.json();
-  } catch {
-    return [];
-  }
-}
+// Audit 7.6: this was a server component fetching NEXT_PUBLIC_API_URL from inside the container
+// with no Authorization header, so it always rendered empty. Campaigns are tenant data — load
+// them client-side with the user's token like every other admin page.
+export default function DashboardPage() {
+  const [campaigns, setCampaigns] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-export default async function DashboardPage() {
-  const campaigns: any[] = await getCampaigns();
+  useEffect(() => {
+    apiFetch<any[]>("/campaigns")
+      .then((rows) => setCampaigns(Array.isArray(rows) ? rows : []))
+      .catch(() => setCampaigns([]))
+      .finally(() => setLoading(false));
+  }, []);
 
-  const totalBudget = campaigns.reduce(
-    (s: number, c: any) => s + (c.daily_budget ?? 0),
-    0
-  );
+  const budgetOf = (c: any) => Number(c.dailyBudget ?? c.daily_budget ?? 0);
+  const createdOf = (c: any) => c.createdAt ?? c.created_at;
+
+  const totalBudget = campaigns.reduce((s: number, c: any) => s + budgetOf(c), 0);
   const active = campaigns.filter((c: any) => c.status === "ACTIVE").length;
   const paused = campaigns.filter((c: any) => c.status === "PAUSED").length;
 
@@ -47,7 +47,9 @@ export default async function DashboardPage() {
         <div className="px-6 py-4 border-b border-gray-100">
           <h2 className="font-semibold text-gray-800">Campaigns</h2>
         </div>
-        {campaigns.length === 0 ? (
+        {loading ? (
+          <p className="px-6 py-8 text-gray-400 text-sm">Loading…</p>
+        ) : campaigns.length === 0 ? (
           <p className="px-6 py-8 text-gray-400 text-sm">
             No campaigns yet. Connect Meta account to get started.
           </p>
@@ -72,11 +74,11 @@ export default async function DashboardPage() {
                     <StatusBadge status={c.status} />
                   </td>
                   <td className="px-6 py-4 text-gray-600">
-                    ${c.daily_budget}
+                    ${budgetOf(c)}
                   </td>
                   <td className="px-6 py-4 text-gray-500">{c.objective}</td>
                   <td className="px-6 py-4 text-gray-400">
-                    {new Date(c.created_at).toLocaleDateString()}
+                    {createdOf(c) ? new Date(createdOf(c)).toLocaleDateString() : "—"}
                   </td>
                 </tr>
               ))}

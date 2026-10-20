@@ -8,7 +8,7 @@
  *
  * Three choices map directly to our consent levels:
  *   "Accept All"     → "full"           (behavioral + marketing tracking)
- *   "Necessary Only" → "analytics_only" (conversions only)
+ *   "Necessary Only" → "none"           (audit 7.8: no analytics — PAGE_VIEW/session/UTMs are not "necessary")
  *   "Decline"        → "none"           (nothing tracked)
  */
 
@@ -27,7 +27,7 @@ export default function CookieBanner() {
   if (!visible) return null;
 
   const accept = () => { setConsentLevel("full");           setVisible(false); };
-  const necessary = () => { setConsentLevel("analytics_only"); setVisible(false); };
+  const necessary = () => { setConsentLevel("none");           setVisible(false); };
   const decline = () => { setConsentLevel("none");           setVisible(false); };
 
   return (

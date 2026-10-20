@@ -18,7 +18,7 @@ import java.util.*;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/v1/segment-creative-map")
+@RequestMapping("/segment-creative-map")
 @RequiredArgsConstructor
 public class SegmentCreativeMapController {
 

@@ -2,6 +2,7 @@ package com.marketingai.controller;
 
 import com.marketingai.security.TenantContext;
 import com.marketingai.dto.variant.VariantResponse;
+import com.marketingai.service.FormSubmissionService;
 import com.marketingai.service.MlServiceClient;
 import com.marketingai.service.VariantService;
 import lombok.RequiredArgsConstructor;
@@ -11,6 +12,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * Public (unauthenticated) endpoints used by the Next.js edge middleware and
@@ -27,6 +29,7 @@ public class PublicLandingController {
 
     private final VariantService variantService;
     private final MlServiceClient mlClient;
+    private final FormSubmissionService formSubmissionService;
 
     /**
      * Returns the ACTIVE variant for the given slug.
@@ -36,6 +39,27 @@ public class PublicLandingController {
     public VariantResponse getActiveVariant(@PathVariable String slug) {
         // Slug lookup happens before any tenant is known -> system scope for this read only.
         return TenantContext.callAsSystem(() -> variantService.getActiveBySlug(slug));
+    }
+
+    /**
+     * Lead form from the landing page (LandingRenderer). The tenant is resolved from the variant
+     * the visitor saw, never trusted from the payload (audit 4.9 / §3.4).
+     */
+    @PostMapping("/form/submit")
+    public ResponseEntity<Map<String, Object>> submitForm(@RequestBody Map<String, Object> body) {
+        UUID variantId;
+        try {
+            variantId = UUID.fromString(String.valueOf(body.get("variant_id")));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "variant_id required"));
+        }
+        UUID tenantId = TenantContext.callAsSystem(() -> formSubmissionService.variantOwner(variantId));
+        if (tenantId == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "unknown variant"));
+        }
+        Map<String, Object> result = new java.util.HashMap<>();
+        TenantContext.runAs(tenantId.toString(), () -> result.putAll(formSubmissionService.submit(tenantId, body)));
+        return ResponseEntity.ok(result);
     }
 
     /**

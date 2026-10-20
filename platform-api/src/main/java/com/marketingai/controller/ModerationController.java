@@ -14,7 +14,7 @@ import java.util.*;
  * Compliance by Construction + Moderation Probe + Reviewer Persona (vision §19.18.4; arch §16.17).
  */
 @RestController
-@RequestMapping("/api/v1/moderation")
+@RequestMapping("/moderation")
 @RequiredArgsConstructor
 @Slf4j
 public class ModerationController {

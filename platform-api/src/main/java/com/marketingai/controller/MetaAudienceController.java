@@ -21,7 +21,7 @@ import java.util.*;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/v1/meta/audiences")
+@RequestMapping("/meta/audiences")
 @RequiredArgsConstructor
 public class MetaAudienceController {
 

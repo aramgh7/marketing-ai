@@ -17,7 +17,7 @@ import java.util.*;
  * Compliance API — generic text checks + securities rulebases (vision §19.5).
  */
 @RestController
-@RequestMapping("/api/v1/compliance")
+@RequestMapping("/compliance")
 @RequiredArgsConstructor
 public class ComplianceController {
 

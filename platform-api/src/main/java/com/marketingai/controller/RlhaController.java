@@ -13,7 +13,7 @@ import java.util.UUID;
 // RlhaController uses TenantContext.get() for tenant isolation
 
 @RestController
-@RequestMapping("/api/v1/rlha")
+@RequestMapping("/rlha")
 @RequiredArgsConstructor
 public class RlhaController {
 

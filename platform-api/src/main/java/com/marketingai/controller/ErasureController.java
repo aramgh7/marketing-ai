@@ -18,7 +18,7 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/v1/privacy")
+@RequestMapping("/privacy")
 @RequiredArgsConstructor
 public class ErasureController {
 

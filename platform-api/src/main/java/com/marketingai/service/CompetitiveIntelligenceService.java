@@ -1,5 +1,6 @@
 package com.marketingai.service;
 
+import com.marketingai.util.Jsonb;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.marketingai.config.AppProperties;
@@ -50,7 +51,7 @@ public class CompetitiveIntelligenceService {
         for (Map<String, Object> row : tenants) {
             String tenantId = (String) row.get("id");
             try {
-                scanTenant(tenantId, (String) row.get("settings"));
+                scanTenant(tenantId, Jsonb.asString(row.get("settings")));  // jsonb arrives as PGobject (audit §5)
             } catch (Exception e) {
                 log.error("Competitive intel scan failed for tenant {}: {}", tenantId, e.getMessage(), e);
             }

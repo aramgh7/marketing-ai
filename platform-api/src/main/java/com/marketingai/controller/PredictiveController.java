@@ -18,7 +18,7 @@ import java.util.*;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/v1/predict")
+@RequestMapping("/predict")
 @RequiredArgsConstructor
 public class PredictiveController {
 

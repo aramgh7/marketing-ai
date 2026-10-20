@@ -1,5 +1,8 @@
 "use client";
 
+/** id of the lead <form>; qualifier blocks rendered elsewhere bind to it via the `form` attribute */
+export const LEAD_FORM_ID = "mai-lead-form";
+
 export interface CTABlockData {
   heading: string;
   subheading?: string;
@@ -51,6 +54,7 @@ export default function CTABlock({ blockId, data, onFormStart, onFormSubmit }: P
           </p>
         )}
         <form
+          id={LEAD_FORM_ID}
           className="flex flex-col gap-4 max-w-md mx-auto"
           onSubmit={handleSubmit}
         >

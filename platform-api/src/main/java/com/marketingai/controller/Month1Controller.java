@@ -13,7 +13,7 @@ import java.util.*;
  * Three widgets for the investor lead-gen funnel.
  */
 @RestController
-@RequestMapping("/api/v1/month1")
+@RequestMapping("/month1")
 @RequiredArgsConstructor
 @Slf4j
 public class Month1Controller {

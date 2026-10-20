@@ -19,7 +19,7 @@ import java.util.UUID;
  * POST /api/v1/signals/calendar
  */
 @RestController
-@RequestMapping("/api/v1/signals")
+@RequestMapping("/signals")
 @RequiredArgsConstructor
 public class ExternalSignalsController {
 

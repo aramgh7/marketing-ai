@@ -11,12 +11,15 @@ const TICKET_BUCKETS = [
 interface TicketSelectorProps {
   label?: string;
   required?: boolean;
+  /** id of the lead form this control belongs to (HTML `form` attribute) — audit 4.9 */
+  formId?: string;
   onChange?: (bucket: string) => void;
 }
 
 export default function TicketSelector({
   label = "Intended investment amount",
   required = false,
+  formId,
   onChange,
 }: TicketSelectorProps) {
   return (
@@ -28,6 +31,7 @@ export default function TicketSelector({
       <select
         name="ticket_bucket"
         required={required}
+        form={formId}
         defaultValue=""
         className="w-full rounded-md border border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2"
         onChange={(e) => onChange?.(e.target.value)}

@@ -21,7 +21,7 @@ import java.util.*;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/v1/ai-video")
+@RequestMapping("/ai-video")
 @RequiredArgsConstructor
 public class AiVideoController {
 

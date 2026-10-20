@@ -16,7 +16,7 @@ import java.util.UUID;
  * GET /api/v1/campaigns/{id}/anchor-divergence
  */
 @RestController
-@RequestMapping("/api/v1/campaigns")
+@RequestMapping("/campaigns")
 @RequiredArgsConstructor
 public class AnchorDivergenceController {
 

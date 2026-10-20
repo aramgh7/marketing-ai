@@ -19,7 +19,7 @@ import java.util.*;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/v1/personalization-rules")
+@RequestMapping("/personalization-rules")
 @RequiredArgsConstructor
 public class PersonalizationRulesController {
 
