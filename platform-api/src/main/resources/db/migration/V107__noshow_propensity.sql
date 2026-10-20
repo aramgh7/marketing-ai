@@ -3,7 +3,7 @@
 CREATE TABLE noshow_scores (
     id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id      UUID        NOT NULL REFERENCES tenants(id),
-    session_id     UUID        REFERENCES sessions(id),
+    session_id     VARCHAR(100) REFERENCES sessions(id),
     appointment_id UUID        REFERENCES appointments(id),
     noshow_prob    REAL        NOT NULL,
     risk_tier      VARCHAR(10) NOT NULL

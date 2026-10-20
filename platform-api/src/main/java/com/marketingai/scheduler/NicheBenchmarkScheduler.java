@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Daily refresh of niche_benchmarks from FIRST-PARTY data only (vision §25 p.19).
+ * Daily refresh of niche_metric_benchmarks from FIRST-PARTY data only (vision §25 p.19).
  * Never reads Meta Platform data — only from form_submissions, appointments, reward_events.
  */
 @Component
@@ -68,7 +68,7 @@ public class NicheBenchmarkScheduler {
 
             for (Map<String, Object> bm : benchmarks) {
                 jdbc.update("""
-                    INSERT INTO niche_benchmarks (niche_key, metric_key, value, tenant_count, data_window_days)
+                    INSERT INTO niche_metric_benchmarks (niche_key, metric_key, value, tenant_count, data_window_days)
                     VALUES (?, ?, ?, ?, ?)
                     """,
                     bm.get("niche_key"), bm.get("metric_key"),

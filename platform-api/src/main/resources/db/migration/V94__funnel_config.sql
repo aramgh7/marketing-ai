@@ -60,7 +60,7 @@ ALTER TABLE meta_pixels
     ADD COLUMN IF NOT EXISTS role_key VARCHAR(60) DEFAULT 'investor_primary';
 
 -- New event schema entries for investor funnel tracking
-INSERT INTO event_schemas (event_type, schema_version, json_schema, created_at)
+INSERT INTO event_schemas (event_type, schema_version, json_schema, introduced_at)
 VALUES
     ('CALENDAR_OPEN',  1, '{"type":"object","properties":{"session_id":{"type":"string"},"page":{"type":"string"}}}', now()),
     ('SLOT_SELECTED',  1, '{"type":"object","properties":{"session_id":{"type":"string"},"slot_ts":{"type":"string"},"slot_tz":{"type":"string"}}}', now()),

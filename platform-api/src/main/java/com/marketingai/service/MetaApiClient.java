@@ -97,9 +97,9 @@ public class MetaApiClient {
         try {
             jdbc.update("""
                     INSERT INTO learning_phase_log
-                    (ad_set_id, tenant_id, phase_before, phase_after, action, logged_at)
+                    (ad_set_id, tenant_id, phase_before, phase_after, action, created_at)
                     VALUES (?, ?, ?, ?, ?, now())
-                    """, adSetId, tenantId, phaseBefore, phaseAfter, action);
+                    """, adSetId != null ? adSetId.toString() : null, tenantId, phaseBefore, phaseAfter, action);
         } catch (Exception e) {
             log.warn("Failed to record learning_phase_log: {}", e.getMessage());
         }
@@ -107,12 +107,11 @@ public class MetaApiClient {
 
     private void logCall(UUID tenantId, String adSetId, String action, String lane, String status) {
         try {
-            UUID adSetUuid = adSetId != null ? UUID.fromString(adSetId) : null;
             jdbc.update("""
                     INSERT INTO learning_phase_log
-                    (ad_set_id, tenant_id, phase_before, phase_after, action, logged_at)
+                    (ad_set_id, tenant_id, phase_before, phase_after, action, created_at)
                     VALUES (?, ?, ?, ?, ?, now())
-                    """, adSetUuid, tenantId, lane, status, action);
+                    """, adSetId, tenantId, lane, status, action);
         } catch (Exception e) {
             log.trace("learning_phase_log insert skipped (non-adset call): {}", e.getMessage());
         }

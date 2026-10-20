@@ -3,7 +3,7 @@
 CREATE TABLE form_submissions (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id       UUID        NOT NULL REFERENCES tenants(id),
-    session_id      UUID        REFERENCES sessions(id),
+    session_id      VARCHAR(100) REFERENCES sessions(id),
     funnel_key      VARCHAR(40),
     self_accredited BOOLEAN,
     ticket_bucket   VARCHAR(20),
@@ -31,7 +31,7 @@ CREATE INDEX form_submissions_tenant_idx  ON form_submissions(tenant_id, submitt
 CREATE TABLE value_calibration_log (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id       UUID        NOT NULL REFERENCES tenants(id),
-    session_id      UUID        REFERENCES sessions(id),
+    session_id      VARCHAR(100) REFERENCES sessions(id),
     predicted_value REAL,
     actual_value    REAL,
     ticket_bucket   VARCHAR(20),

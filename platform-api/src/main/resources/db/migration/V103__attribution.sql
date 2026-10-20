@@ -1,7 +1,7 @@
 CREATE TABLE touchpoints (
     id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id      UUID        NOT NULL REFERENCES tenants(id),
-    session_id     UUID        REFERENCES sessions(id),
+    session_id     VARCHAR(100) REFERENCES sessions(id),
     source         VARCHAR(50),
     medium         VARCHAR(50),
     campaign       VARCHAR(100),
@@ -23,7 +23,7 @@ CREATE INDEX touchpoints_tenant_idx  ON touchpoints(tenant_id, touched_at DESC);
 CREATE TABLE attribution_credits (
     id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id        UUID        NOT NULL REFERENCES tenants(id),
-    session_id       UUID        REFERENCES sessions(id),
+    session_id       VARCHAR(100) REFERENCES sessions(id),
     touchpoint_id    UUID        REFERENCES touchpoints(id),
     conversion_stage VARCHAR(40),
     model            VARCHAR(20) NOT NULL,

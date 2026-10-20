@@ -5,7 +5,7 @@
 CREATE TABLE investor_archetypes (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id       UUID        NOT NULL REFERENCES tenants(id),
-    session_id      UUID        REFERENCES sessions(id),
+    session_id      VARCHAR(100) REFERENCES sessions(id),
     archetype       VARCHAR(30) NOT NULL
         CHECK (archetype IN (
             'COMMITTED_QUICK','RESEARCHER','FENCE_SITTER',

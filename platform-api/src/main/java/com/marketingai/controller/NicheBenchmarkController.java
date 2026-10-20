@@ -23,7 +23,7 @@ public class NicheBenchmarkController {
             @PathVariable String nicheKey) {
         return ResponseEntity.ok(jdbc.queryForList("""
             SELECT metric_key, value, tenant_count, computed_at, data_window_days
-            FROM niche_benchmarks
+            FROM niche_metric_benchmarks
             WHERE niche_key = ?
             AND computed_at >= NOW() - INTERVAL '48 hours'
             ORDER BY metric_key, computed_at DESC
@@ -42,7 +42,7 @@ public class NicheBenchmarkController {
         Map<String, Object> tenantMetrics = computeTenantMetrics(tenantId);
 
         List<Map<String, Object>> benchmarks = jdbc.queryForList("""
-            SELECT metric_key, value FROM niche_benchmarks
+            SELECT metric_key, value FROM niche_metric_benchmarks
             WHERE niche_key = ? AND value IS NOT NULL
             AND computed_at >= NOW() - INTERVAL '48 hours'
             ORDER BY computed_at DESC

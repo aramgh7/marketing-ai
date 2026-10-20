@@ -34,7 +34,7 @@ ALTER TABLE sessions
 CREATE TABLE path_gate_log (
     id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id      UUID        NOT NULL REFERENCES tenants(id),
-    session_id     UUID        REFERENCES sessions(id),
+    session_id     VARCHAR(100) REFERENCES sessions(id),
     path_id        UUID        REFERENCES funnel_paths(id),
     gate_event     VARCHAR(40) NOT NULL,
     gate_passed    BOOLEAN     NOT NULL,

@@ -67,7 +67,7 @@ public class ModerationController {
         }
 
         List<Map<String, Object>> personas = jdbc.queryForList("""
-            SELECT persona_key, rulebases, traits FROM personas
+            SELECT persona_key, rulebases, traits FROM reviewer_personas
             WHERE persona_key = 'META_REVIEWER' AND is_active = TRUE LIMIT 1
             """);
         if (personas.isEmpty()) {

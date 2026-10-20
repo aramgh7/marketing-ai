@@ -9,7 +9,7 @@ ALTER TABLE funnel_stages
 CREATE TABLE reward_events (
     id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id        UUID        NOT NULL REFERENCES tenants(id),
-    session_id       UUID        REFERENCES sessions(id),
+    session_id       VARCHAR(100) REFERENCES sessions(id),
     variant_id       UUID        NOT NULL,
     stage_key        VARCHAR(40) NOT NULL,
     is_quality_stage BOOLEAN     NOT NULL DEFAULT FALSE,
@@ -29,7 +29,7 @@ CREATE INDEX reward_events_stage_idx   ON reward_events(tenant_id, stage_key);
 CREATE TABLE quality_gate_log (
     id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id      UUID        NOT NULL REFERENCES tenants(id),
-    session_id     UUID        REFERENCES sessions(id),
+    session_id     VARCHAR(100) REFERENCES sessions(id),
     variant_id     UUID        NOT NULL,
     stage_key      VARCHAR(40) NOT NULL,
     gate_passed_at TIMESTAMPTZ NOT NULL DEFAULT now()

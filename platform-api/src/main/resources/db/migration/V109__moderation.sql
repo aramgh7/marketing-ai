@@ -22,7 +22,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON moderation_results TO mai_app;
 CREATE INDEX moderation_results_creative ON moderation_results(creative_id);
 
 -- Personas: reviewer persona sandbox (META_REVIEWER + future INVESTOR_50K, etc.)
-CREATE TABLE personas (
+-- Renamed from personas: V59 already owns that name (tenant-scoped synthetic personas, RLS).
+CREATE TABLE reviewer_personas (
     id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id   UUID        REFERENCES tenants(id),
     persona_key VARCHAR(30) NOT NULL,
@@ -33,10 +34,10 @@ CREATE TABLE personas (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (tenant_id, persona_key)
 );
-GRANT SELECT, INSERT, UPDATE ON personas TO mai_app;
+GRANT SELECT, INSERT, UPDATE ON reviewer_personas TO mai_app;
 
 -- Seed META_REVIEWER persona (platform-wide, tenant_id NULL)
-INSERT INTO personas (persona_key, description, rulebases, traits, is_active)
+INSERT INTO reviewer_personas (persona_key, description, rulebases, traits, is_active)
 VALUES (
     'META_REVIEWER',
     'Simulates Meta ad review: financial products policy + personal attributes policy',

@@ -2,7 +2,7 @@
 CREATE TABLE micro_conversion_events (
     id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id      UUID        NOT NULL REFERENCES tenants(id),
-    session_id     UUID        REFERENCES sessions(id),
+    session_id     VARCHAR(100) REFERENCES sessions(id),
     landing_id     UUID,
     block_id       VARCHAR(50) NOT NULL,
     event_type     VARCHAR(20) NOT NULL CHECK (event_type IN ('BLOCK_VIEW','CTA_CLICK','FORM_START','FORM_SUBMIT')),

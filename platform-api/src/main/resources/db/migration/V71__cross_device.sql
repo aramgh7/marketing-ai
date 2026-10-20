@@ -2,7 +2,7 @@
 -- sessions.external_id_hash already added in V46; adding bounce_corrected_at + linked_session_ids
 
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS bounce_corrected_at  TIMESTAMPTZ;
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS linked_session_ids   UUID[];
+-- linked_session_ids already exists as TEXT[] from V50 (audit fix 1.2: the UUID[] re-add here was a silent no-op)
 
 -- Retro-correction run audit
 CREATE TABLE retro_correction_runs (

@@ -93,7 +93,7 @@ public class QualityScoreScheduler {
         // Upsert 30-day creative_quality aggregates for variants/creatives with new scores
         jdbc.update("""
                 INSERT INTO creative_quality
-                    (id, tenant_id, creative_id, variant_id, window,
+                    (id, tenant_id, creative_id, variant_id, window_key,
                      quality_score, clickbait_suspect, components, computed_at)
                 SELECT
                     gen_random_uuid(),

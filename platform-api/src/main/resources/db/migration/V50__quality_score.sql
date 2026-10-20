@@ -12,14 +12,14 @@ CREATE TABLE creative_quality (
     tenant_id           UUID        NOT NULL,
     creative_id         UUID,       -- NULL for variant-level aggregates
     variant_id          UUID,       -- NULL for creative-level aggregates
-    window              VARCHAR(20) NOT NULL DEFAULT '30d', -- 7d, 30d, 90d
+    window_key          VARCHAR(20) NOT NULL DEFAULT '30d', -- 7d, 30d, 90d
     quality_score       REAL        NOT NULL DEFAULT 0,
     clickbait_suspect   BOOLEAN     NOT NULL DEFAULT FALSE,
     components          JSONB,      -- {match_score, bounce_rate, scroll_depth_norm, form_completion_rate}
     computed_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 GRANT SELECT, INSERT, UPDATE, DELETE ON creative_quality TO mai_app;
-CREATE INDEX idx_creative_quality_cid ON creative_quality(tenant_id, creative_id, window)
+CREATE INDEX idx_creative_quality_cid ON creative_quality(tenant_id, creative_id, window_key)
     WHERE creative_id IS NOT NULL;
-CREATE INDEX idx_creative_quality_vid ON creative_quality(tenant_id, variant_id, window)
+CREATE INDEX idx_creative_quality_vid ON creative_quality(tenant_id, variant_id, window_key)
     WHERE variant_id IS NOT NULL;

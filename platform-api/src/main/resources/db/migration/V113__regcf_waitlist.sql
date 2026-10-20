@@ -7,7 +7,7 @@ CREATE TABLE regcf_waitlist (
     tenant_id       UUID        NOT NULL REFERENCES tenants(id),
     email           VARCHAR(254) NOT NULL,
     ticket_interest VARCHAR(20),
-    source_session  UUID        REFERENCES sessions(id),
+    source_session  VARCHAR(100) REFERENCES sessions(id),
     consent_given   BOOLEAN     NOT NULL DEFAULT FALSE,
     consent_ts      TIMESTAMPTZ,
     status          VARCHAR(20) NOT NULL DEFAULT 'PENDING'
