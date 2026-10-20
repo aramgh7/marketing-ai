@@ -44,8 +44,10 @@ public class VariantController {
     }
 
     @PutMapping("/{id}")
-    public VariantResponse update(@PathVariable UUID id, @Valid @RequestBody VariantRequest req) {
-        return variantService.updateVariant(id, req);
+    public VariantResponse update(@PathVariable UUID id, @Valid @RequestBody VariantRequest req,
+                                  @RequestAttribute(value = "userId", required = false) UUID userId,
+                                  @RequestParam(value = "edit_reason", required = false) String editReason) {
+        return variantService.updateVariant(id, req, userId, editReason);   // roadmap 9-20: edits feed RLHA
     }
 
     /** Transition DRAFT/PAUSED → REVIEW */

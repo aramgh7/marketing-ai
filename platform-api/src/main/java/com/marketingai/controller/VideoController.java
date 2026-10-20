@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.service.RlhaService;
 import com.marketingai.config.AppProperties;
 import com.marketingai.service.StorageService;
 import lombok.RequiredArgsConstructor;
@@ -29,6 +30,8 @@ import java.util.*;
 public class VideoController {
 
     private final RestTemplate    restTemplate;
+
+    private final RlhaService rlhaService;   // roadmap 9-20
     private final AppProperties   appProperties;
     private final StorageService  storageService;
     private final JdbcTemplate    jdbc;
@@ -119,6 +122,19 @@ public class VideoController {
         return result != null ? result : Map.of();
     }
 
+    /** Roadmap 9-20: a rejected render is a signal — reason + note go to the montage-plan avoid list. */
+    @PostMapping("/renders/{renderId}/reject")
+    public ResponseEntity<Map<String, Object>> rejectRender(
+            @RequestAttribute("tenantId") UUID tenantId,
+            @RequestAttribute(value = "userId", required = false) UUID userId,
+            @PathVariable UUID renderId,
+            @RequestBody Map<String, String> body) {
+        int n = jdbc.update("UPDATE video_renders SET killed_at = now() WHERE id = ? AND tenant_id = ?", renderId, tenantId);
+        if (n == 0) return ResponseEntity.notFound().build();
+        rlhaService.renderFeedback(tenantId, userId, renderId, "REJECTED", body.get("reason"), body.get("note"));
+        return ResponseEntity.ok(Map.of("id", renderId, "status", "REJECTED", "reason", String.valueOf(body.get("reason"))));
+    }
+
     @PostMapping("/footage/{footageId}/montage-plan")
     public Map<?, ?> montagePlan(
             @RequestAttribute("tenantId") UUID tenantId,
@@ -128,6 +144,8 @@ public class VideoController {
         body = new HashMap<>(body);
         body.put("footage_id", footageId.toString());
         body.put("tenant_id",  tenantId.toString());
+        body = new HashMap<>(body);
+        body.putIfAbsent("avoid_notes", rlhaService.montageAvoidNotes(tenantId));   // roadmap 9-20
         return orEmpty(mlPost("/video/montage-plan", body));
     }
 
@@ -282,6 +300,7 @@ public class VideoController {
                    AND status    = 'COMPLETED'
                    AND approved_at IS NULL
                 """, userId, renderId);
+        rlhaService.renderFeedback(tenantId, userId, renderId, "APPROVED", null, null);   // roadmap 9-20
 
         if (rows == 0) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,

@@ -31,6 +31,8 @@ import java.util.stream.Collectors;
 public class VariantService {
 
     private final LandingVariantRepository variantRepo;
+
+    private final RlhaService rlhaService;   // roadmap 9-20
     private final VariantOfferRepository offerRepo;
     private final ThompsonArmRepository armRepo;
     private final ComplianceService complianceService;
@@ -106,7 +108,13 @@ public class VariantService {
     // ─── Update ──────────────────────────────────────────────────────────────────
 
     public VariantResponse updateVariant(UUID id, VariantRequest req) {
+        return updateVariant(id, req, null, null);
+    }
+
+    /** Roadmap 9-20: edits of generated text slots become RLHA correction pairs. */
+    public VariantResponse updateVariant(UUID id, VariantRequest req, UUID editedBy, String editReason) {
         LandingVariant v = findOwned(id);
+        String blocksBefore = v.getBlocks();
         String current = v.getStatus();
         if ("ACTIVE".equals(current) || "ARCHIVED".equals(current)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
@@ -127,6 +135,13 @@ public class VariantService {
         if (req.getBlocks() != null) v.setBlocks(req.getBlocks());
         if (req.getBlockOrder() != null) v.setBlockOrder(req.getBlockOrder());
         variantRepo.save(v);
+        if (req.getBlocks() != null) {
+            try {
+                rlhaService.captureVariantEdits(tenantId, editedBy, v.getId(), blocksBefore, req.getBlocks(), editReason);
+            } catch (Exception e) {
+                log.debug("RLHA capture skipped for variant {}: {}", v.getId(), e.getMessage());
+            }
+        }
 
         offerRepo.deleteByVariantIdAndTenantId(v.getId(), tenantId);
         VariantOffer offer = saveOffer(req.getOffer(), v.getId(), tenantId);

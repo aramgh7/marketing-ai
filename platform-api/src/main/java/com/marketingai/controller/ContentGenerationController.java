@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.service.RlhaService;
 import com.marketingai.config.AppProperties;
 import com.marketingai.repository.ProductFactRepository;
 import com.marketingai.security.TenantContext;
@@ -24,6 +25,8 @@ import java.util.UUID;
 public class ContentGenerationController {
 
     private final RestTemplate restTemplate;
+
+    private final RlhaService rlhaService;   // roadmap 9-20
     private final AppProperties appProperties;
     private final ProductFactRepository factRepo;
 
@@ -40,6 +43,10 @@ public class ContentGenerationController {
         Map<String, Object> req = new HashMap<>(body);
         req.put("tenant_id", tenantId.toString());
         req.putIfAbsent("product_facts", facts);
+        // Roadmap 9-20 (vision §13.3): the marketer's earlier edits become few-shot style examples
+        if (!req.containsKey("rlha_few_shots")) {
+            req.put("rlha_few_shots", rlhaService.fewShots(tenantId, "landing_block"));
+        }
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
@@ -50,6 +57,19 @@ public class ContentGenerationController {
             Map<String, Object> result = restTemplate.postForObject(
                     appProperties.getMlServiceUrl() + "/content/generate",
                     new HttpEntity<>(req, headers), Map.class);
+            // Roadmap 9-20: record every generated slot so a later edit can be matched to what the system wrote
+            if (result != null && result.get("slots") instanceof Map<?, ?> slots) {
+                String blockEventId = body.get("block_event_id") == null ? null : String.valueOf(body.get("block_event_id"));
+                String model = result.get("model") == null ? null : String.valueOf(result.get("model"));
+                for (Map.Entry<?, ?> e : slots.entrySet()) {
+                    try {
+                        rlhaService.recordGeneration(tenantId, "LANDING_VARIANT", variantId, blockEventId,
+                                String.valueOf(e.getKey()), String.valueOf(e.getValue()), "landing_block", model);
+                    } catch (Exception ex) {
+                        log.debug("content_generations insert skipped: {}", ex.getMessage());
+                    }
+                }
+            }
             return ResponseEntity.ok(result != null ? result : Map.of());
         } catch (Exception ex) {
             log.error("content generation failed for variant {}: {}", variantId, ex.getMessage());

@@ -186,6 +186,7 @@ class MontagePlanRequest(BaseModel):
     brief_atoms: list[dict] | None = None
     target_duration_sec: int = 30
     formats: list[str] = ["9:16"]
+    avoid_notes: list[str] = []   # roadmap 9-20: rejection reasons of earlier renders
 
 
 class MontagePlanResponse(BaseModel):
@@ -216,6 +217,8 @@ async def create_montage_plan(
     atoms_hint = ""
     if req.brief_atoms:
         atoms_hint = f"\nTop-performing atoms to emphasise: {json.dumps(req.brief_atoms[:5])}"
+    if req.avoid_notes:
+        atoms_hint += "\nThe marketer rejected earlier renders for these reasons — avoid repeating them: " + "; ".join(req.avoid_notes[:6])
 
     prompt = f"""You are an expert video editor for performance marketing ads.
 Available scenes: {json.dumps(req.scenes)}

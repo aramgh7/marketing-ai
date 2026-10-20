@@ -1308,6 +1308,16 @@
 - [x] `MetaWriteStageService` — readiness conditions are data, not dates: → GUARDED (token OK, ≥ 50 CAPI events over ≥ 14 days, EMQ pre-check, Automated Rules confirmed), → FULL (≥ 14 days guarded, OPE PASS ≤ 7 d, autonomy ≥ SEMI_AUTOPILOT, no DENY in 7 days); downgrade always; forced advance only with a reason, logged
 - [x] `GET/PUT /tenants/me/meta-write[/stage|/policy|/overrides|/decisions]`; admin page `/meta-write` (stage, readiness checklist, thresholds, overrides, ledger)
 
+### 9-20. RLHA loop closed — learning from edits, approvals and rejections (vision §13.3; roadmap 2-10) **[v1.4 — added]**
+- [x] V134: `content_generations.content_type`, `rlha_corrections.content_type/edit_reason/entity_*`, `render_feedback` (2026-10-20)
+- [x] Generations are recorded: `POST /landings/{id}/generate` writes every slot to `content_generations` (was never written before)
+- [x] Edits become pairs: `PUT /landings/{id}` diffs block text slots against the latest generation (`RlhaDiff`, 4 tests); `PUT /briefs/{id}` diffs title / audience / product info / notes; manual `POST /rlha/corrections`; delta tags from ML `/content/rlha-delta`; `edit_reason` (FACTS edits are kept out of few-shot)
+- [x] Pairs are used: `rlha_few_shots` (last 8 per content type) passed to `/content/generate`; `PATCH /rlha/corrections/{id}` toggles use_as_few_shot
+- [x] Metric: `GET /rlha/metrics` — accepted-without-edits rate (target 70 %), edit rate, weekly trend, render feedback counts
+- [x] Renders: `POST /video/renders/{id}/reject` {reason, note} + approve feedback → `render_feedback`; montage plan receives `avoid_notes` from the last 30 days of rejections
+- [x] Admin page `/rlha` (metrics, weekly bars, pairs with reason/toggle, manual pair, render feedback)
+- [ ] LoRA niche adapter — not planned (needs 200+ pairs per niche; few-shot covers the first year)
+
 ### 9-E. Documentation
 
 ### 9-18. architecture.md and capabilities kept in sync
@@ -1338,7 +1348,7 @@ _(empty — project not started)_
 | Phase 0.5 | **IN PROGRESS** | 0.5a not started (needs 5+ clients); 0.5b: feature store ✅ hierarchy ✅ red flags ✅ (Block D)                  | first-party-only benchmarks ✅, client-level A/B (deferred), Meta terms check (0.5a) |
 | Phase 7   | **COMPLETE**    | 7-1 Google ✅ 7-2 TikTok ✅ 7-3 Decision graph ✅ 7-4 MMM ✅ 7-5 Attribution ✅                                   | — |
 | **[v1.2 — added]** Phase 8 | **IN PROGRESS** | 8-1 ✅ · 8-2 ✅ · 8-3 ✅ (infra) · 8-4 ✅ · 8-5 ✅ (infra) · 8-6 ✅ · 8-7 ✅ · 8-8 ✅ · 8-9 ✅ · 8-10 ✅ (signals+calendar infra) · 8-11 ✅ (labels+aliases infra) · 8-12 ✅ (widgets+frontend) · 8-13 ✅ (open items registry) · 8-14 ✅ (funnel paths Thompson) · 8-15 ✅ (noshow propensity) · 8-16 ✅ (predicted lead value) · 8-17 ✅ (compliance by construction) · 8-18 ✅ (post-call intelligence) · 8-19 ✅ (investor archetypes) · 8-20 ✅ (agency measurability) · 8-21 ✅ (regcf waitlist, FROZEN) | 8-3 reward_levels config, show-rate corrector; 8-5 weekly calibration, tz capture; 8-8 investor offer atom schema; 8-9 GHL sub-accounts; 8-10 GLM DEMAND/NARRATIVE wiring; 8-11 client asset delivery; **[v1.3]** 8-14…8-21 beyond-capability (infra complete, activation gated on live data/counsel) |
-| **[v1.4 — added]** Phase 9 | **COMPLETE** | 9-1 ✅ … 9-19 ✅ — pre-production gap closure from the 2026-10-20 conformance review (open: vitest for admin pages; frontend/mlflow containers not booted — platform-api + ml-service + postgres + redis booted live at V132 and smoke-tested end to end) | — |
+| **[v1.4 — added]** Phase 9 | **COMPLETE** | 9-1 ✅ … 9-20 ✅ — pre-production gap closure from the 2026-10-20 conformance review (open: vitest for admin pages; frontend/mlflow containers not booted — platform-api + ml-service + postgres + redis booted live at V132 and smoke-tested end to end) | — |
 
 **Immediate priority**: ~~Phase 7 (Multi-Channel) or Phase 0.5 (Universal Cross-Niche Model) — Phase 6 complete~~ **[v1.1 — changed]** Before onboarding client #1 on anything above ADVISOR: the Phase 0 items (0-11, 0-12, 0-13), then Phase 2 content path (2-9 → 2-10 → 2-11, 2-12), then the Phase 3 protective set in this order — 3-15 queue → 3-13 Site Health → 3-14 anchors → 3-12 external signals → 3-16 recovery → 3-17/3-18 autonomy + OPE (unlocks 6-6). Phase 7 and 0.5 after that. **[v1.2 — changed]** With all v1.1 items ✅, the immediate priority is **Phase 8 pre-onboarding set (8-1 → 8-2 → 8-3 → 8-7 → 8-4)**: the implemented CAPI gate, reward map and gates are coded on the wrong funnel for client #1, and nothing should go live on their account until they read the configured funnel.
 

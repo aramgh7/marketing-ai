@@ -28,6 +28,8 @@ import java.util.UUID;
 public class BriefService {
 
     private final CreatorBriefRepository briefRepository;
+
+    private final RlhaService rlhaService;   // roadmap 9-20
     private final AnalyticsService analyticsService;
     private final ObjectMapper objectMapper;
     private final JdbcTemplate jdbc;
@@ -69,7 +71,13 @@ public class BriefService {
         CreatorBrief brief = findOrThrow(id);
         snapshotVersion(brief);
         brief.setVersion(brief.getVersion() + 1);
+        java.util.Map<String, String> before = briefTexts(brief);
         applyRequest(brief, req);
+        try {
+            rlhaService.captureBriefEdit(brief.getTenantId(), null, brief.getId(), before, briefTexts(brief), null);   // roadmap 9-20
+        } catch (Exception e) {
+            log.debug("RLHA brief capture skipped: {}", e.getMessage());
+        }
         return toResponse(briefRepository.save(brief), false);
     }
 
@@ -284,6 +292,15 @@ public class BriefService {
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
+
+    private static java.util.Map<String, String> briefTexts(CreatorBrief brief) {
+        java.util.Map<String, String> m = new java.util.HashMap<>();
+        m.put("title", brief.getTitle());
+        m.put("targetAudience", brief.getTargetAudience());
+        m.put("productInfo", brief.getProductInfo());
+        m.put("notes", brief.getNotes());
+        return m;
+    }
 
     private void snapshotVersion(CreatorBrief brief) {
         try {

@@ -17,6 +17,7 @@ const nav = [
   { href: "/ghl",        label: "GHL",         icon: "🔗" },
   { href: "/autonomy",   label: "Autonomy",    icon: "🤖" },
   { href: "/meta-write", label: "Meta writes", icon: "🛡️" },
+  { href: "/rlha",       label: "Learning",    icon: "🧠" },
   { href: "/settings",   label: "Settings",    icon: "⚙️" },
 ];
 
