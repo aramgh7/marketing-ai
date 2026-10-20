@@ -26,6 +26,7 @@ public class FormSubmissionService {
 
     private final JdbcTemplate jdbc;
     private final ValueFormulaService valueFormulaService;
+    private final GhlApiClient ghlApiClient;
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     /** Owner tenant of a landing variant, or null when unknown (public-endpoint validation). */
@@ -81,6 +82,24 @@ public class FormSubmissionService {
                         (tenant_id, session_id, predicted_value, ticket_bucket, self_accredited, stage_key)
                     VALUES (?, ?, ?, ?, ?, 'FORM_SUBMIT')
                     """, tenantId, sessionId, predictedValue, ticketBucket, selfAccredited);
+            }
+        }
+
+        // Roadmap 8-9: when the GHL contact is already known (GHL-native form), write our ids now —
+        // before any sub-account transfer can break the email/phone link.
+        String ghlContactId = body.get("ghl_contact_id") != null ? body.get("ghl_contact_id").toString() : null;
+        if (ghlContactId != null && !ghlContactId.isBlank()) {
+            try {
+                jdbc.update("UPDATE form_submissions SET ghl_contact_id = ? WHERE id = ?", ghlContactId, submissionId);
+                List<byte[]> keys = jdbc.queryForList(
+                        "SELECT api_key_enc FROM ghl_subaccounts WHERE tenant_id = ? AND role = 'MAIN' AND is_active = TRUE AND api_key_enc IS NOT NULL LIMIT 1",
+                        byte[].class, tenantId);
+                if (!keys.isEmpty()) {
+                    ghlApiClient.writeContactIds(new String(keys.get(0), java.nio.charset.StandardCharsets.UTF_8),
+                            ghlContactId, sessionId, submissionId.toString());
+                }
+            } catch (Exception e) {
+                log.debug("GHL id write skipped: {}", e.getMessage());
             }
         }
 

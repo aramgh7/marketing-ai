@@ -1079,11 +1079,11 @@
 
 - [x] **Niche benchmarks cache** (extends 0.5b): `niche_benchmarks` table (V102, no RLS — aggregate); `tenants.niche_key`; `NicheBenchmarkScheduler` (daily 03:00 UTC, **ONLY first-party events** — §25 p.19, aggregate floor ≥5 tenants); `niche_benchmark_service.py`: show_rate p50/p75, form_to_booked_p50, booking_distance_h_p50; `GET /api/v1/benchmarks/niche/{key}`, `GET /benchmarks/my-performance`
 - [x] **Multi-touch attribution infrastructure** (extends 7-5): `touchpoints` + `attribution_credits` tables (V103, RLS); `attribution_service.py`: last_touch, linear, time_decay, data_driven (channel weights); `AttributionController`: `POST /attribution/touchpoint`, `GET /attribution/session/{id}`, `GET /attribution/channel-report`
-- [ ] `ghl_subaccounts(location_id, role MAIN/AGENCY/WEBINAR/MAILING, webhook_secret)`; webhooks registered on every sub-account; opportunities read from MAIN only
-- [ ] On FORM_SUBMIT write `mai_event_id` + `mai_session_id` into GHL contact custom fields (P1) **before** any transfer; linking order custom fields → email/phone hash → UTM last
+- [x] `ghl_subaccounts(location_id, role MAIN/AGENCY/WEBINAR/MAILING, webhook_secret)`; webhooks registered on every sub-account; opportunities read from MAIN only — V124; `GET/POST/DELETE /api/v1/ghl/subaccounts`; `GhlWebhookController` picks the secret by the payload's `locationId` and drops `OpportunityStatusUpdate` from non-MAIN locations; `ghl_webhook_log.location_id / link_method` (2026-10-20)
+- [x] On FORM_SUBMIT write `mai_event_id` + `mai_session_id` into GHL contact custom fields (P1) **before** any transfer; linking order custom fields → email/phone hash → UTM last — `GhlApiClient.writeContactIds` (LeadConnector `PUT /contacts/{id}` customFields, per-location API key); `GhlWebhookService` links custom field → email → phone (form_submissions digits) → UTM (24 h) and writes the ids back on first link; `FormSubmissionService` writes them immediately when `ghl_contact_id` is known; `GhlContactLinker` (4 tests) (2026-10-20)
 - [ ] Agency accounts as test contours: `meta_pixels` TEST role per agency; winner → client primary via confirmation run (3-2)
 - [ ] Dashboard: creative attribution extended past CALL_HELD to ACCRED_VERIFIED and FUNDS_RECEIVED; `creative_aliases` for legacy creative names (events)
-- [ ] Daily funnel integrity check: BOOKED (GHL) vs `Schedule` (Meta) vs FORM_SUBMIT (first-party); delta > 10 % → alert
+- [x] Daily funnel integrity check: BOOKED (GHL) vs `Schedule` (Meta) vs FORM_SUBMIT (first-party); delta > 10 % → alert — `FunnelIntegrityScheduler` 07:15 UTC → `funnel_integrity_checks` (V124) + alert; `FunnelIntegrityMath` (7 tests; threshold `tenants.settings.funnel_integrity_delta`); `GET /api/v1/ghl/integrity` (2026-10-20)
 
 ### 8-10. External Signals Role per Funnel (vision §19.13; arch §16.10) — config on 3-12
 

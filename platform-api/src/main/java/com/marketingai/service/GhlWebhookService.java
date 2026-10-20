@@ -1,5 +1,8 @@
 package com.marketingai.service;
 
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.marketingai.dto.webhook.GhlWebhookPayload;
 import com.marketingai.entity.Tenant;
@@ -27,6 +30,7 @@ public class GhlWebhookService {
     private final FunnelService funnelService;
     private final ValueFormulaService valueFormulaService;
     private final RewardService rewardService;
+    private final GhlApiClient ghlApiClient;
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Transactional
@@ -35,7 +39,7 @@ public class GhlWebhookService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tenant not found"));
 
         // 1. Log raw webhook for audit + replay
-        logWebhook(tenantId, payload);
+        UUID logId = logWebhook(tenantId, payload);
 
         String eventType = payload.getType();
         if (eventType == null) {
@@ -49,13 +53,34 @@ public class GhlWebhookService {
         // 2. Link GHL contact to session (email match — arch v1.1 §13.2)
         // ContactCreate fires for new contacts; ContactUpdate for returning leads.
         // Without ContactUpdate handling, returning leads are unattributed.
+        // Roadmap 8-9 linking order: our ids in custom fields → email → phone → UTM (last resort)
         String sessionId = null;
-        if (payload.getEmail() != null) {
+        GhlContactLinker.Method method = GhlContactLinker.Method.NONE;
+        Optional<String> fromField = GhlContactLinker.extractCustomField(payload.getRawData(), GhlApiClient.FIELD_SESSION);
+        if (fromField.isPresent() && sessionExists(tenantId, fromField.get())) {
+            sessionId = fromField.get();
+            method = GhlContactLinker.Method.CUSTOM_FIELD;
+        }
+        if (sessionId == null && payload.getEmail() != null) {
             sessionId = findSessionByEmail(tenantId, payload.getEmail());
-            if (sessionId != null) {
-                updateSessionGhlFields(sessionId, tenantId, payload);
+            if (sessionId != null) method = GhlContactLinker.Method.EMAIL;
+        }
+        if (sessionId == null && payload.getPhone() != null) {
+            sessionId = findSessionByPhone(tenantId, payload.getPhone());
+            if (sessionId != null) method = GhlContactLinker.Method.PHONE;
+        }
+        if (sessionId == null) {
+            sessionId = findSessionByUtm(tenantId, payload.getRawData());
+            if (sessionId != null) method = GhlContactLinker.Method.UTM;
+        }
+        if (sessionId != null) {
+            updateSessionGhlFields(sessionId, tenantId, payload);
+            // Write mai_session_id / mai_event_id into the contact BEFORE any sub-account transfer (P1)
+            if (method != GhlContactLinker.Method.CUSTOM_FIELD) {
+                writeContactIds(tenantId, payload, sessionId);
             }
         }
+        markLinkMethod(logId, method);
 
         // 3. Handle appointment lifecycle with real GHL event names (arch v1.1 §13.1)
         handleAppointmentEvent(tenantId, eventType, sessionId, payload);
@@ -176,6 +201,89 @@ public class GhlWebhookService {
         }
     }
 
+    private boolean sessionExists(UUID tenantId, String sessionId) {
+        try {
+            Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM sessions WHERE id = ? AND tenant_id = ?",
+                    Integer.class, sessionId, tenantId);
+            return n != null && n > 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** Phone digits match against the form submission (sessions themselves store no phone). */
+    private String findSessionByPhone(UUID tenantId, String phone) {
+        String digits = GhlContactLinker.normalisePhone(phone);
+        if (digits == null) return null;
+        try {
+            List<String> rows = jdbc.queryForList("""
+                    SELECT session_id FROM form_submissions
+                    WHERE tenant_id = ? AND session_id IS NOT NULL
+                      AND regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g') = ?
+                      AND submitted_at > now() - INTERVAL '30 days'
+                    ORDER BY submitted_at DESC LIMIT 1
+                    """, String.class, tenantId, digits);
+            return rows.isEmpty() ? null : rows.get(0);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** UTM last resort: a converted session of the same utm_campaign/source within 24 h of the webhook. */
+    private String findSessionByUtm(UUID tenantId, Map<String, Object> raw) {
+        if (raw == null) return null;
+        Object campaign = raw.get("utm_campaign"); Object source = raw.get("utm_source");
+        if (campaign == null && source == null) {
+            Object attribution = raw.get("attributionSource");
+            if (attribution instanceof Map<?, ?> a) { campaign = a.get("utmCampaign"); source = a.get("utmSource"); }
+        }
+        if (campaign == null && source == null) return null;
+        try {
+            List<String> rows = jdbc.queryForList("""
+                    SELECT id FROM sessions
+                    WHERE tenant_id = ? AND converted = TRUE AND ghl_contact_id IS NULL
+                      AND last_event_at > now() - INTERVAL '24 hours'
+                      AND (? IS NULL OR utm_campaign = ?) AND (? IS NULL OR utm_source = ?)
+                    ORDER BY last_event_at DESC LIMIT 1
+                    """, String.class, tenantId,
+                    campaign == null ? null : campaign.toString(), campaign == null ? null : campaign.toString(),
+                    source == null ? null : source.toString(), source == null ? null : source.toString());
+            return rows.isEmpty() ? null : rows.get(0);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Roadmap 8-9: our ids into the contact's custom fields through the location's API key. */
+    private void writeContactIds(UUID tenantId, GhlWebhookPayload p, String sessionId) {
+        if (p.getContactId() == null) return;
+        try {
+            List<byte[]> keys = jdbc.queryForList("""
+                    SELECT api_key_enc FROM ghl_subaccounts
+                    WHERE tenant_id = ? AND is_active = TRUE AND api_key_enc IS NOT NULL
+                      AND (location_id = ? OR role = 'MAIN')
+                    ORDER BY (location_id = ?) DESC LIMIT 1
+                    """, byte[].class, tenantId, p.getLocationId(), p.getLocationId());
+            if (keys.isEmpty()) return;
+            List<String> eventIds = jdbc.queryForList("""
+                    SELECT event_id FROM events WHERE session_id = ? AND tenant_id = ? AND event_type = 'FORM_SUBMIT'
+                    ORDER BY event_time DESC LIMIT 1
+                    """, String.class, sessionId, tenantId);
+            ghlApiClient.writeContactIds(new String(keys.get(0), java.nio.charset.StandardCharsets.UTF_8),
+                    p.getContactId(), sessionId, eventIds.isEmpty() ? null : eventIds.get(0));
+        } catch (Exception e) {
+            log.debug("writeContactIds skipped: {}", e.getMessage());
+        }
+    }
+
+    private void markLinkMethod(UUID logId, GhlContactLinker.Method method) {
+        if (logId == null) return;
+        try {
+            jdbc.update("UPDATE ghl_webhook_log SET link_method = ?, processed = TRUE WHERE id = ?",
+                    method.name().toLowerCase(), logId);
+        } catch (Exception ignored) { /* audit only */ }
+    }
+
     private void updateSessionGhlFields(String sessionId, UUID tenantId, GhlWebhookPayload p) {
         // arch v1.1 §13.1: real GHL event names — OpportunityStatusUpdate with status field
         String eventType = p.getType();
@@ -247,23 +355,27 @@ public class GhlWebhookService {
 
     // ─── Webhook audit log ────────────────────────────────────────────────────
 
-    private void logWebhook(UUID tenantId, GhlWebhookPayload payload) {
+    private UUID logWebhook(UUID tenantId, GhlWebhookPayload payload) {
         try {
             String json = MAPPER.writeValueAsString(payload);
-            jdbc.update(
+            return jdbc.queryForObject(
                     """
                     INSERT INTO ghl_webhook_log
-                        (tenant_id, event_type, ghl_contact_id, ghl_opportunity_id, payload)
-                    VALUES (?, ?, ?, ?, ?::jsonb)
+                        (tenant_id, event_type, ghl_contact_id, ghl_opportunity_id, payload, location_id)
+                    VALUES (?, ?, ?, ?, ?::jsonb, ?)
+                    RETURNING id
                     """,
+                    UUID.class,
                     tenantId,
                     payload.getType(),
                     payload.getContactId(),
                     payload.getOpportunityId(),
-                    json
+                    json,
+                    payload.getLocationId()
             );
         } catch (Exception e) {
             log.warn("Failed to log GHL webhook: {}", e.getMessage());
+            return null;
         }
     }
 }

@@ -42,15 +42,39 @@ public class GhlWebhookController {
         // Audit §3.4: anyone who knew a tenant UUID could post "won" opportunities and fire Purchase
         // CAPI events. GHL custom webhooks can send a header or a query parameter; both are accepted.
         String provided = headerSecret != null ? headerSecret : querySecret;
-        String expected = TenantContext.callAsSystem(() -> expectedSecret(tenantId));
+        // Roadmap 8-9: every GHL sub-account (location) has its own secret and role
+        Map<String, Object> subaccount = TenantContext.callAsSystem(() -> subaccountFor(tenantId, payload.getLocationId()));
+        String expected = subaccount != null && subaccount.get("webhook_secret") != null
+                ? subaccount.get("webhook_secret").toString()
+                : TenantContext.callAsSystem(() -> expectedSecret(tenantId));
         if (!secretMatches(provided, expected)) {
-            log.warn("GHL webhook rejected for tenant {}: bad or missing secret", tenantId);
+            log.warn("GHL webhook rejected for tenant {} location {}: bad or missing secret", tenantId, payload.getLocationId());
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("status", "unauthorized"));
+        }
+        // Opportunities (deal won/lost → Purchase CAPI, converted sessions) are trusted from MAIN only
+        String role = subaccount == null ? "MAIN" : String.valueOf(subaccount.get("role"));
+        if ("OpportunityStatusUpdate".equals(payload.getType()) && !"MAIN".equals(role)) {
+            log.info("GHL OpportunityStatusUpdate ignored from {} location {} (tenant {})", role, payload.getLocationId(), tenantId);
+            return ResponseEntity.ok(Map.of("status", "ignored", "reason", "opportunities are read from the MAIN location only"));
         }
 
         // Path tenant is the RLS scope for everything this webhook touches.
         TenantContext.runAs(tenantId.toString(), () -> webhookService.process(tenantId, payload));
         return ResponseEntity.ok(Map.of("status", "received"));
+    }
+
+    /** Active sub-account row for the payload's locationId, or null (legacy single-location setup). */
+    private Map<String, Object> subaccountFor(UUID tenantId, String locationId) {
+        if (locationId == null || locationId.isBlank()) return null;
+        try {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT role, webhook_secret FROM ghl_subaccounts WHERE tenant_id = ? AND location_id = ? AND is_active = TRUE",
+                    tenantId, locationId);
+            return rows.isEmpty() ? null : rows.get(0);
+        } catch (Exception e) {
+            log.debug("subaccount lookup failed: {}", e.getMessage());
+            return null;
+        }
     }
 
     /** Per-tenant secret (tenants.settings.ghl_webhook_secret) with the global one as fallback. */
