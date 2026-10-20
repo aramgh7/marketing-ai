@@ -16,6 +16,7 @@ from app.services.ope_service import compute_ope, passes_ope_gate
 from app.services.form_check_service import check_form_health
 from app.services.noshow_attribution_service import fit_noshow_attribution
 from app.services import media_atoms_service, transcription_service
+from app.services import browser_form_check_service
 from app.security import assert_public_http_url
 from app.security import check_internal_key
 
@@ -326,12 +327,37 @@ def noshow_attribution(req: NoshowAttributionRequest):
 # ── Form Health ───────────────────────────────────────────────────────────────
 
 class FormHealthRequest(BaseModel):
-    form_endpoint_url: str
+    form_endpoint_url: Optional[str] = None
     test_payload: Optional[dict] = None
     timeout_seconds: float = 5.0
+    # roadmap 3-13: headless-browser mode
+    mode: str = "http"                      # http | browser
+    page_url: Optional[str] = None
+    form_selector: str = "form"
+    submit_selector: Optional[str] = None
+    fields: Optional[dict] = None           # {css selector: value}
+    success_pattern: Optional[str] = None
 
 
 @router.post("/form-health")
-def form_health(req: FormHealthRequest):
+async def form_health(req: FormHealthRequest):
+    """HTTP check of the form endpoint, or (mode=browser) a real submission in headless Chromium.
+
+    Browser mode falls back to the HTTP check when Playwright is not installed; `method` says which ran.
+    """
+    import asyncio
+    if req.mode == "browser" and req.page_url:
+        assert_public_http_url(req.page_url)
+        result = await asyncio.to_thread(
+            browser_form_check_service.run_browser_check, req.page_url, req.form_selector,
+            req.submit_selector, req.fields, req.success_pattern, max(req.timeout_seconds, 20.0))
+        if result.get("method") == "browser":
+            return result
+        if not req.form_endpoint_url:
+            return result   # ok=None, method=unavailable — caller cannot judge
+    if not req.form_endpoint_url:
+        raise HTTPException(status_code=400, detail="form_endpoint_url or (mode=browser + page_url) required")
     assert_public_http_url(req.form_endpoint_url)  # audit §3.4: no POSTs to metadata/redis/postgres
-    return check_form_health(req.form_endpoint_url, req.test_payload, req.timeout_seconds)
+    out = check_form_health(req.form_endpoint_url, req.test_payload, req.timeout_seconds)
+    out["method"] = "http"
+    return out

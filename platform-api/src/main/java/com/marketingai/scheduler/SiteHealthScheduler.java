@@ -1,5 +1,6 @@
 package com.marketingai.scheduler;
 
+import com.marketingai.service.SiteHealthResumeService;
 import com.marketingai.service.MetaApiClient;
 import com.marketingai.service.AlertService;
 import lombok.RequiredArgsConstructor;
@@ -31,6 +32,7 @@ public class SiteHealthScheduler {
     private final AlertService alertService;
     private final RestTemplate restTemplate;
     private final MetaApiClient metaApiClient;
+    private final SiteHealthResumeService resumeService;
 
     public static final String SENTINEL_UA = "MarketingAI-HealthCheck/1.0";
 
@@ -92,6 +94,8 @@ public class SiteHealthScheduler {
         if ("FAIL".equals(status)) {
             evaluateIncident(tenantId, variantId, failCause, url);
         }
+        // Roadmap 3-13: consecutive passes on an open incident → ask for confirmation → resume
+        resumeService.recordCheck(tenantId, variantId, "PASS".equals(status));
     }
 
     private void evaluateIncident(UUID tenantId, UUID variantId, String cause, String url) {
@@ -108,10 +112,11 @@ public class SiteHealthScheduler {
                     """, tenantId, variantId);
 
             if (openIncidents.isEmpty()) {
-                jdbc.update("""
+                UUID incidentId = jdbc.queryForObject("""
                         INSERT INTO site_health_incidents (tenant_id, variant_id, cause, consecutive_fails, alerted)
                         VALUES (?, ?, ?, ?, TRUE)
-                        """, tenantId, variantId, cause, consecutiveFails);
+                        RETURNING id
+                        """, UUID.class, tenantId, variantId, cause, consecutiveFails);
 
                 alertService.sendAlert(
                         "🔴 Site Health: " + url + " failed " + consecutiveFails +
@@ -120,10 +125,13 @@ public class SiteHealthScheduler {
 
                 // P0 autopause: pause all ACTIVE ad sets to prevent wasted spend during site outage
                 metaApiClient.enqueue("P0", null, tenantId, "AUTOPAUSE_SITE_INCIDENT", () -> {
+                    List<UUID> ids = jdbc.queryForList(
+                            "SELECT id FROM meta_ad_sets WHERE tenant_id = ? AND status = 'ACTIVE'", UUID.class, tenantId);
                     int paused = jdbc.update(
                             "UPDATE meta_ad_sets SET status='PAUSED', synced_at=now() WHERE tenant_id=? AND status='ACTIVE'",
                             tenantId);
                     if (paused > 0) {
+                        resumeService.rememberPausedAdSets(incidentId, ids);   // resume re-enables exactly these
                         log.warn("Site health P0 autopause: tenant={} paused {} ad sets", tenantId, paused);
                     }
                 });

@@ -659,10 +659,10 @@
 
 ### 3-13. Site Health Guard — Full ✅ **[v1.1 — added]** (vision §11.4, §22; arch §15.3; HTTP check from 0-13)
 
-- [x] Synthetic form check with Playwright — deferred (browser automation requires separate infrastructure)
+- [x] Synthetic form check with Playwright — `browser_form_check_service.py` (headless Chromium: load landing, fill, submit, judge success text / URL / POST status / JS errors; 9 pure tests), `/analyze/form-health` `mode=browser` with HTTP fallback, Dockerfile `ARG INSTALL_PLAYWRIGHT=1`; `tenants.settings.form_check_mode = browser` (+ `form_check_success_pattern`, `form_check_fields`); `FormHealthScheduler` records `site_health_checks(SYNTHETIC_FORM)`, opens `FORM_ERROR` incidents and pauses the form after 2 fails (2026-10-20)
 - [x] CVR-collapse detector: `quality_service.detect_cvr_collapse()` + `POST /quality/cvr-collapse` endpoint
 - [x] **Autopause without confirmation** via P0 lane of `MetaApiClient`: `SiteHealthScheduler.evaluateIncident()` enqueues P0 `AUTOPAUSE_SITE_INCIDENT` → pauses all ACTIVE ad sets for tenant
-- [x] Resume only after 3 consecutive passes — marketer-confirm step (deferred to UX)
+- [x] Resume only after 3 consecutive passes — marketer-confirm step — `SiteHealthResumeService` (V126: `consecutive_passes`, `resume_alerted_at`, `resume_confirmed_at`, `resumed_at`): passes counted per open incident on every HTTP/form check, one "confirm resume" alert at 3 passes, `POST /api/v1/site-health/{id}/confirm-resume`; resume re-enables the form and exactly the ad sets the P0 autopause paused (`detail.paused_ad_set_ids`) via the P1 lane; 5 policy tests (2026-10-20)
 - [x] `TECHNICAL` verdict in `signals_service.classify_anomaly()` — site_health_open=True → highest priority
 - [x] `GET /api/v1/site-health` incident history — existing from 0-13
 

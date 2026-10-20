@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.service.SiteHealthResumeService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -17,13 +18,15 @@ import java.util.UUID;
 public class SiteHealthController {
 
     private final JdbcTemplate jdbc;
+    private final SiteHealthResumeService resumeService;
 
     @GetMapping
     public ResponseEntity<Map<String, Object>> getIncidents(
             @RequestAttribute("tenantId") UUID tenantId) {
 
         List<Map<String, Object>> incidents = jdbc.queryForList("""
-                SELECT id, variant_id, cause, opened_at, resolved_at, consecutive_fails, detail
+                SELECT id, variant_id, cause, opened_at, resolved_at, consecutive_fails, detail,
+                       consecutive_passes, resume_alerted_at, resume_confirmed_at, resumed_at
                 FROM site_health_incidents
                 WHERE tenant_id = ?
                 ORDER BY opened_at DESC
@@ -42,6 +45,28 @@ public class SiteHealthController {
         return ResponseEntity.ok(Map.of(
                 "incidents", incidents,
                 "recent_checks", recentChecks));
+    }
+
+    /**
+     * Roadmap 3-13: marketer confirmation of resume. Ad sets and the form are re-enabled only when
+     * three consecutive passes have also been observed (SiteHealthResumeService.Policy).
+     */
+    @PostMapping("/{incidentId}/confirm-resume")
+    public ResponseEntity<Map<String, Object>> confirmResume(
+            @RequestAttribute("tenantId") UUID tenantId,
+            @RequestAttribute("userId") UUID userId,
+            @PathVariable UUID incidentId) {
+        if (!resumeService.confirm(tenantId, incidentId, userId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Incident not found or already resolved");
+        }
+        Map<String, Object> inc = jdbc.queryForMap(
+                "SELECT consecutive_passes, resolved_at, resumed_at FROM site_health_incidents WHERE id = ?", incidentId);
+        return ResponseEntity.ok(Map.of(
+                "incident_id", incidentId.toString(),
+                "confirmed", true,
+                "consecutive_passes", inc.get("consecutive_passes"),
+                "resumed", inc.get("resumed_at") != null,
+                "note", inc.get("resumed_at") != null ? "resumed" : "waiting for 3 consecutive passes"));
     }
 
     @PostMapping("/{incidentId}/resolve")
