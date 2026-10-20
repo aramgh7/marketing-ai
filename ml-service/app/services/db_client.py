@@ -56,3 +56,16 @@ async def update_creative_status(tenant_id: str, creative_id: str, status: str) 
                 creative_id,
                 tenant_id,
             )
+
+
+async def update_creative_transcript(tenant_id: str, creative_id: str, transcript: str) -> None:
+    """Roadmap 1-2: Whisper auto-transcription on upload — stored so the marketer can edit it."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT set_config('app.current_tenant', $1, true)", tenant_id)
+            await conn.execute(
+                "UPDATE creatives SET transcript = $1 WHERE id = $2 AND tenant_id = $3 "
+                "AND (transcript IS NULL OR transcript = '')",
+                transcript, creative_id, tenant_id,
+            )

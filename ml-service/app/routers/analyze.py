@@ -15,6 +15,7 @@ from app.services.segment_re_service import rank_atoms_by_segment
 from app.services.ope_service import compute_ope, passes_ope_gate
 from app.services.form_check_service import check_form_health
 from app.services.noshow_attribution_service import fit_noshow_attribution
+from app.services import media_atoms_service, transcription_service
 from app.security import assert_public_http_url
 from app.security import check_internal_key
 
@@ -176,16 +177,72 @@ async def _align_atoms(tenant_id: str, atoms: list[dict]) -> None:
         logger.warning("Taxonomy alignment non-critical failure: %s", exc)
 
 
+def _is_image_url(url: str) -> bool:
+    return any(url.lower().split("?")[0].endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif"))
+
+
+async def _video_media_pass(req: "AnalyzeCreativeRequest", transcript: str | None,
+                            duration: float | None) -> tuple[list[dict], str | None, float | None]:
+    """Download the video once; run ffmpeg media atoms and Whisper (when no transcript was given).
+
+    Failures are logged and skipped — vision/text extraction must still run.
+    """
+    import asyncio
+    import os as _os
+    import tempfile
+
+    media_atoms: list[dict] = []
+    try:
+        data = await transcription_service.download_media(req.file_url)
+    except Exception as exc:
+        logger.warning("media download failed for %s: %s", req.creative_id, exc)
+        return media_atoms, transcript, duration
+
+    suffix = _os.path.splitext(req.file_url.split("?")[0])[1] or ".mp4"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(data)
+        path = tmp.name
+    try:
+        try:
+            media_atoms = await asyncio.to_thread(media_atoms_service.extract_media_atoms_from_file, path, duration)
+            if duration is None and media_atoms_service.ffmpeg_available():
+                duration, _ = await asyncio.to_thread(media_atoms_service.probe_duration_and_audio, path)
+        except Exception as exc:
+            logger.warning("ffmpeg media atoms failed for %s: %s", req.creative_id, exc)
+        if not (transcript and transcript.strip()):
+            try:
+                result = await asyncio.to_thread(transcription_service.transcribe_bytes, data, suffix)
+                if result.get("provider") != "stub" and result.get("text"):
+                    transcript = result["text"]
+                    await db_client.update_creative_transcript(req.tenant_id, req.creative_id, transcript)
+            except Exception as exc:
+                logger.warning("auto-transcription failed for %s: %s", req.creative_id, exc)
+    finally:
+        try:
+            _os.unlink(path)
+        except OSError:
+            pass
+    return media_atoms, transcript, duration
+
+
 async def _run_analysis(job_id: str, req: AnalyzeCreativeRequest) -> None:
     """Background task: extract atoms, write to DB, update creative status."""
     await job_store.set_job(job_id, {"status": "running", "creative_id": req.creative_id})
     try:
+        transcript = req.transcript
+        media_atoms: list[dict] = []
+        duration = req.duration_sec
+        if req.media_type == "VIDEO" and req.file_url and not _is_image_url(req.file_url):
+            # Roadmap 1-2: one download feeds ffmpeg (EDIT_PACE, MUSIC) and Whisper (auto-transcript)
+            media_atoms, transcript, duration = await _video_media_pass(req, transcript, duration)
+
         atoms = await creative_dna.extract(
             media_type=req.media_type,
             file_url=req.file_url,
             thumbnail_url=req.thumbnail_url,
-            transcript=req.transcript,
-            duration_sec=req.duration_sec,
+            transcript=transcript,
+            duration_sec=duration,
+            media_atoms=media_atoms,
         )
 
         if atoms:

@@ -204,9 +204,9 @@
 - [x] Confidence scores per atom (0.80 vision, 0.75 transcript, 1.0 metadata)
 - [x] Spring Boot `MlServiceClient` → FastAPI `POST /analyze/creative` (RestTemplate); reverts status to UPLOADED if ml-service unreachable
 - [x] `creative_dna.py` orchestrates: IMAGE→vision, VIDEO+thumbnail→vision, VIDEO+transcript→text
-- [ ] EDIT_PACE atom (scene detection) — deferred Phase 4, requires FFmpeg
-- [ ] MUSIC atom — deferred Phase 4, requires audio analysis
-- [ ] Whisper auto-transcription — deferred Phase 4 (Phase 1: transcript provided manually by marketer)
+- [x] EDIT_PACE atom (scene detection) — `media_atoms_service.py`: ffmpeg `select='gt(scene,0.4)',showinfo` cuts per minute → static / slow / medium / fast; wired into `analyze._run_analysis` for VIDEO (2026-10-20)
+- [x] MUSIC atom — ffprobe audio stream + volumedetect + silencedetect → none / background / dominant (same service; 6 pure tests) (2026-10-20)
+- [x] Whisper auto-transcription — `transcription_service.transcribe_bytes` on upload when no transcript was provided; stored to `creatives.transcript` (`db_client.update_creative_transcript`) and used for the text atoms; stub without OPENAI_API_KEY (2026-10-20)
 - [x] Admin UI for manual atom editing — deferred Phase 2 (backend CRUD already in Phase 1-1)
 
 ### 1-3. Descriptive Diagnostics Dashboard ✅
