@@ -127,14 +127,14 @@ async def ensure_arms(tenant_id: str, context_key: str) -> int:
         status = await conn.execute(
             """
             INSERT INTO thompson_arms (tenant_id, variant_id, context_key)
-            SELECT $1::uuid, lv.id, $2
+            SELECT $1::uuid, lv.id, $2::varchar
             FROM   landing_variants lv
             WHERE  lv.tenant_id = $1::uuid
               AND  lv.status    = 'ACTIVE'
               AND  NOT EXISTS (
                   SELECT 1 FROM thompson_arms ta
                   WHERE  ta.variant_id  = lv.id
-                    AND  ta.context_key = $2
+                    AND  ta.context_key = $2::varchar
               )
             ON CONFLICT DO NOTHING
             """,
