@@ -23,7 +23,9 @@ class AutonomyServiceTest {
     @BeforeEach
     void setUp() {
         jdbc = mock(JdbcTemplate.class);
-        autonomyService = new AutonomyService(jdbc);
+        MetaWriteGate gate = mock(MetaWriteGate.class);
+        when(gate.assertAllowed(any(), any())).thenReturn(new MetaWritePolicy.Decision(MetaWritePolicy.Verdict.ALLOW, "test"));
+        autonomyService = new AutonomyService(jdbc, gate);
     }
 
     @Test

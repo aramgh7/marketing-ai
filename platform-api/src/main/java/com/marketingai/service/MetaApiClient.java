@@ -26,6 +26,8 @@ public class MetaApiClient {
     private static final int TOKEN_BUCKET_CAPACITY = 100;
 
     private final JdbcTemplate jdbc;
+
+    private final MetaWriteGate metaWriteGate;   // roadmap 9-19: single choke point for Meta writes
     private final AppProperties appProperties;
 
     private final AtomicInteger tokenBucket = new AtomicInteger(TOKEN_BUCKET_CAPACITY);
@@ -42,6 +44,14 @@ public class MetaApiClient {
      */
     public void enqueue(String lane, String adSetId, UUID tenantId, String action, Runnable call) {
         refillBucketIfNeeded();
+        // Roadmap 9-19: every queued write passes the policy; protective pauses are only recorded.
+        MetaWritePolicy.Decision d = metaWriteGate.decide(tenantId,
+                MetaWriteGate.Request.of(MetaWriteAction.fromLegacyName(action), adSetId));
+        if (!d.allowed()) {
+            log.warn("MetaApiClient: {} for tenant={} adSet={} skipped by policy ({}): {}", action, tenantId, adSetId, d.verdict(), d.reason());
+            logCall(tenantId, adSetId, action, lane, "POLICY_" + d.verdict());
+            return;
+        }
 
         switch (lane.toUpperCase()) {
             case "P0" -> executeP0(tenantId, adSetId, action, call);

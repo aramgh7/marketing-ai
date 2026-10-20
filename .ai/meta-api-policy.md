@@ -1,6 +1,6 @@
 # Meta API: политика использования (CAPI и Marketing API)
 
-> Версия 1.0 — 2026-10-20. Отвечает на вопрос «стоит ли дёргать Meta по API и не получим ли мы бан».
+> Версия 1.1 — 2026-10-20 (v1.1: §6 закреплён программно — roadmap 9-19). Отвечает на вопрос «стоит ли дёргать Meta по API и не получим ли мы бан».
 > Связано с: architecture.md §6 (CAPI — единственный серверный отправитель — Spring), §15.15 (ротация токенов, аудит),
 > §15.20 (priority queue, two-contour rules), §16.3 (цепочка CAPI v2), vision §6.8 (pixel pollution), §12.1b, §19.4.
 
@@ -55,6 +55,20 @@
 | **Позже** | Переход оптимизации на `CompleteRegistration` при ≥ 50/нед | Создание объявлений через API только через probe-модерацию с паузой; AUTOPILOT — после повторного OPE PASS | Если клиент нервничает — креативы заливаются руками, система остаётся «мозгом», а не «рукой» |
 
 Уровни автономии в платформе уже соответствуют этим этапам: OBSERVER → ADVISOR (по умолчанию) → SEMI_AUTOPILOT → AUTOPILOT; переход выше ADVISOR — только через OPE PASS ≤ 7 дней (`PUT /tenants/me/autonomy`), истёкший токен автоматически роняет уровень в OBSERVER.
+
+## 6a. Как это закреплено в коде (roadmap 9-19)
+
+Правила §6 — не регламент, а политика, которую проверяет одна точка кода перед любой записью в Meta:
+
+| Элемент | Где |
+|---|---|
+| Стадия клиента `READ_ONLY → GUARDED_WRITES → FULL` | `tenants.meta_write_stage` (V133); меняется через `PUT /tenants/me/meta-write/stage` |
+| Условия перехода (про данные, не про даты) | `MetaWriteStageService`: → GUARDED: токен OK, ≥ 50 отправленных CAPI-событий за ≥ 14 дней, EMQ pre-check PASS, клиент подтвердил Automated Rules + Spending Limit; → FULL: ≥ 14 дней в GUARDED, OPE PASS ≤ 7 дней, автономия ≥ SEMI_AUTOPILOT, ни одного отказа за 7 дней. Понижение — всегда; принудительный переход — только с причиной, в журнал |
+| Классы записей | `MetaWriteAction`: PAUSE (защитная — никогда не блокируется), RESUME, BUDGET_CHANGE, LAUNCH, CREATE_AD_SET, CREATE_CAMPAIGN, AUDIENCE_UPDATE |
+| Таблица решений | `MetaWritePolicy` (чистая логика, `MetaWritePolicyTest`): стадия → автономия для джоб (SEMI_AUTOPILOT / AUTOPILOT) → learning-phase lock → бюджет ≤ 20 % за шаг и ≥ 24 ч между шагами → ≤ 10 записей в час. Превышение порога = RECOMMEND (запись в `autopilot_actions` для человека, HTTP 409), нарушение стадии = DENY (403) |
+| Единая точка | `MetaWriteGate.assertAllowed` перед каждым из 9 вызовов `MetaApiService`, в `MetaApiClient.enqueue` и `AutonomyService.checkAndExecute`; `MetaWriteGuardTest` сканирует исходники — новый путь записи без gate валит сборку |
+| Override | `POST /tenants/me/meta-write/overrides`: одноразовый, ≤ 4 ч, причина ≥ 10 символов, обязательно в журнале; не обходит learning-phase lock для бюджета |
+| Журнал | `meta_write_decisions` — каждое решение (ALLOW / DENY / RECOMMEND) с инициатором (USER / JOB), стадией и причиной; админ-страница `/meta-write` |
 
 ## 7. Инфраструктурный чек-лист
 

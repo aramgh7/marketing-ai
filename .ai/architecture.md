@@ -603,6 +603,7 @@ Full contracts in §15; summary so the surface is visible in one place:
 | LLM content + RLHA | `POST /api/v1/landings/{id}/generate`, `POST /api/v1/landings/{id}/match-score`, `GET /api/v1/rlha/corrections`, `GET /api/v1/rlha/metrics` | 15.7 |
 | Voice of Customer | `POST /api/v1/voc/import`, `GET /api/v1/voc/objections` | 15.8 |
 | Autonomy | `GET/PUT /api/v1/tenants/me/autonomy` (roadmap 9-3), `POST /api/v1/creatives/{id}/expert-rating`; autopilot switches `GET/PUT /api/v1/autopilot/settings` | 15.13 |
+| **[v1.5 — added]** Meta write policy | `GET /api/v1/tenants/me/meta-write`, `PUT …/stage`, `PUT …/policy`, `POST …/overrides`, `GET …/decisions` — stage-gated writes (`MetaWriteGate` is the single choke point for every Marketing API write; roadmap 9-19, `.ai/meta-api-policy.md` §6a) | 15.13, 15.20 |
 | Circuit-breaker recovery | **[v1.5 — changed]** `GET /api/v1/circuit-breaker/{id}/diagnosis`, `POST /api/v1/circuit-breaker/{id}/confirm-cause`, ~~`POST /api/v1/circuit-breaker/{id}/resume-batch`~~ `POST /api/v1/circuit-breaker/resume-batch` (body carries the event id) | 15.14 |
 | Security | **[v1.5 — changed]** `GET /api/v1/audit-log`; ~~`POST /api/v1/tenants/me/meta-credentials/rotate`~~ rotation is only the daily `TokenRotationScheduler` (roadmap 9-2) | 15.15 |
 | Data governance | **[v1.5 — changed]** ~~`GET /api/v1/event-schemas`~~ schemas are read by `EventSchemaService` from `event_schemas` (no public route), `POST /api/v1/privacy/erasure` | 15.12 |

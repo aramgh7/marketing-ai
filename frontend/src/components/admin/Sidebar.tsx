@@ -16,6 +16,7 @@ const nav = [
   { href: "/compliance", label: "Compliance",  icon: "⚖️" },
   { href: "/ghl",        label: "GHL",         icon: "🔗" },
   { href: "/autonomy",   label: "Autonomy",    icon: "🤖" },
+  { href: "/meta-write", label: "Meta writes", icon: "🛡️" },
   { href: "/settings",   label: "Settings",    icon: "⚙️" },
 ];
 

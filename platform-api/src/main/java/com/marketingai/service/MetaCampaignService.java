@@ -28,6 +28,8 @@ public class MetaCampaignService {
 
     private final MetaCampaignRepository campaignRepo;
 
+    private final MetaWriteGate metaWriteGate;   // roadmap 9-19: single choke point for Meta writes
+
     private final TokenVault vault;   // roadmap 9-1: sealed secrets
     private final MetaAdSetRepository adSetRepo;
     private final MetaApiService metaApi;
@@ -45,6 +47,7 @@ public class MetaCampaignService {
                     "Tenant has no Meta ad account ID configured");
         }
 
+        metaWriteGate.assertAllowed(tenantId, MetaWriteGate.Request.of(MetaWriteAction.CREATE_CAMPAIGN));
         String metaCampaignId = metaApi.createCampaign(
                 token, adAccountId, req.getName(), req.getObjective(), req.getDailyBudget());
 
@@ -95,6 +98,7 @@ public class MetaCampaignService {
         // Find or create SCALE campaign
         MetaCampaign scale = campaignRepo.findByTenantIdAndContour(tenantId, "SCALE")
                 .orElseGet(() -> {
+                    metaWriteGate.assertAllowed(tenantId, MetaWriteGate.Request.of(MetaWriteAction.CREATE_CAMPAIGN, "SCALE"));
                     String metaId = metaApi.createCampaign(
                             token, adAccountId, "SCALE Campaign", "CONVERSIONS", null);
                     MetaCampaign c = new MetaCampaign();
@@ -133,6 +137,7 @@ public class MetaCampaignService {
         String token = decodeToken(tenant);
         String adAccountId = tenant.getMetaAdAccountId();
 
+        metaWriteGate.assertAllowed(tenantId, MetaWriteGate.Request.of(MetaWriteAction.CREATE_AD_SET, campaign.getMetaCampaignId()));
         String metaAdSetId = metaApi.createAdSet(
                 token, adAccountId, campaign.getMetaCampaignId(),
                 req.getName(), req.getAudienceSpec(), req.getDailyBudget());
@@ -167,6 +172,8 @@ public class MetaCampaignService {
         }
 
         Tenant tenant = requireTenant(tenantId);
+        metaWriteGate.assertAllowed(tenantId, MetaWriteGate.Request.of(
+                "PAUSED".equalsIgnoreCase(status) ? MetaWriteAction.PAUSE : MetaWriteAction.RESUME, campaign.getMetaCampaignId()));
         metaApi.setCampaignStatus(decodeToken(tenant), campaign.getMetaCampaignId(), status);
         campaign.setStatus(status);
         return toResponse(campaignRepo.save(campaign));

@@ -48,6 +48,7 @@ public class CircuitBreakerService {
     private final MetaCampaignRepository    campaignRepo;
     private final MetaAdSetRepository       adSetRepo;
     private final CircuitBreakerEventRepository cbRepo;
+    private final MetaWriteGate metaWriteGate;   // roadmap 9-19: single choke point for Meta writes
     private final TokenVault vault;   // roadmap 9-1: sealed secrets
     private final CampaignCpmHistoryRepository  cpmRepo;
     private final TenantRepository          tenantRepo;
@@ -264,6 +265,7 @@ public class CircuitBreakerService {
                 .forEach(c -> {
                     if (token != null) {
                         try {
+                            metaWriteGate.decide(tenantId, MetaWriteGate.Request.of(MetaWriteAction.PAUSE, c.getMetaCampaignId()));   // protective: ledger only
                             metaApi.setCampaignStatus(token, c.getMetaCampaignId(), "PAUSED");
                         } catch (Exception e) {
                             log.error("L3: failed to pause campaign {}: {}", c.getId(), e.getMessage());

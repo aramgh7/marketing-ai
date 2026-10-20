@@ -49,6 +49,8 @@ public class TwoContourService {
 
     private final MetaCampaignRepository campaignRepo;
 
+    private final MetaWriteGate metaWriteGate;   // roadmap 9-19: single choke point for Meta writes
+
     private final TokenVault vault;   // roadmap 9-1: sealed secrets
     private final MetaAdSetRepository adSetRepo;
     private final ThompsonArmRepository armRepo;
@@ -114,6 +116,7 @@ public class TwoContourService {
         }
 
         UUID batchId = UUID.randomUUID();
+        metaWriteGate.assertAllowed(tenantId, new MetaWriteGate.Request(MetaWriteAction.LAUNCH, campaign.getMetaCampaignId(), null, moderationProbe));
         Instant now = Instant.now();
         List<AdSetResponse> created = new ArrayList<>();
 
@@ -291,6 +294,7 @@ public class TwoContourService {
         // Validate budget change ≤ 20% rule vs current campaign budget
         validateBudgetStep(campaign.getDailyBudget(), confirmBudget, campaign.getId().toString());
 
+        metaWriteGate.assertAllowed(tenantId, new MetaWriteGate.Request(MetaWriteAction.LAUNCH, campaign.getMetaCampaignId(), null, true));
         String confirmMetaAdSetId = metaApi.createAdSet(
                 token, adAccountId, campaign.getMetaCampaignId(),
                 "confirmation-" + winner.getMetaAdSetId(),
@@ -369,6 +373,7 @@ public class TwoContourService {
         Tenant tenant = requireTenant(tenantId);
         if (campaign.getConfirmationAdSetId() != null) {
             try {
+                metaWriteGate.assertAllowed(tenantId, MetaWriteGate.Request.of(MetaWriteAction.PAUSE, campaign.getConfirmationAdSetId()));
                 metaApi.setAdSetStatus(decodeToken(tenant),
                         campaign.getConfirmationAdSetId(), "PAUSED");
             } catch (Exception e) {
@@ -494,6 +499,7 @@ public class TwoContourService {
         UUID batchId = UUID.randomUUID();
         Instant now = Instant.now();
         List<AdSetResponse> created = new ArrayList<>();
+        metaWriteGate.assertAllowed(tenantId, new MetaWriteGate.Request(MetaWriteAction.LAUNCH, campaign.getMetaCampaignId(), null, true));
 
         for (var adSetReq : req.getAdSets()) {
             String name = adSetReq.getName() != null ? adSetReq.getName()

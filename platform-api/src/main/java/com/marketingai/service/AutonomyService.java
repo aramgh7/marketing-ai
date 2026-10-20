@@ -32,11 +32,15 @@ public class AutonomyService {
 
     private final JdbcTemplate jdbc;
 
+    private final MetaWriteGate metaWriteGate;   // roadmap 9-19: single choke point for Meta writes
+
     /**
      * Check autonomy level and execute the write if allowed.
      * Throws 403 ResponseStatusException if blocked.
      */
     public void checkAndExecute(UUID tenantId, String action, Runnable write) {
+        // Roadmap 9-19: stage + thresholds + ledger first (DENY → 403, RECOMMEND → 409); autonomy rules below stay as before
+        metaWriteGate.assertAllowed(tenantId, MetaWriteGate.Request.of(MetaWriteAction.fromLegacyName(action)));
         String level = getAutonomyLevel(tenantId);
         switch (level) {
             case "OBSERVER" ->
