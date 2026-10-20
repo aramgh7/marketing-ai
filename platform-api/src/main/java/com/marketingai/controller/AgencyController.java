@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.config.AppProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -23,6 +24,7 @@ public class AgencyController {
 
     private final JdbcTemplate jdbc;
     private final RestTemplate restTemplate;
+    private final AppProperties appProperties;
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @PostMapping("/accounts")
@@ -89,7 +91,7 @@ public class AgencyController {
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> result = restTemplate.postForObject(
-                "http://ml-service:8001/agency/aggregate-kpis",
+                appProperties.getMlServiceUrl() + "/agency/aggregate-kpis",
                 Map.of("tenant_snapshots", snapshots), Map.class);
             return ResponseEntity.ok(result != null ? result : Map.of("snapshots", snapshots));
         } catch (Exception e) {
@@ -124,7 +126,7 @@ public class AgencyController {
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> result = restTemplate.postForObject(
-                "http://ml-service:8001/agency/compare-sources",
+                appProperties.getMlServiceUrl() + "/agency/compare-sources",
                 Map.of("source_rows", sources), Map.class);
             return ResponseEntity.ok(result != null ? result : Map.of("sources", sources));
         } catch (Exception e) {

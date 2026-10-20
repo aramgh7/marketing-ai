@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.config.AppProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -22,6 +23,7 @@ public class InvestorArchetypeController {
 
     private final JdbcTemplate jdbc;
     private final RestTemplate restTemplate;
+    private final AppProperties appProperties;
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @PostMapping("/classify")
@@ -37,7 +39,7 @@ public class InvestorArchetypeController {
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> result = restTemplate.postForObject(
-                "http://ml-service:8001/investor/classify", features, Map.class);
+                appProperties.getMlServiceUrl() + "/investor/classify", features, Map.class);
             if (result == null) return ResponseEntity.ok(Map.of("archetype", "UNKNOWN"));
 
             jdbc.update("""

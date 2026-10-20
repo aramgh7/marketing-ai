@@ -1,5 +1,6 @@
 package com.marketingai.scheduler;
 
+import com.marketingai.config.AppProperties;
 import com.marketingai.service.AlertService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -25,6 +26,7 @@ public class BurnoutScanScheduler {
 
     private final JdbcTemplate jdbc;
     private final RestTemplate restTemplate;
+    private final AppProperties appProperties;
     private final AlertService alertService;
 
     @Scheduled(cron = "0 0 6 * * *")
@@ -121,7 +123,7 @@ public class BurnoutScanScheduler {
             req.put("current_days_running", daysRunning);
             req.put("n_obs",                nObs);
             if (anchorVerdict != null) req.put("anchor_verdict", anchorVerdict);
-            return restTemplate.postForObject("http://ml-service:8001/burnout/survival", req, Map.class);
+            return restTemplate.postForObject(appProperties.getMlServiceUrl() + "/burnout/survival", req, Map.class);
         } catch (Exception e) {
             log.debug("Survival model call failed, falling back to heuristic: {}", e.getMessage());
             return callHeuristicModel(frequency, daysRunning);
@@ -131,7 +133,7 @@ public class BurnoutScanScheduler {
     @SuppressWarnings("unchecked")
     private Map<String, Object> callHeuristicModel(double frequency, int daysRunning) {
         try {
-            return restTemplate.postForObject("http://ml-service:8001/burnout/score",
+            return restTemplate.postForObject(appProperties.getMlServiceUrl() + "/burnout/score",
                     Map.of("frequency", frequency, "ctr_current", 0.02,
                            "ctr_baseline", 0.03, "spend_current", 0.0, "spend_prev", 0.0,
                            "ctr_drop_rate_per_day", 0.0), Map.class);

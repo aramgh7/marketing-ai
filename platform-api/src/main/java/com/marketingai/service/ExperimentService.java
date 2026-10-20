@@ -1,5 +1,6 @@
 package com.marketingai.service;
 
+import com.marketingai.config.AppProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -22,6 +23,7 @@ public class ExperimentService {
 
     private final JdbcTemplate jdbc;
     private final RestTemplate restTemplate;
+    private final AppProperties appProperties;
     private final AlertService  alertService;
 
     public UUID createExperiment(UUID tenantId, UUID createdBy, Map<String, Object> body) {
@@ -111,7 +113,7 @@ public class ExperimentService {
             Map<String, Object> req = Map.of("arms", arms, "min_ess", minEss, "auto_stop_p", autoP);
             @SuppressWarnings("unchecked")
             Map<String, Object> result = restTemplate.postForObject(
-                "http://ml-service:8001/decide/experiment/should-conclude", req, Map.class);
+                appProperties.getMlServiceUrl() + "/decide/experiment/should-conclude", req, Map.class);
             if (result != null && Boolean.TRUE.equals(result.get("should_conclude"))) {
                 String winnerId = (String) result.get("winner_variant_id");
                 if (winnerId != null) {
@@ -130,7 +132,7 @@ public class ExperimentService {
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> pauses = (List<Map<String, Object>>)
                 restTemplate.postForObject(
-                    "http://ml-service:8001/decide/experiment/check-pause", req, List.class);
+                    appProperties.getMlServiceUrl() + "/decide/experiment/check-pause", req, List.class);
             if (pauses != null) {
                 for (Map<String, Object> p : pauses) {
                     if (Boolean.TRUE.equals(p.get("should_pause"))) {

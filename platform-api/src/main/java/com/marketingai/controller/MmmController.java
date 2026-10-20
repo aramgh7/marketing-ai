@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.config.AppProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.*;
@@ -25,6 +26,7 @@ public class MmmController {
 
     private final JdbcTemplate jdbc;
     private final RestTemplate restTemplate;
+    private final AppProperties appProperties;
 
     // ─── GET /latest ─────────────────────────────────────────────────────────
 
@@ -94,7 +96,7 @@ public class MmmController {
         Map<String, Object> mlResult;
         try {
             mlResult = restTemplate.postForObject(
-                    "http://ml-service:8001/mmm/contributions", mlReq, Map.class);
+                    appProperties.getMlServiceUrl() + "/mmm/contributions", mlReq, Map.class);
         } catch (Exception e) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
                     "MMM service error: " + e.getMessage());
@@ -172,7 +174,7 @@ public class MmmController {
         Map<String, Object> mlResult;
         try {
             mlResult = restTemplate.postForObject(
-                    "http://ml-service:8001/mmm/optimize", mlReq, Map.class);
+                    appProperties.getMlServiceUrl() + "/mmm/optimize", mlReq, Map.class);
         } catch (Exception e) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
                     "MMM service error: " + e.getMessage());

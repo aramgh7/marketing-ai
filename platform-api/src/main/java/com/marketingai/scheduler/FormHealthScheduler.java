@@ -1,5 +1,6 @@
 package com.marketingai.scheduler;
 
+import com.marketingai.config.AppProperties;
 import com.marketingai.service.AlertService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -22,6 +23,7 @@ public class FormHealthScheduler {
 
     private final JdbcTemplate  jdbc;
     private final RestTemplate  restTemplate;
+    private final AppProperties appProperties;
     private final AlertService  alertService;
 
     @Scheduled(fixedDelay = 1_800_000)
@@ -48,7 +50,7 @@ public class FormHealthScheduler {
                 Map<String, Object> req = Map.of("form_endpoint_url", url);
                 @SuppressWarnings("unchecked")
                 Map<String, Object> result = restTemplate.postForObject(
-                    "http://ml-service:8001/analyze/form-health", req, Map.class);
+                    appProperties.getMlServiceUrl() + "/analyze/form-health", req, Map.class);
 
                 boolean ok = Boolean.TRUE.equals(result != null ? result.get("ok") : null);
                 int currentPasses = landing.get("consecutive_form_passes") instanceof Number n

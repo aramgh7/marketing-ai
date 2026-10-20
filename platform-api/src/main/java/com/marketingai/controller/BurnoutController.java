@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.config.AppProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.*;
@@ -22,6 +23,7 @@ public class BurnoutController {
 
     private final JdbcTemplate jdbc;
     private final RestTemplate restTemplate;
+    private final AppProperties appProperties;
 
     // ─── GET /summary ────────────────────────────────────────────────────────
 
@@ -102,7 +104,7 @@ public class BurnoutController {
             try {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> result = restTemplate.postForObject(
-                        "http://ml-service:8001/burnout/score", mlReq, Map.class);
+                        appProperties.getMlServiceUrl() + "/burnout/score", mlReq, Map.class);
 
                 if (result != null && !"none".equals(result.get("stage"))) {
                     jdbc.update("""

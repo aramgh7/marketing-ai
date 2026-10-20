@@ -1,5 +1,6 @@
 package com.marketingai.scheduler;
 
+import com.marketingai.config.AppProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -24,6 +25,7 @@ public class ShowRateCorrectorScheduler {
 
     private final JdbcTemplate  jdbc;
     private final RestTemplate  restTemplate;
+    private final AppProperties appProperties;
 
     @Scheduled(cron = "0 0 6 * * MON")
     public void weeklyCorrection() {
@@ -52,7 +54,7 @@ public class ShowRateCorrectorScheduler {
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result = restTemplate.postForObject(
-                "http://ml-service:8001/reward/show-rate-corrector",
+                appProperties.getMlServiceUrl() + "/reward/show-rate-corrector",
                 Map.of("booked_count", booked, "held_count", held),
                 Map.class);
 

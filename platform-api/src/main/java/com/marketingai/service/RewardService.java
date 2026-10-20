@@ -1,5 +1,6 @@
 package com.marketingai.service;
 
+import com.marketingai.config.AppProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -21,6 +22,7 @@ public class RewardService {
 
     private final JdbcTemplate jdbc;
     private final RestTemplate restTemplate;
+    private final AppProperties appProperties;
     private final AlertService  alertService;
 
     /**
@@ -62,7 +64,7 @@ public class RewardService {
                     "reward",     1.0,
                     "event_type", "quality_gate_pass"
                 );
-                restTemplate.postForObject("http://ml-service:8001/thompson/reward", req, Map.class);
+                restTemplate.postForObject(appProperties.getMlServiceUrl() + "/decide/reward", req, Map.class);
             } catch (Exception e) {
                 log.warn("Thompson reward notification failed for variant {}: {}", variantId, e.getMessage());
             }

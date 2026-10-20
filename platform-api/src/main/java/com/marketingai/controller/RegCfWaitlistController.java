@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.config.AppProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -22,6 +23,7 @@ public class RegCfWaitlistController {
 
     private final JdbcTemplate jdbc;
     private final RestTemplate restTemplate;
+    private final AppProperties appProperties;
 
     @PostMapping("/join")
     public ResponseEntity<Map<String, Object>> join(
@@ -119,7 +121,7 @@ public class RegCfWaitlistController {
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> result = restTemplate.postForObject(
-                "http://ml-service:8001/waitlist/value",
+                appProperties.getMlServiceUrl() + "/waitlist/value",
                 Map.of("n_leads", nLeads, "p_convert_regcf", pConvert, "avg_ticket_regcf", avgTicket),
                 Map.class);
             return ResponseEntity.ok(result != null ? result : Map.of("n_leads", nLeads));

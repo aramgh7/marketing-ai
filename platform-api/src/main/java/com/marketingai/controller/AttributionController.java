@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.config.AppProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -17,6 +18,7 @@ public class AttributionController {
 
     private final JdbcTemplate jdbc;
     private final RestTemplate restTemplate;
+    private final AppProperties appProperties;
 
     @PostMapping("/touchpoint")
     public ResponseEntity<Map<String, Object>> recordTouchpoint(
@@ -71,7 +73,7 @@ public class AttributionController {
             );
             @SuppressWarnings("unchecked")
             Map<String, Object> result = restTemplate.postForObject(
-                "http://ml-service:8001/attribution/run", req, Map.class);
+                appProperties.getMlServiceUrl() + "/attribution/run", req, Map.class);
             return ResponseEntity.ok(Map.of(
                 "touchpoints", touchpoints,
                 "attribution", result != null ? result : Map.of()

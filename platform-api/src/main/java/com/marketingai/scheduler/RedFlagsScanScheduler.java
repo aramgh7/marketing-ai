@@ -1,5 +1,6 @@
 package com.marketingai.scheduler;
 
+import com.marketingai.config.AppProperties;
 import com.marketingai.service.AlertService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -25,10 +26,9 @@ public class RedFlagsScanScheduler {
 
     private final JdbcTemplate jdbc;
     private final RestTemplate restTemplate;
+    private final AppProperties appProperties;
     private final AlertService alertService;
 
-    private static final String ML_BASE = System.getenv("ML_SERVICE_URL") != null
-            ? System.getenv("ML_SERVICE_URL") : "http://ml-service:8001";
 
     @Scheduled(fixedDelay = 1_800_000)
     public void scan() {
@@ -86,12 +86,13 @@ public class RedFlagsScanScheduler {
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("X-Internal-API-Key", appProperties.getInternalApiKey());
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result;
         try {
             result = restTemplate.postForObject(
-                    ML_BASE + "/red-flags/check",
+                    appProperties.getMlServiceUrl() + "/red-flags/check",
                     new HttpEntity<>(reqBody, headers),
                     Map.class);
         } catch (Exception e) {

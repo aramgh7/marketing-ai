@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.config.AppProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -20,6 +21,7 @@ public class ModerationController {
 
     private final JdbcTemplate jdbc;
     private final RestTemplate restTemplate;
+    private final AppProperties appProperties;
 
     @GetMapping("/results")
     public ResponseEntity<List<Map<String, Object>>> getResults(
@@ -83,7 +85,7 @@ public class ModerationController {
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> complianceResult = restTemplate.postForObject(
-                "http://ml-service:8001/compliance/check", complianceReq, Map.class);
+                appProperties.getMlServiceUrl() + "/compliance/check", complianceReq, Map.class);
 
             Map<String, Object> personaReq = Map.of(
                 "text",               text,
@@ -91,7 +93,7 @@ public class ModerationController {
                 "compliance_results", complianceResult != null ? complianceResult : Map.of());
             @SuppressWarnings("unchecked")
             Map<String, Object> result = restTemplate.postForObject(
-                "http://ml-service:8001/persona/score", personaReq, Map.class);
+                appProperties.getMlServiceUrl() + "/persona/score", personaReq, Map.class);
             return ResponseEntity.ok(result != null ? result : Map.of("verdict", "ERROR"));
         } catch (Exception e) {
             return ResponseEntity.ok(Map.of("verdict", "UNKNOWN", "error", e.getMessage()));

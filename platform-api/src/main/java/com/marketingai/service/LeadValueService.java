@@ -1,5 +1,6 @@
 package com.marketingai.service;
 
+import com.marketingai.config.AppProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -20,6 +21,7 @@ public class LeadValueService {
 
     private final JdbcTemplate jdbc;
     private final RestTemplate restTemplate;
+    private final AppProperties appProperties;
 
     public void predictOnBooked(UUID tenantId, UUID appointmentId, UUID sessionId) {
         List<Map<String, Object>> noshowRows = jdbc.queryForList("""
@@ -43,7 +45,7 @@ public class LeadValueService {
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> result = restTemplate.postForObject(
-                "http://ml-service:8001/predict/lead-value", req, Map.class);
+                appProperties.getMlServiceUrl() + "/decide/predict/lead-value", req, Map.class);
             if (result == null) return;
 
             double predicted = ((Number) result.get("predicted_value")).doubleValue();

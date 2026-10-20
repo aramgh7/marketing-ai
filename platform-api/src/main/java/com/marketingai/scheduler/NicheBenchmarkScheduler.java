@@ -1,5 +1,6 @@
 package com.marketingai.scheduler;
 
+import com.marketingai.config.AppProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -21,6 +22,7 @@ public class NicheBenchmarkScheduler {
 
     private final JdbcTemplate jdbc;
     private final RestTemplate restTemplate;
+    private final AppProperties appProperties;
 
     @Scheduled(cron = "0 0 3 * * *", zone = "UTC")
     public void refreshBenchmarks() {
@@ -62,7 +64,7 @@ public class NicheBenchmarkScheduler {
             );
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> benchmarks = restTemplate.postForObject(
-                "http://ml-service:8001/attribution/benchmarks/compute", req, List.class);
+                appProperties.getMlServiceUrl() + "/attribution/benchmarks/compute", req, List.class);
 
             if (benchmarks == null) return;
 

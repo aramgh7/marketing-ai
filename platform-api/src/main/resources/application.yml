@@ -49,8 +49,7 @@ app:
   jwt:
     secret: ${JWT_SECRET}
     expiry-ms: ${JWT_EXPIRY_MS:86400000}
-  ml-service:
-    url: ${ML_SERVICE_URL:http://localhost:8000}
+  ml-service-url: ${ML_SERVICE_URL:http://localhost:8000}
   internal-api-key: ${INTERNAL_API_KEY:local-internal-key}
   ghl-webhook-secret: ${GHL_WEBHOOK_SECRET:}
   cors:

@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.config.AppProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.marketingai.service.FunnelService;
 import com.marketingai.service.ValueFormulaService;
@@ -21,6 +22,7 @@ public class FormSubmissionController {
 
     private final org.springframework.jdbc.core.JdbcTemplate jdbc;
     private final RestTemplate      restTemplate;
+    private final AppProperties appProperties;
     private final ValueFormulaService valueFormulaService;
     private final FunnelService     funnelService;
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -93,7 +95,7 @@ public class FormSubmissionController {
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> result = restTemplate.postForObject(
-                "http://ml-service:8001/form/calibrate-value", req, Map.class);
+                appProperties.getMlServiceUrl() + "/decide/form/calibrate-value", req, Map.class);
             return ResponseEntity.ok(result != null ? result : Map.of());
         } catch (Exception e) {
             return ResponseEntity.ok(Map.of("error", e.getMessage()));

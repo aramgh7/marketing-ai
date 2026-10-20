@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.config.AppProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.*;
@@ -22,6 +23,7 @@ public class EvolveController {
 
     private final JdbcTemplate jdbc;
     private final RestTemplate restTemplate;
+    private final AppProperties appProperties;
 
     // ─── POST /generate ───────────────────────────────────────────────────────
 
@@ -60,7 +62,7 @@ public class EvolveController {
 
         @SuppressWarnings("unchecked")
         Map<String, Object> mlResult = restTemplate.postForObject(
-                "http://ml-service:8001/evolve/candidates", mlReq, Map.class);
+                appProperties.getMlServiceUrl() + "/evolve/candidates", mlReq, Map.class);
 
         if (mlResult == null) {
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "ML service unavailable");

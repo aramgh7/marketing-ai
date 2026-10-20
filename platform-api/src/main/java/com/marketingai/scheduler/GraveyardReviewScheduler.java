@@ -1,5 +1,6 @@
 package com.marketingai.scheduler;
 
+import com.marketingai.config.AppProperties;
 import com.marketingai.service.AlertService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -22,6 +23,7 @@ public class GraveyardReviewScheduler {
 
     private final JdbcTemplate jdbc;
     private final RestTemplate restTemplate;
+    private final AppProperties appProperties;
     private final AlertService alertService;
 
     @Scheduled(cron = "0 0 8 * * MON")
@@ -112,7 +114,7 @@ public class GraveyardReviewScheduler {
             req.put("fraud_flag",            fraudFlag);
             req.put("site_health_incident",  siteHealthIncident);
             Map<String, Object> resp = restTemplate.postForObject(
-                    "http://ml-service:8001/evolve/graveyard-review", req, Map.class);
+                    appProperties.getMlServiceUrl() + "/evolve/graveyard-review", req, Map.class);
             return resp != null && Boolean.TRUE.equals(resp.get("retry_candidate"));
         } catch (Exception e) {
             log.debug("Graveyard review call failed: {}", e.getMessage());

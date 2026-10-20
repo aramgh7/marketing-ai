@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.config.AppProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -22,6 +23,7 @@ public class PostCallController {
 
     private final JdbcTemplate jdbc;
     private final RestTemplate restTemplate;
+    private final AppProperties appProperties;
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @PostMapping("/notes")
@@ -98,7 +100,7 @@ public class PostCallController {
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> mlRates = restTemplate.postForObject(
-                "http://ml-service:8001/post-call/objection-rates",
+                appProperties.getMlServiceUrl() + "/post-call/objection-rates",
                 Map.of("call_notes", notes), Map.class);
             return ResponseEntity.ok(Map.of(
                 "objection_rates", objections,
@@ -142,7 +144,7 @@ public class PostCallController {
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> result = restTemplate.postForObject(
-                "http://ml-service:8001/post-call/route-followup",
+                appProperties.getMlServiceUrl() + "/post-call/route-followup",
                 Map.of(
                     "objection_tags", tagsRaw instanceof List ? tagsRaw : List.of(),
                     "call_outcome",   outcome

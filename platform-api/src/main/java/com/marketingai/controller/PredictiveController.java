@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.config.AppProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.*;
@@ -23,6 +24,7 @@ public class PredictiveController {
 
     private final JdbcTemplate jdbc;
     private final RestTemplate restTemplate;
+    private final AppProperties appProperties;
 
     @PostMapping("/budget-curve")
     public ResponseEntity<Map<String, Object>> budgetCurve(
@@ -70,7 +72,7 @@ public class PredictiveController {
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> result = restTemplate.postForObject(
-                    "http://ml-service:8001/predict/budget-curve", mlReq, Map.class);
+                    appProperties.getMlServiceUrl() + "/predict/budget-curve", mlReq, Map.class);
             return ResponseEntity.ok(Objects.requireNonNullElse(result, Map.of()));
         } catch (Exception e) {
             log.error("Budget curve ML call failed: {}", e.getMessage());

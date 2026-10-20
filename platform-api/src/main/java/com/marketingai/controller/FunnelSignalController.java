@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.config.AppProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -21,6 +22,7 @@ public class FunnelSignalController {
 
     private final JdbcTemplate  jdbc;
     private final RestTemplate  restTemplate;
+    private final AppProperties appProperties;
 
     // ── Signal Config ──────────────────────────────────────────────────────────
 
@@ -130,7 +132,7 @@ public class FunnelSignalController {
 
             @SuppressWarnings("unchecked")
             Map<String, Object> resp = restTemplate.postForObject(
-                "http://ml-service:8001/signals/narrative-context", req, Map.class);
+                appProperties.getMlServiceUrl() + "/signals/narrative-context", req, Map.class);
             return ResponseEntity.ok(resp != null ? resp : Map.of());
         } catch (Exception e) {
             log.warn("ml-service narrative-context unavailable: {}", e.getMessage());

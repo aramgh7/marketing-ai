@@ -1,5 +1,6 @@
 package com.marketingai.controller;
 
+import com.marketingai.config.AppProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -17,6 +18,7 @@ public class NicheBenchmarkController {
 
     private final JdbcTemplate jdbc;
     private final RestTemplate restTemplate;
+    private final AppProperties appProperties;
 
     @GetMapping("/niche/{nicheKey}")
     public ResponseEntity<List<Map<String, Object>>> getNicheBenchmarks(
@@ -55,7 +57,7 @@ public class NicheBenchmarkController {
             );
             @SuppressWarnings("unchecked")
             Map<String, Object> comparison = restTemplate.postForObject(
-                "http://ml-service:8001/attribution/benchmarks/compare", req, Map.class);
+                appProperties.getMlServiceUrl() + "/attribution/benchmarks/compare", req, Map.class);
             return ResponseEntity.ok(Map.of(
                 "niche",      niche,
                 "my_metrics", tenantMetrics,

@@ -1,5 +1,6 @@
 package com.marketingai.service;
 
+import com.marketingai.config.AppProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -20,13 +21,14 @@ public class NoshowPropensityService {
 
     private final JdbcTemplate jdbc;
     private final RestTemplate restTemplate;
+    private final AppProperties appProperties;
 
     public void scoreOnBooked(UUID tenantId, UUID appointmentId, UUID sessionId) {
         Map<String, Object> features = loadFeatures(tenantId, sessionId, appointmentId);
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> result = restTemplate.postForObject(
-                "http://ml-service:8001/propensity/noshow", features, Map.class);
+                appProperties.getMlServiceUrl() + "/decide/propensity/noshow", features, Map.class);
             if (result == null) return;
 
             String riskTier   = (String) result.get("risk_tier");
