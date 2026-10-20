@@ -19,4 +19,7 @@ public class VariantOfferResponse {
     Integer urgencyDaysLeft;
     String paymentTerms;
     Float marginFloor;
+    String schemaKey;
+    java.util.Map<String, Object> atoms;
+    String offerText;
 }

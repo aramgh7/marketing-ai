@@ -35,7 +35,9 @@ public class VariantService {
     private final ThompsonArmRepository armRepo;
     private final ComplianceService complianceService;
     private final OfferValidator offerValidator;
+    private final OfferSchemaService offerSchemaService;
     private final JdbcTemplate jdbc;
+    private static final com.fasterxml.jackson.databind.ObjectMapper MAPPER = new com.fasterxml.jackson.databind.ObjectMapper();
 
     // ─── List ────────────────────────────────────────────────────────────────────
 
@@ -96,6 +98,7 @@ public class VariantService {
         v.setStatus("DRAFT");
         variantRepo.save(v);
 
+        validateOffer(req.getOffer(), tenantId, v.getId());
         VariantOffer offer = saveOffer(req.getOffer(), v.getId(), tenantId);
         return toResponse(v, offer);
     }
@@ -203,6 +206,38 @@ public class VariantService {
 
     private void validateOffer(VariantOfferRequest req, UUID tenantId, UUID variantId) {
         if (req == null) return;
+
+        // Roadmap 8-8: schema-based offers. The tenant's schema (settings.offer_schema or the request's
+        // schema_key) validates the atoms; for INVESTOR_RAISE the margin floor is replaced by a
+        // compliance PASS on the offer text.
+        String schemaKey = req.getSchemaKey() != null ? req.getSchemaKey()
+                : offerSchemaService.tenantSchemaKey(tenantId).orElse(null);
+        if (schemaKey != null) {
+            OfferSchemaService.Schema schema = offerSchemaService.load(tenantId, schemaKey)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                            "Unknown offer schema: " + schemaKey));
+            List<String> errors = OfferSchemaService.validateAtoms(req.getAtoms(), schema.fields(), req.getUrgencySource());
+            if (!errors.isEmpty()) {
+                logOfferViolations(tenantId, variantId, errors);
+                throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                        "Offer schema check failed: " + String.join("; ", errors));
+            }
+            if (schema.complianceReplacesMargin()) {
+                String text = req.getOfferText();
+                if (text == null || text.isBlank()) {
+                    throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                            "offer_text is required: schema " + schemaKey + " requires a compliance PASS on the offer text");
+                }
+                var check = complianceService.runTextCheck("OFFER", variantId, text);
+                if (!"PASS".equals(check.getResult())) {
+                    logOfferViolations(tenantId, variantId, List.of("compliance " + check.getResult() + " on offer text"));
+                    throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                            "Offer text did not PASS compliance (" + check.getResult() + ") — securities rulebases (8-7)");
+                }
+                return;   // compliance replaces the margin floor; legacy B2B checks do not apply
+            }
+        }
+
         Double minMargin = loadMinMargin(tenantId);
         Map<String, Object> offerMap = new HashMap<>();
         offerMap.put("discount_type",    req.getDiscountType());
@@ -229,6 +264,19 @@ public class VariantService {
             }
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                 "Offer validity check failed: " + String.join("; ", result.errors()));
+        }
+    }
+
+    private void logOfferViolations(UUID tenantId, UUID variantId, List<String> errors) {
+        for (String err : errors) {
+            try {
+                jdbc.update("""
+                    INSERT INTO offer_validity_violations (tenant_id, variant_id, field, reason)
+                    VALUES (?, ?, 'offer', ?)
+                    """, tenantId, variantId, err);
+            } catch (Exception ex) {
+                log.warn("Failed to log offer violation: {}", ex.getMessage());
+            }
         }
     }
 
@@ -277,6 +325,13 @@ public class VariantService {
         boolean isInstallment = req.getPaymentTerms() != null
                 && req.getPaymentTerms().toLowerCase().contains("installment");
         o.setRequiresLegalReview(isInstallment);
+        // Roadmap 8-8: schema atoms
+        o.setSchemaKey(req.getSchemaKey() != null ? req.getSchemaKey()
+                : offerSchemaService.tenantSchemaKey(tenantId).orElse(null));
+        if (req.getAtoms() != null) {
+            try { o.setAtoms(MAPPER.writeValueAsString(req.getAtoms())); } catch (Exception e) { o.setAtoms("{}"); }
+        }
+        o.setOfferText(req.getOfferText());
         return offerRepo.save(o);
     }
 
@@ -314,6 +369,9 @@ public class VariantService {
                         .urgencyDaysLeft(offer.getUrgencyDaysLeft())
                         .paymentTerms(offer.getPaymentTerms())
                         .marginFloor(offer.getMarginFloor())
+                        .schemaKey(offer.getSchemaKey())
+                        .atoms(com.marketingai.util.Jsonb.asMap(offer.getAtoms()))
+                        .offerText(offer.getOfferText())
                         .build())
                 .alpha(arm == null ? null : arm.getAlpha())
                 .beta(arm == null ? null : arm.getBeta())

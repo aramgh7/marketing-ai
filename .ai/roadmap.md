@@ -1071,9 +1071,9 @@
 
 - [x] **Platform A/B experiment lifecycle infrastructure** (extends 2-2/2-3/2-7): `experiments` + `experiment_events` tables (V101, RLS); lifecycle DRAFT→PENDING_REVIEW→APPROVED→ACTIVE→PAUSED→CONCLUDED→RETIRED; guards: ≥2 variants + exactly 1 control; auto-conclude P(best)>0.95 ESS≥200; auto-pause P(worse)>0.95 ESS≥50; `ExperimentMonitorScheduler` (hourly)
 - [x] `experiment_service.py`: `thompson_best_arm` (MC 5000), `should_conclude`, `check_auto_pause`; FastAPI `/experiment/should-conclude`, `/experiment/check-pause`, `/experiment/ranked-arms`
-- [ ] `offer_atom_schemas` per tenant/vertical; `variant_offers.atoms JSONB`; legacy B2B columns kept
-- [ ] `INVESTOR_RAISE` schema: first-touch format (call / webinar / event / video presentation), entry threshold shown (none / from $25K / from $50K), proof type, urgency (none / round close date / allocation left — must be real), founder presence, follow-up offer (agenda / round materials before call / none)
-- [ ] `OfferValidator` validates against the tenant schema; for `INVESTOR_RAISE` the margin-floor rule is replaced by **compliance PASS on the offer text**; Dynamic Offer Explorer (3-19) generates over the schema
+- [x] `offer_atom_schemas` per tenant/vertical; `variant_offers.atoms JSONB`; legacy B2B columns kept — V123 (platform row + tenant override, `tenants.settings.offer_schema` selects it); `variant_offers.schema_key / atoms / offer_text`; `GET/PUT /api/v1/offer-schemas` (2026-10-20)
+- [x] `INVESTOR_RAISE` schema: first-touch format (call / webinar / event / video presentation), entry threshold shown (none / from $25K / from $50K), proof type, urgency (none / round close date / allocation left — must be real), founder presence, follow-up offer (agenda / round materials before call / none) — seeded in V123; `must_be_real` urgency requires a real `urgency_source` (2026-10-20)
+- [x] `OfferValidator` validates against the tenant schema; for `INVESTOR_RAISE` the margin-floor rule is replaced by **compliance PASS on the offer text**; Dynamic Offer Explorer (3-19) generates over the schema — `OfferSchemaService.validateAtoms` (Java) / `offer_schema_service.py` (ML, 10 tests) in `VariantService.validateOffer`; `COMPLIANCE_PASS` mode runs `ComplianceService.runTextCheck("OFFER", …)`; explorer `POST /mmf/offers/generate-from-schema` (one-factor-at-a-time, invalid candidates dropped) via `POST /api/v1/offer-schemas/{key}/explore` → `offer_candidates` (2026-10-20)
 
 ### 8-9. Attribution Across GHL Sub-Accounts and Agencies (vision §19.12; arch §16.9) — changes 0-5 linking, 3-2
 

@@ -1,5 +1,7 @@
 package com.marketingai.entity;
 
+import org.hibernate.type.SqlTypes;
+import org.hibernate.annotations.JdbcTypeCode;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -54,6 +56,15 @@ public class VariantOffer {
     private Float marginFloor;
     private Float estimatedMargin;
     private Boolean requiresLegalReview = false;
+
+    /** Roadmap 8-8: offer atom schema key (INVESTOR_RAISE, …); null = legacy B2B columns */
+    private String schemaKey;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "jsonb")
+    private String atoms;
+
+    private String offerText;
 
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
