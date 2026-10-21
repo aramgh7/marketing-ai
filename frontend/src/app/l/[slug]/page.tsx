@@ -1,6 +1,7 @@
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { notFound } from "next/navigation";
 import LandingRenderer, { LandingBlock } from "@/components/LandingRenderer";
+import { requestHost, tenantHostFor } from "@/lib/hosts";
 
 // Server-side: use internal Docker network URL if available (avoids loopback in containers)
 const API_BASE =
@@ -16,9 +17,12 @@ interface VariantData {
   blocks: string | LandingBlock[]; // @JsonRawValue -> already an array; older payloads may be a string
 }
 
+/** Roadmap Phase 10: on a tenant's custom domain the slug is scoped to that tenant. */
 async function fetchVariant(slug: string): Promise<VariantData | null> {
+  const tenantHost = tenantHostFor(requestHost(await headers()));
+  const q = tenantHost ? `?host=${encodeURIComponent(tenantHost)}` : "";
   try {
-    const res = await fetch(`${API_BASE}/public/l/${slug}`, {
+    const res = await fetch(`${API_BASE}/public/l/${slug}${q}`, {
       next: { revalidate: 60 }, // ISR: revalidate every 60s
     });
     if (!res.ok) return null;

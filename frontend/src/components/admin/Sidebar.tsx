@@ -7,6 +7,7 @@ import { currentUser, logout } from "@/lib/api";
 const nav = [
   { href: "/dashboard",  label: "Dashboard",   icon: "📊" },
   { href: "/creatives",  label: "Creatives",   icon: "🎨" },
+  { href: "/landings",   label: "Landings",    icon: "🧩" },
   { href: "/ab-results", label: "A/B Results", icon: "🧪" },
   { href: "/quality",    label: "Quality",     icon: "🎯" },
   { href: "/briefs",     label: "Briefs",      icon: "📝" },

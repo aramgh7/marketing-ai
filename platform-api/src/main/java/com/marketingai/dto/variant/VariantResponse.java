@@ -29,6 +29,12 @@ public class VariantResponse {
     Instant createdAt;
     Instant updatedAt;
 
+    // Roadmap Phase 10
+    UUID setId;
+    String rejectReason;
+    String rejectNote;
+    String styleAngle;
+
     VariantOfferResponse offer;
 
     // Thompson arm snapshot (null when arm not yet created)

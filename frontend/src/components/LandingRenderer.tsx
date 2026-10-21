@@ -33,6 +33,8 @@ interface Props {
   sessionId: string;
   variantId: string;
   decisionId: string;
+  /** Roadmap Phase 10: admin preview of DRAFT/REVIEW variants — no tracking, no form/reward POSTs. */
+  preview?: boolean;
 }
 
 import { API_BASE } from "@/lib/api";
@@ -43,20 +45,22 @@ export default function LandingRenderer({
   sessionId,
   variantId,
   decisionId,
+  preview = false,
 }: Props) {
   const trackerInit = useRef(false);
   const mainRef = useRef<HTMLElement>(null);
   const [formData, setFormData] = useState<Record<string, unknown>>({});
+  const [previewNote, setPreviewNote] = useState(false);
 
   useEffect(() => {
-    if (trackerInit.current) return;
+    if (preview || trackerInit.current) return;
     trackerInit.current = true;
     Tracker.init(tenantId, sessionId);
-  }, [tenantId, sessionId]);
+  }, [tenantId, sessionId, preview]);
 
   // Fire BLOCK_VIEW when a section scrolls into view (IntersectionObserver)
   useEffect(() => {
-    if (!mainRef.current) return;
+    if (preview || !mainRef.current) return;
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
@@ -75,15 +79,21 @@ export default function LandingRenderer({
     );
     mainRef.current.querySelectorAll("[data-block-id]").forEach((el) => observer.observe(el));
     return () => observer.disconnect();
-  }, [variantId]);
+  }, [variantId, preview]);
 
-  const trackCta = () =>
-    Tracker.track("CLICK", { element: "cta" }, { variantId });
+  const trackCta = () => {
+    if (!preview) Tracker.track("CLICK", { element: "cta" }, { variantId });
+  };
 
-  const trackFormStart = () =>
-    Tracker.track("FORM_START", {}, { variantId });
+  const trackFormStart = () => {
+    if (!preview) Tracker.track("FORM_START", {}, { variantId });
+  };
 
   const trackFormSubmit = async (values: Record<string, string>) => {
+    if (preview) {
+      setPreviewNote(true);
+      return;
+    }
     Tracker.track("FORM_SUBMIT", { fields: Object.keys(values) }, { variantId });
 
     // Audit 4.9: the lead data itself was never sent anywhere. Qualifier controls
@@ -131,6 +141,14 @@ export default function LandingRenderer({
 
   return (
     <main ref={mainRef}>
+      {preview && previewNote && (
+        <p
+          role="status"
+          className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 rounded-lg bg-amber-100 border border-amber-300 text-amber-900 text-sm px-4 py-2 shadow"
+        >
+          Preview mode — the form is disabled, nothing was sent.
+        </p>
+      )}
       {blocks.map((block) => {
         switch (block.type) {
           case "HERO":

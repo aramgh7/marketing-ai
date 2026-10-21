@@ -14,6 +14,7 @@
 > v1.4: §16.13–16.21 — beyond-current-capability modules (vision §19.18), **additive only**: funnel paths as arms, no-show propensity + risk-tiered follow-up + slot overbooking, predicted lead value at day 0 (`predicted_value` formula token), compliance by construction + staged moderation probe + reviewer persona, post-call intelligence, investor archetypes, creative sources (agency measurability), Reg CF waitlist value. No existing table semantics, service contracts or migrations change.
 >
 > v1.5: **sync with the code after the 2026-10-20 conformance review** (`.ai/conformance-review-2026-10-20.md`). §5.1/§5.2 route tables now name the paths that exist (`/decide/landing`, `/capi-events`, `/analytics/creatives`, `/mmf/offers/*`, `/evolve/*`, `POST /explain/{entity_type}`, `/predict/score`, `/simulate`); the `/model/*` family is replaced by the incremental reward path (`/decide/reward`, `RewardSweepScheduler`, lazy decay in `load_arms`). §8: Spring sets the GUC per statement at session level with a reset on connection return (Hikari autocommit); ml-service role becomes `mai_ml` (roadmap 9-4). §9: Quality Score / taxonomy / proxy-calibration jobs run in Spring; jobs still missing are marked with their roadmap 9-x item. §16.3: the seeded CAPI map follows vision §19.4 (roadmap 9-7). Tags: **[v1.5 — changed]** / **[v1.5 — added]**.
+> v1.6: **landing hosting (roadmap Phase 10, `.ai/landing-hosting.md`)**. §4.3 adds `set_id` / `reject_reason` / `style_angle` on `landing_variants`, and the new `tenant_domains` + `runner_keys` tables; §5.1 adds `/landings/generate-set`, `/landings/sets`, `/landings/{id}/reject`, `/domains/*`, `GET /public/domain/{host}`, `POST /public/decide`; §6 the edge middleware is host-aware (platform hosts = admin, any verified tenant host = that tenant's landings only); §11 CORS whitelist is read from `tenant_domains`; new **§17 Landing hosting modes** (platform host, CNAME, client-hosted runner). Tags: **[v1.6 — added]** / **[v1.6 — changed]**.
 >
 > **Marking convention for v1.2 edits**: same as v1.1, with the tag **[v1.2 — added]** / **[v1.2 — changed]**. §15 is entirely new, so only its heading carries the tag.
 
@@ -304,6 +305,31 @@ CREATE TABLE variant_offers (
     margin_floor        REAL,           -- min margin set by marketer (§4.3a hard floor)
     created_at          TIMESTAMPTZ DEFAULT now()
 );
+```
+
+**[v1.6 — added] Phase 10 columns and tables (V135).** `landing_variants` gains `set_id UUID` (variants generated together from one brief, compared side by side in `/landings`), `style_angle VARCHAR(120)` (the angle that produced the variant), `reject_reason VARCHAR(30)` / `reject_note TEXT` (a rejected variant goes to ARCHIVED and the pair is written to `rlha_corrections` as `content_type = 'landing_reject'`, `use_as_few_shot = false`).
+
+```sql
+CREATE TABLE tenant_domains (            -- the host name a tenant's landings are served on
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL REFERENCES tenants(id),
+    host VARCHAR(253) NOT NULL UNIQUE,                     -- lowercase FQDN, no scheme/port
+    kind VARCHAR(10) NOT NULL DEFAULT 'LANDING',           -- LANDING | COLLECT (first-party event endpoint)
+    hosting VARCHAR(12) NOT NULL DEFAULT 'CNAME',          -- CNAME (our Next.js) | SELF_HOSTED (runner on the client's server)
+    default_slug VARCHAR(100),                             -- "/" on this host → /l/{default_slug}
+    verification_token VARCHAR(64) NOT NULL,               -- TXT _mai-verify.<host>
+    status VARCHAR(10) NOT NULL DEFAULT 'PENDING',         -- PENDING | VERIFIED | FAILED | DISABLED
+    verified_at TIMESTAMPTZ, last_check_at TIMESTAMPTZ, last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE runner_keys (               -- credential of a client-hosted runner; only the hash is stored
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL REFERENCES tenants(id),
+    domain_id UUID REFERENCES tenant_domains(id) ON DELETE CASCADE,
+    key_hash VARCHAR(64) NOT NULL UNIQUE, label VARCHAR(100),
+    last_seen_at TIMESTAMPTZ, revoked_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- both: RLS tenant_isolation (as every tenant table), mai_app read/write, mai_ml read
 ```
 
 ### 4.4 Thompson Sampling Arms
@@ -608,6 +634,18 @@ Full contracts in §15; summary so the surface is visible in one place:
 | Security | **[v1.5 — changed]** `GET /api/v1/audit-log`; ~~`POST /api/v1/tenants/me/meta-credentials/rotate`~~ rotation is only the daily `TokenRotationScheduler` (roadmap 9-2) | 15.15 |
 | Data governance | **[v1.5 — changed]** ~~`GET /api/v1/event-schemas`~~ schemas are read by `EventSchemaService` from `event_schemas` (no public route), `POST /api/v1/privacy/erasure` | 15.12 |
 
+**[v1.6 — added] Phase 10 routes.**
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/landings/generate-set` | N DRAFT variants from one brief (`set_id`, one `style_angle` each); blocks from ML `/content/generate` per block type; slots recorded for RLHA |
+| GET | `/landings/sets` · `GET /landings?set_id=` | Sets and their variants for the comparison page |
+| POST | `/landings/{id}/reject` | `{reason, note}` → ARCHIVED + `rlha_corrections` (`landing_reject`) |
+| GET/POST/DELETE | `/domains`, `/domains/{id}` | Tenant domains; `POST /domains/{id}/verify` (DNS TXT + CNAME); `POST /domains/{id}/runner-key` (plaintext once) |
+| GET | `/public/domain/{host}` | Verified domain → `{tenantId, kind, hosting, defaultSlug}` for the edge middleware |
+| GET | `/public/l/{slug}?host=` | Slug scoped to the host's tenant (without `host`: unchanged) |
+| POST | `/public/decide` | Header `X-Runner-Key`; `{slug, host, session_id, context}` → platform calls ML `/decide/landing`; per-key rate limit |
+
 ### 5.2 FastAPI — ML Service (port 8000)
 
 #### Thompson Sampling
@@ -716,6 +754,8 @@ Full contracts in §15; summary so the surface is visible in one place:
 ```
 
 ---
+
+**[v1.6 — changed] Host-aware edge.** The middleware first classifies the request host: a host in `PLATFORM_HOSTS` serves the admin and `/l/*`; any other host is looked up in `tenant_domains` (`GET /public/domain/{host}`, 60 s cache) and serves only that tenant's `/l/*` (`/` → `default_slug`, everything else 404). In `LANDING_RUNNER=1` mode (the same image on the client's server) the arm is requested through `POST /public/decide` with the runner key instead of calling FastAPI directly — the runner holds no internal key, DB or Meta credentials. Preview of DRAFT/REVIEW variants is `/l/preview/{id}` (JWT, tracker off). See §17.
 
 ## 7. Service Communication
 
@@ -878,7 +918,7 @@ volumes:
 | Meta tokens | AES-encrypted in DB | HashiCorp Vault / AWS KMS |
 | API keys (internal) | Env vars | Rotated secrets in Vault |
 | HTTPS | Cloudflare / nginx | Same |
-| CORS | Whitelist tenant domains | Same |
+| CORS | **[v1.6 — changed]** static `CORS_ALLOWED_ORIGINS` + every VERIFIED row of `tenant_domains` (`TenantDomainCorsSource`, 60 s cache) | Same |
 | Rate limiting | Spring Boot filter (per-tenant) | Redis-based token bucket |
 | Bot protection | Cloudflare Bot Management | + behavioral scoring |
 | Consent | Cookiebot integration | Same |
@@ -1625,3 +1665,17 @@ CREATE TABLE call_objections (id UUID PRIMARY KEY, tenant_id UUID NOT NULL, call
 | Archetypes | `GET/PUT /api/v1/archetypes/policies` |
 | Sources / waitlist | `GET/POST /api/v1/creative-sources`, `GET /api/v1/reports/sources`, `GET /api/v1/waitlist/value` |
 
+---
+
+## 17. Landing Hosting Modes (roadmap Phase 10) **[v1.6 — added]**
+
+Decision record: `.ai/landing-hosting.md`. Meta blocks **domains** (URL blacklist), ad accounts, BMs and pixels — not hosting IPs; the protection is therefore **one domain per client** (per Business Manager when a client has several) plus clean content. A client-hosted server is an extra isolation layer for clients who require it, not a Meta requirement.
+
+| Mode | Who serves HTML | Host name | Variant decision | Events / forms | Status |
+|---|---|---|---|---|---|
+| A platform host | our Next.js | `go.<platform>/l/{slug}` | edge → FastAPI (internal key) | browser → platform API | default, internal use |
+| B CNAME | our Next.js | `invest.client.com` → CNAME `landings.<platform>` | same as A | same; first-party for that host | Phase 10-3 |
+| C runner | **client's server** (`docker-compose.runner.yml`) | client's host, client's IP | runner → `POST /public/decide` (runner key) → FastAPI | browser → platform API (optionally `COLLECT` domain by CNAME) | Phase 10-4 |
+| D static export | client's server | client's | none (no Thompson, no personalisation, no RLHA) | would need client JS | not planned |
+
+Verification: TXT `_mai-verify.<host>` = token (all modes), CNAME → `app.landing.cname-target` (mode B). TLS for custom hostnames is an infrastructure choice (Cloudflare for SaaS or Caddy on-demand TLS) and does not change the code path.

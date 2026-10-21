@@ -1,6 +1,7 @@
 package com.marketingai.config;
 
 import com.marketingai.security.JwtFilter;
+import com.marketingai.service.TenantDomainService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -13,11 +14,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
-import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
-import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
-
-import java.util.List;
 
 @Configuration
 @EnableWebSecurity
@@ -27,6 +24,7 @@ public class SecurityConfig {
 
     private final JwtFilter jwtFilter;
     private final AppProperties props;
+    private final TenantDomainService domainService;   // roadmap Phase 10
 
     /** Roles allowed to mutate state (JwtFilter grants ROLE_<role>; VIEWER is read-only). */
     static final String[] WRITE_ROLES = {"ADMIN", "OWNER", "MARKETER", "EDITOR"};
@@ -59,18 +57,13 @@ public class SecurityConfig {
         return http.build();
     }
 
+    /**
+     * Roadmap Phase 10: configured origins plus every VERIFIED tenant domain (landings on client domains post
+     * events / forms to this API). Cached 60 s inside {@link TenantDomainCorsSource}.
+     */
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
-        CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOriginPatterns(props.getCors().getAllowedOrigins());
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
-        config.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Requested-With"));
-        config.setAllowCredentials(true);
-        config.setMaxAge(3600L);
-
-        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-        source.registerCorsConfiguration("/**", config);
-        return source;
+        return new TenantDomainCorsSource(props.getCors().getAllowedOrigins(), domainService);
     }
 
     @Bean

@@ -54,6 +54,14 @@ public class LandingVariant {
     private UUID approvedBy;
     private Instant approvedAt;
 
+    /** Roadmap Phase 10: variants generated together from one brief share a set_id (compare side by side). */
+    private UUID setId;
+    /** Roadmap Phase 10: why a marketer rejected this variant (feeds RLHA). */
+    private String rejectReason;
+    private String rejectNote;
+    /** Roadmap Phase 10: the style angle that produced this variant. */
+    private String styleAngle;
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
 

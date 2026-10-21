@@ -25,4 +25,8 @@ public class VariantRequest {
     private String[] blockOrder;
 
     private VariantOfferRequest offer;
+
+    /** Roadmap Phase 10: optional set grouping / style angle. */
+    private UUID setId;
+    private String styleAngle;
 }

@@ -94,6 +94,24 @@ public class RlhaService {
         return n;
     }
 
+    /**
+     * Roadmap Phase 10: a marketer rejected a whole generated landing variant. Stored as a non-few-shot pair
+     * (content_type landing_reject) so the reason and note are visible in the Learning page and metrics.
+     */
+    public UUID recordVariantRejection(UUID tenantId, UUID userId, UUID variantId, String headline, String reason, String note) {
+        UUID id = UUID.randomUUID();
+        String r = reason == null ? null : reason.toUpperCase();
+        String generated = headline == null || headline.isBlank() ? "(variant " + variantId + ")" : headline;
+        String context = json(Map.of("content_type", "landing_reject", "source", "rejected_variant"));
+        jdbc.update("""
+                INSERT INTO rlha_corrections
+                    (id, tenant_id, generation_id, generated_text, approved_text, delta_tags, context, use_as_few_shot,
+                     edited_by, content_type, edit_reason, entity_type, entity_id)
+                VALUES (?, ?, NULL, ?, ?, ?, ?::jsonb, FALSE, ?, 'landing_reject', ?, 'LANDING_VARIANT', ?)
+                """, id, tenantId, generated, note == null ? "" : note, new String[0], context, userId, r, variantId);
+        return id;
+    }
+
     public UUID addManualCorrection(UUID tenantId, UUID userId, String contentType, String generated, String approved, String reason) {
         return insertCorrection(tenantId, userId, null, generated, approved, contentType, reason, null, null,
                 json(Map.of("content_type", contentType, "source", "manual")));
@@ -206,6 +224,9 @@ public class RlhaService {
                        COUNT(*) FILTER (WHERE decision = 'REJECTED') AS rejected
                 FROM render_feedback WHERE tenant_id = ?
                 """, tenantId);
+        // Roadmap Phase 10: whole-variant rejections from the compare page
+        Long rejectedVariants = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM landing_variants WHERE tenant_id = ? AND reject_reason IS NOT NULL", Long.class, tenantId);
         long gens = ((Number) totals.get("generations")).longValue();
         long clean = ((Number) totals.get("accepted_clean")).longValue();
         long edited = ((Number) totals.get("edited")).longValue();
@@ -217,6 +238,7 @@ public class RlhaService {
         out.put("edit_rate", gens == 0 ? null : Math.round(edited * 1000.0 / gens) / 10.0);
         out.put("weekly", weekly);
         out.put("renders", renders);
+        out.put("rejected_variants", rejectedVariants == null ? 0L : rejectedVariants);
         out.put("target_accepted_rate", 70.0);
         return out;
     }

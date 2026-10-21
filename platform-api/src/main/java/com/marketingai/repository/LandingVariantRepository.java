@@ -21,4 +21,9 @@ public interface LandingVariantRepository extends JpaRepository<LandingVariant, 
     Optional<LandingVariant> findBySlug(String slug);
 
     boolean existsByTenantIdAndSlug(UUID tenantId, String slug);
+
+    // Roadmap Phase 10
+    Optional<LandingVariant> findByTenantIdAndSlugAndStatus(UUID tenantId, String slug, String status);
+
+    List<LandingVariant> findByTenantIdAndSetIdOrderByCreatedAtAsc(UUID tenantId, UUID setId);
 }

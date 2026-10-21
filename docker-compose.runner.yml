@@ -1,0 +1,34 @@
+# Landing runner — roadmap Phase 10 (self-hosted landings).
+#
+# Runs on the CLIENT's server under the client's own domain. It is the same Next.js image as the
+# platform frontend, started in landing-only mode:
+#   - serves only /l/{slug} (admin routes answer 404),
+#   - talks OUTBOUND ONLY to the platform API (variant content, decisions, events, forms),
+#   - holds no ML key and no database credentials; it authenticates with a per-tenant RUNNER_KEY
+#     issued in Settings → Landing domains (hosting = Self-hosted).
+# Put a TLS terminator (Caddy / nginx / Cloudflare) in front of port 80 for the client's host name.
+#
+# NEXT_PUBLIC_* values are baked at build time by Next.js, so PLATFORM_API_URL is passed both as a
+# build arg (frontend/Dockerfile) and as a runtime env. Rebuild after changing it.
+#
+#   cp frontend/.env.runner.example .env   # fill PLATFORM_API_URL and RUNNER_KEY
+#   docker compose -f docker-compose.runner.yml up -d --build
+services:
+  landing-runner:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${PLATFORM_API_URL}
+        NEXT_PUBLIC_COOKIEBOT_DOMAIN_ID: ${COOKIEBOT_DOMAIN_ID:-}
+    container_name: mai-landing-runner
+    restart: unless-stopped
+    ports:
+      - "80:3000"
+    environment:
+      LANDING_RUNNER: "1"
+      RUNNER_KEY: ${RUNNER_KEY}
+      API_INTERNAL_URL: ${PLATFORM_API_URL}
+      NEXT_PUBLIC_API_URL: ${PLATFORM_API_URL}
+      PLATFORM_HOSTS: ${PLATFORM_HOSTS:-}
+      NEXT_PUBLIC_COOKIEBOT_DOMAIN_ID: ${COOKIEBOT_DOMAIN_ID:-}

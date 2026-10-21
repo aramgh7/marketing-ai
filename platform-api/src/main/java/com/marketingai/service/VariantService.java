@@ -45,10 +45,22 @@ public class VariantService {
 
     @Transactional(readOnly = true)
     public List<VariantResponse> listVariants(String status) {
+        return listVariants(status, null);
+    }
+
+    /** Roadmap Phase 10: optional filter by generation set. */
+    @Transactional(readOnly = true)
+    public List<VariantResponse> listVariants(String status, UUID setId) {
         UUID tenantId = currentTenant();
-        List<LandingVariant> variants = status != null
-                ? variantRepo.findAllByTenantIdAndStatus(tenantId, status)
-                : variantRepo.findAllByTenantId(tenantId);
+        List<LandingVariant> variants;
+        if (setId != null) {
+            variants = variantRepo.findByTenantIdAndSetIdOrderByCreatedAtAsc(tenantId, setId);
+            if (status != null) variants = variants.stream().filter(v -> status.equals(v.getStatus())).toList();
+        } else {
+            variants = status != null
+                    ? variantRepo.findAllByTenantIdAndStatus(tenantId, status)
+                    : variantRepo.findAllByTenantId(tenantId);
+        }
         if (variants.isEmpty()) return List.of();
 
         // Batch-load arms (1 query) to avoid N+1
@@ -97,6 +109,8 @@ public class VariantService {
         v.setCreativeId(req.getCreativeId());
         v.setBlocks(req.getBlocks() != null ? req.getBlocks() : "[]");
         v.setBlockOrder(req.getBlockOrder() != null ? req.getBlockOrder() : new String[0]);
+        v.setSetId(req.getSetId());
+        v.setStyleAngle(req.getStyleAngle());
         v.setStatus("DRAFT");
         variantRepo.save(v);
 
@@ -207,6 +221,16 @@ public class VariantService {
     }
 
     // ─── Public lookup by slug (no auth required) ────────────────────────────────
+
+    /** Roadmap Phase 10: slug lookup scoped to the tenant that owns the request host (custom domains). */
+    @Transactional(readOnly = true)
+    public VariantResponse getActiveBySlugForTenant(UUID tenantId, String slug) {
+        LandingVariant v = variantRepo.findByTenantIdAndSlugAndStatus(tenantId, slug, "ACTIVE")
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "No active variant with slug: " + slug));
+        VariantOffer offer = offerRepo.findByVariantIdAndTenantId(v.getId(), v.getTenantId()).orElse(null);
+        return toResponse(v, offer);
+    }
 
     @Transactional(readOnly = true)
     public VariantResponse getActiveBySlug(String slug) {
@@ -372,6 +396,10 @@ public class VariantService {
                 .approvedAt(v.getApprovedAt())
                 .createdAt(v.getCreatedAt())
                 .updatedAt(v.getUpdatedAt())
+                .setId(v.getSetId())
+                .rejectReason(v.getRejectReason())
+                .rejectNote(v.getRejectNote())
+                .styleAngle(v.getStyleAngle())
                 .offer(offer == null ? null : VariantOfferResponse.builder()
                         .id(offer.getId())
                         .discountType(offer.getDiscountType())

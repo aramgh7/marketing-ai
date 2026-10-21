@@ -66,9 +66,9 @@ export default function VariantDetailPage() {
             </span>
           </div>
         </div>
-        {variant.slug && (
+        {variant.id && (
           <a
-            href={`/l/${variant.slug}`}
+            href={`/l/preview/${variant.id}`}
             target="_blank"
             rel="noopener noreferrer"
             className="text-sm text-indigo-600 hover:underline"

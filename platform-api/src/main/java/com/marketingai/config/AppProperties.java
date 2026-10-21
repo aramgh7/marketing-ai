@@ -19,6 +19,7 @@ public class AppProperties {
     private final Storage storage = new Storage();
     private final Report report = new Report();
     private final Meta meta = new Meta();
+    private final Landing landing = new Landing();
     private String mlServiceUrl;
     private String internalApiKey;
     private String ghlWebhookSecret = "";
@@ -69,6 +70,16 @@ public class AppProperties {
         public boolean isEmailConfigured() {
             return emailTo != null && !emailTo.isBlank();
         }
+    }
+
+    /** Roadmap Phase 10: client domains for landings and the self-hosted landing runner. */
+    @Getter
+    @Setter
+    public static class Landing {
+        /** Where a client's CNAME must point (our landing edge). */
+        private String cnameTarget = "landings.example.com";
+        /** Hosts that serve the admin cabinet; any other host is resolved via tenant_domains. */
+        private List<String> platformHosts = List.of("localhost:3000");
     }
 
     @Getter

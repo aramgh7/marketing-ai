@@ -28,8 +28,9 @@ public class VariantController {
     private final ThompsonArmRepository thompsonArmRepo;
 
     @GetMapping
-    public List<VariantResponse> list(@RequestParam(required = false) String status) {
-        return variantService.listVariants(status);
+    public List<VariantResponse> list(@RequestParam(required = false) String status,
+                                      @RequestParam(value = "set_id", required = false) UUID setId) {
+        return variantService.listVariants(status, setId);   // roadmap Phase 10: set_id filter
     }
 
     @GetMapping("/{id}")

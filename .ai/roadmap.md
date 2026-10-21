@@ -1326,6 +1326,42 @@
 
 ---
 
+## Phase 10 — Where the landing lives: choose, preview, tenant domains, client-hosted runner **[v1.5 — added]**
+
+> Goal: the marketer sees what the system assembled and picks; the chosen page is served on the client's own
+> host name (or the client's own server) while every event still reaches the platform. Decision record:
+> `.ai/landing-hosting.md`. Trigger (2026-10-21): "if a client's account has a problem, Meta must not block our
+> domain or IP; can the landing physically live on the client's server and still be tracked?" — yes, modes B/C.
+
+### 10-1. Variant comparison and choice in the admin (vision §5.1, §13.3)
+- [x] `POST /landings/generate-set` — N DRAFT variants from one brief (`set_id`, distinct `style_angle` each), blocks assembled from `/content/generate` per block type (HERO, PROBLEM, CTA, FAQ), every slot recorded in `content_generations`
+- [x] `GET /landings/sets`, `GET /landings?set_id=`, `POST /landings/{id}/reject {reason, note}` (DRAFT/REVIEW → ARCHIVED; pair written to `rlha_corrections` as `landing_reject`, never a few-shot)
+- [x] Admin page `/landings`: generate form, sets list, side-by-side cards, inline slot edit with reason (→ `PUT /landings/{id}?edit_reason=` → RLHA), Choose → REVIEW → compliance checklist on `/creatives/{id}`, Reject with reason
+- [x] `LandingVariant`: `set_id`, `reject_reason`, `reject_note`, `style_angle` (V135)
+
+### 10-2. Preview of DRAFT / REVIEW variants
+- [x] `/l/preview/{id}` — JWT-guarded client render of any status; `LandingRenderer preview` prop: no tracker, no BLOCK_VIEW, form and reward disabled, banner with status
+- [x] "Preview landing" on `/creatives/{id}` points to the preview route (public `/l/{slug}` stays ACTIVE-only)
+
+### 10-3. Tenant domains (arch §11 "whitelist tenant domains" — now real)
+- [x] `tenant_domains` (host, kind LANDING|COLLECT, hosting CNAME|SELF_HOSTED, default_slug, verification token, status) + RLS; `runner_keys` (sha-256 hash, revocable)
+- [x] `/domains` CRUD, `POST /domains/{id}/verify` — DNS TXT `_mai-verify.<host>` = token, plus CNAME → `app.landing.cname-target` for CNAME hosting; `GET /public/domain/{host}`
+- [x] `GET /public/l/{slug}?host=` scopes the slug to the domain's tenant; CORS allowed origins = static list + every VERIFIED domain (`TenantDomainCorsSource`, 60 s cache)
+- [x] Host-aware edge middleware: platform hosts (`PLATFORM_HOSTS`) serve the admin; any other host serves only `/l/*` of its tenant, `/` → `default_slug`, everything else 404
+- [x] Settings → "Landing domains": add, instructions (CNAME + TXT), Verify, Delete, Issue runner key
+- [ ] TLS for custom hostnames in production — Cloudflare for SaaS or Caddy on-demand TLS (infra choice, not code)
+
+### 10-4. Client-hosted landing runner (vision §12.1b first-party)
+- [x] `docker-compose.runner.yml` — the frontend image in `LANDING_RUNNER=1` mode on the client's server: admin routes off, outbound HTTPS to the platform API only, no ML key, no DB, no Meta secrets
+- [x] `POST /public/decide` (header `X-Runner-Key`) — the runner asks the platform for the arm; the platform calls ML `/decide/landing`; per-key rate limit
+- [x] Tracking unchanged: events, forms, rewards go from the visitor's browser to the platform API; optional `COLLECT` domain by CNAME for first-party collection
+- [ ] One-page client instruction (DNS records, `docker compose up`, key rotation) — write when the first external client arrives
+
+### 10-5. Documentation
+- [x] `.ai/landing-hosting.md` (what Meta blocks, modes A–D, when to use which); architecture v1.6 §4.3/§5.1/§6/§11/§17; capabilities §3.5
+
+---
+
 ## Bug List
 
 _(empty — project not started)_
@@ -1349,6 +1385,7 @@ _(empty — project not started)_
 | Phase 7   | **COMPLETE**    | 7-1 Google ✅ 7-2 TikTok ✅ 7-3 Decision graph ✅ 7-4 MMM ✅ 7-5 Attribution ✅                                   | — |
 | **[v1.2 — added]** Phase 8 | **IN PROGRESS** | 8-1 ✅ · 8-2 ✅ · 8-3 ✅ (infra) · 8-4 ✅ · 8-5 ✅ (infra) · 8-6 ✅ · 8-7 ✅ · 8-8 ✅ · 8-9 ✅ · 8-10 ✅ (signals+calendar infra) · 8-11 ✅ (labels+aliases infra) · 8-12 ✅ (widgets+frontend) · 8-13 ✅ (open items registry) · 8-14 ✅ (funnel paths Thompson) · 8-15 ✅ (noshow propensity) · 8-16 ✅ (predicted lead value) · 8-17 ✅ (compliance by construction) · 8-18 ✅ (post-call intelligence) · 8-19 ✅ (investor archetypes) · 8-20 ✅ (agency measurability) · 8-21 ✅ (regcf waitlist, FROZEN) | 8-3 reward_levels config, show-rate corrector; 8-5 weekly calibration, tz capture; 8-8 investor offer atom schema; 8-9 GHL sub-accounts; 8-10 GLM DEMAND/NARRATIVE wiring; 8-11 client asset delivery; **[v1.3]** 8-14…8-21 beyond-capability (infra complete, activation gated on live data/counsel) |
 | **[v1.4 — added]** Phase 9 | **COMPLETE** | 9-1 ✅ … 9-20 ✅ — pre-production gap closure from the 2026-10-20 conformance review (open: vitest for admin pages; frontend/mlflow containers not booted — platform-api + ml-service + postgres + redis booted live at V132 and smoke-tested end to end) | — |
+| **[v1.5 — added]** Phase 10 | **COMPLETE** (code) | 10-1 ✅ 10-2 ✅ 10-3 ✅ 10-4 ✅ 10-5 ✅ — variant choice, preview, tenant domains, client-hosted runner (open: TLS proxy choice for custom hostnames; client one-pager) | — |
 
 **Immediate priority**: ~~Phase 7 (Multi-Channel) or Phase 0.5 (Universal Cross-Niche Model) — Phase 6 complete~~ **[v1.1 — changed]** Before onboarding client #1 on anything above ADVISOR: the Phase 0 items (0-11, 0-12, 0-13), then Phase 2 content path (2-9 → 2-10 → 2-11, 2-12), then the Phase 3 protective set in this order — 3-15 queue → 3-13 Site Health → 3-14 anchors → 3-12 external signals → 3-16 recovery → 3-17/3-18 autonomy + OPE (unlocks 6-6). Phase 7 and 0.5 after that. **[v1.2 — changed]** With all v1.1 items ✅, the immediate priority is **Phase 8 pre-onboarding set (8-1 → 8-2 → 8-3 → 8-7 → 8-4)**: the implemented CAPI gate, reward map and gates are coded on the wrong funnel for client #1, and nothing should go live on their account until they read the configured funnel.
 
@@ -1420,3 +1457,6 @@ _(empty — project not started)_
 | **[v1.4 — added]** G58 | §6.4, §15.4–15.6, §8.5 | GLM-informed priors, top-two/EVI, hierarchical wiring, Markowitz | 9-10, 9-11, 9-12 | §15.17 |
 | **[v1.4 — added]** G59 | §5.2 | Subtitles (SRT/ASS), TTS, music bed, real AI-video providers | 9-13 … 9-16 | §15.21 |
 | **[v1.4 — added]** G60 | §12.1a | Face detection on frames | 9-17 | §15.4 |
+| **[v1.5 — added]** G61 | §5.1, §13.3 | Marketer sees generated landing variants side by side, chooses, rejects with reason | 10-1, 10-2 | §15.7 |
+| **[v1.5 — added]** G62 | arch §11, §12.1b | Tenant domains, DNS verification, host-aware serving, CORS from table | 10-3 | §17 |
+| **[v1.5 — added]** G63 | §12.1b | Landing served from the client's own server with full tracking (runner) | 10-4 | §17 |
