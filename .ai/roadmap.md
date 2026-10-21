@@ -1362,6 +1362,40 @@
 
 ---
 
+## Phase 11 — Creative publishing: the only road into Meta goes through the platform **[v1.5 — added]** — PLANNED, not started
+
+> Goal: the pair "creative → landing → funnel path" stays measurable. A creative reaches Meta only via the
+> cabinet (video upload, creative, ad created PAUSED, destination URL with Meta url_tags, ad id stored);
+> anything created by hand in Ads Manager is "unmanaged" and excluded from learning. Decision record:
+> `.ai/creative-publishing.md` (2026-10-21). Depends on `.ai/meta-api-policy.md` stage GUARDED_WRITES for the
+> new write class CREATE_AD_PAUSED. No code yet — every item below is unchecked by design.
+
+### 11-1. Creative id in the click (cheapest, mandatory for every later item)
+- [ ] Edge middleware reads `mai_c` (Meta `{{ad.id}}`), `mai_p` (`{{placement}}`), `mai_s` (`{{site_source_name}}`) from the landing URL and passes them to `/decide/landing` (`creative_id` already accepted by ML; placement/source as context, not as a new arm)
+- [ ] `sessions` / `decision_log` keep the resolved `creative_id`; visits without it get the "no creative" context (organic, mailings) and train the landing only
+
+### 11-2. Ad map (`meta_ad_map`)
+- [ ] Table `meta_ad_map(tenant_id, meta_ad_id, meta_adset_id, meta_campaign_id, creative_id, entry_slug, destination_url, url_tags, source MANAGED|RECONCILED|MANUAL, status, last_seen_at, drift jsonb)` + RLS; one row per Meta ad, identity = our creative
+- [ ] `creatives.publish_status` NOT_IN_META | PENDING_REVIEW | PAUSED_IN_META | ACTIVE_IN_META | REJECTED | UNMANAGED, shown on `/creatives`
+
+### 11-3. Publish from the cabinet (Marketing API writes, class CREATE_AD_PAUSED)
+- [ ] `MetaWriteAction.CREATE_AD_PAUSED` — allowed from GUARDED_WRITES (safest write: spends nothing, activates nothing); `MetaWritePolicy` + `MetaWriteGuardTest` updated; every call in `meta_api_audit`
+- [ ] `MetaApiService`: chunked `/advideos` upload, `/adcreatives` (video + primary text + headline from approved phrases, `link_url` = `https://{tenant domain}/l/{entry_slug}`, `url_tags = mai_c={{ad.id}}&mai_p={{placement}}&mai_s={{site_source_name}}`), `/ads` with `status=PAUSED`, dynamic creative and Advantage+ creative enhancements OFF for test ads
+- [ ] `POST /creatives/{id}/publish {ad_set_id | campaign_id, entry_slug, page_id}` — requires compliance PASS, media checks, approved render; writes the `meta_ad_map` row with `source=MANAGED`
+- [ ] Activation only from the cabinet: `POST /creatives/{id}/activate` = `RESUME` after the probe verdict (`ModerationProbeMath`) is PASS; rejection → graveyard `blocked_by_meta` + new brief with avoid-list (existing 8-17 flow, now keyed by `meta_ad_map`)
+- [ ] Cabinet: "Publish to Meta" button on `/creatives/{id}` with the destination preview; download of the final render marked NOT_IN_META for internal use, watermarked preview only for external tenants (tenant setting)
+
+### 11-4. Reconciliation by reading (works at READ_ONLY, safety net for hand-made ads)
+- [ ] Hourly `MetaAdReconcileScheduler`: read `/act_{id}/ads?fields=id,name,adset_id,creative{video_id,image_hash,link_url,url_tags},effective_status`; ads with no map row → `UNMANAGED` + alert; mapped ads whose `link_url`/`url_tags`/video changed → `drift` + alert + arm frozen until a human decides
+- [ ] Manual link in the cabinet: "this Meta ad = creative #" for unmanaged ads (`source=MANUAL`); matching hint by the creative code in the ad name
+- [ ] Onboarding checklist item "linkage health": every ACTIVE ad has a map row and url_tags; red → test launches blocked (`GateEvaluationService`)
+
+### 11-5. Pairs as arms (closing the loop with Phase 10)
+- [ ] `/decide/landing` uses `creative_id` as context so "creative → landing variant → path" becomes the arm the dashboard ranks (vision §19.18.1 funnel paths); `/ab-results` and `/explain` show the pair, not only the landing
+- [ ] Capabilities §2.4/§3.5 and architecture §6/§17 updated when the code lands; `.ai/meta-api-policy.md` §6 "Позже → creatives by hand if the client is nervous" replaced (done in docs 2026-10-21, see policy v1.2)
+
+---
+
 ## Bug List
 
 _(empty — project not started)_
@@ -1386,6 +1420,7 @@ _(empty — project not started)_
 | **[v1.2 — added]** Phase 8 | **IN PROGRESS** | 8-1 ✅ · 8-2 ✅ · 8-3 ✅ (infra) · 8-4 ✅ · 8-5 ✅ (infra) · 8-6 ✅ · 8-7 ✅ · 8-8 ✅ · 8-9 ✅ · 8-10 ✅ (signals+calendar infra) · 8-11 ✅ (labels+aliases infra) · 8-12 ✅ (widgets+frontend) · 8-13 ✅ (open items registry) · 8-14 ✅ (funnel paths Thompson) · 8-15 ✅ (noshow propensity) · 8-16 ✅ (predicted lead value) · 8-17 ✅ (compliance by construction) · 8-18 ✅ (post-call intelligence) · 8-19 ✅ (investor archetypes) · 8-20 ✅ (agency measurability) · 8-21 ✅ (regcf waitlist, FROZEN) | 8-3 reward_levels config, show-rate corrector; 8-5 weekly calibration, tz capture; 8-8 investor offer atom schema; 8-9 GHL sub-accounts; 8-10 GLM DEMAND/NARRATIVE wiring; 8-11 client asset delivery; **[v1.3]** 8-14…8-21 beyond-capability (infra complete, activation gated on live data/counsel) |
 | **[v1.4 — added]** Phase 9 | **COMPLETE** | 9-1 ✅ … 9-20 ✅ — pre-production gap closure from the 2026-10-20 conformance review (open: vitest for admin pages; frontend/mlflow containers not booted — platform-api + ml-service + postgres + redis booted live at V132 and smoke-tested end to end) | — |
 | **[v1.5 — added]** Phase 10 | **COMPLETE** (code) | 10-1 ✅ 10-2 ✅ 10-3 ✅ 10-4 ✅ 10-5 ✅ — variant choice, preview, tenant domains, client-hosted runner (open: TLS proxy choice for custom hostnames; client one-pager) | — |
+| **[v1.5 — added]** Phase 11 | **PLANNED** | 11-1 … 11-5 unchecked — creative publishing only through the platform (`.ai/creative-publishing.md`); needs stage GUARDED_WRITES for CREATE_AD_PAUSED | — |
 
 **Immediate priority**: ~~Phase 7 (Multi-Channel) or Phase 0.5 (Universal Cross-Niche Model) — Phase 6 complete~~ **[v1.1 — changed]** Before onboarding client #1 on anything above ADVISOR: the Phase 0 items (0-11, 0-12, 0-13), then Phase 2 content path (2-9 → 2-10 → 2-11, 2-12), then the Phase 3 protective set in this order — 3-15 queue → 3-13 Site Health → 3-14 anchors → 3-12 external signals → 3-16 recovery → 3-17/3-18 autonomy + OPE (unlocks 6-6). Phase 7 and 0.5 after that. **[v1.2 — changed]** With all v1.1 items ✅, the immediate priority is **Phase 8 pre-onboarding set (8-1 → 8-2 → 8-3 → 8-7 → 8-4)**: the implemented CAPI gate, reward map and gates are coded on the wrong funnel for client #1, and nothing should go live on their account until they read the configured funnel.
 
@@ -1460,3 +1495,4 @@ _(empty — project not started)_
 | **[v1.5 — added]** G61 | §5.1, §13.3 | Marketer sees generated landing variants side by side, chooses, rejects with reason | 10-1, 10-2 | §15.7 |
 | **[v1.5 — added]** G62 | arch §11, §12.1b | Tenant domains, DNS verification, host-aware serving, CORS from table | 10-3 | §17 |
 | **[v1.5 — added]** G63 | §12.1b | Landing served from the client's own server with full tracking (runner) | 10-4 | §17 |
+| **[v1.5 — added]** G64 | §5.1, §19.18.1, §12.4 | Creative reaches Meta only via the platform; ad map; creative id in the click; reconciliation | 11-1 … 11-5 (planned) | §6, §15.4, §16.17 |
