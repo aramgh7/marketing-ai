@@ -36,6 +36,10 @@ public class Tenant {
     /** Meta Ads account ID, e.g. "act_123456789" — added in V16 migration */
     private String metaAdAccountId;
 
+    /** Roadmap Phase 11: Facebook Page (object_story_spec) and optional Instagram actor for published ads. */
+    private String metaPageId;
+    private String metaInstagramActorId;
+
     /** vision §21.5: holdout group for System vs Baseline Benchmark (default ON, 4%) */
     @Column(nullable = false)
     private boolean holdoutEnabled = true;

@@ -1,6 +1,7 @@
 package com.marketingai.controller;
 
 import com.marketingai.service.CAPIEmqCheckService;
+import com.marketingai.service.LinkageHealthService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -23,6 +24,7 @@ import java.util.UUID;
 @Slf4j
 public class OnboardingController {
 
+    private final LinkageHealthService linkageHealth;   // roadmap Phase 11
     private final JdbcTemplate        jdbc;
     private final CAPIEmqCheckService  emqCheckService;
 
@@ -76,6 +78,11 @@ public class OnboardingController {
         List<Map<String, Object>> gate = jdbc.queryForList(
                 "SELECT status FROM regcf_activation_gate WHERE tenant_id = ?", tenantId);
         String gateStatus = gate.isEmpty() ? "NOT_FOUND" : (String) gate.get(0).get("status");
+        // Roadmap Phase 11-4: every active Meta ad mapped to a creative and carrying the platform's url_tags
+        LinkageHealthService.Health lh = linkageHealth.check(tenantId);
+        items.add(item("linkage", "Meta ads linked (every active ad mapped, url_tags present)",
+                lh.healthy(), lh.summary()));
+
         items.add(item("regcf_gate", "Reg CF gate acknowledged",
                 !gate.isEmpty(), "Status: " + gateStatus + " (FROZEN is correct for 506(c) launch)"));
 

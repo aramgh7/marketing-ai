@@ -58,6 +58,14 @@ public class MlServiceClient {
         return null;
     }
 
+    /** Generic GET from ml-service (roadmap Phase 11: /decide/pairs). */
+    public <T> T get(String pathWithQuery, Class<T> responseType) {
+        String url = appProperties.getMlServiceUrl() + pathWithQuery;
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-Internal-API-Key", appProperties.getInternalApiKey());
+        return restTemplate.exchange(url, org.springframework.http.HttpMethod.GET, new HttpEntity<>(headers), responseType).getBody();
+    }
+
     /** Generic POST to ml-service with JSON body. */
     @SuppressWarnings("unchecked")
     public <T> T post(String path, Object body, Class<T> responseType) {

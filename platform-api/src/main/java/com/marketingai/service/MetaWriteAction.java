@@ -8,6 +8,7 @@ public enum MetaWriteAction {
     LAUNCH("LAUNCH"),               // test batch / creative testing tool ad sets
     CREATE_AD_SET("CREATE"),        // single ad set outside a batch
     CREATE_CAMPAIGN("CREATE"),      // new campaign
+    CREATE_AD_PAUSED("CREATE"),     // roadmap Phase 11: upload creative + create an ad PAUSED (spends nothing, activates nothing)
     AUDIENCE_UPDATE("CREATE");      // custom audience sync
 
     private final String actionClass;
@@ -22,6 +23,7 @@ public enum MetaWriteAction {
     public static MetaWriteAction fromLegacyName(String name) {
         if (name == null) return LAUNCH;
         String n = name.toUpperCase();
+        if (n.contains("AD_PAUSED")) return CREATE_AD_PAUSED;   // before the PAUSE rule: "CREATE_AD_PAUSED" contains "PAUSE"
         if (n.contains("PAUSE") || n.contains("STOP") || n.startsWith("L1") || n.startsWith("L3")) return PAUSE;
         if (n.contains("RESUME")) return RESUME;
         if (n.contains("BUDGET") || n.contains("BID") || n.contains("SCALE")) return BUDGET_CHANGE;

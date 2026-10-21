@@ -8,7 +8,9 @@ import java.util.Locale;
  *
  * Stages (tenants.meta_write_stage):
  *   READ_ONLY       — only PROTECTIVE writes (pausing spend) are executed
- *   GUARDED_WRITES  — + RESUME, BUDGET within thresholds, LAUNCH only as a moderation probe, CREATE_AD_SET as probe
+ *   GUARDED_WRITES  — + RESUME, BUDGET within thresholds, LAUNCH only as a moderation probe, CREATE_AD_SET as probe,
+ *                     CREATE_AD_PAUSED always (roadmap Phase 11: the paused ad *is* the probe — it spends nothing
+ *                     and activates nothing; activation is a separate RESUME after Meta's verdict)
  *   FULL            — everything, thresholds still apply
  *
  * Initiator: USER (admin UI) or JOB (scheduler/autopilot). JOB-initiated expansive writes additionally need

@@ -2,9 +2,19 @@
 import { useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api";
 
+/** Roadmap Phase 11-5: the pair "creative → landing variant" is what the marketer compares. */
+type Pair = {
+  creative_id: string | null; creative_title: string | null; creative_code: string | null;
+  variant_id: string; variant_name: string | null; decisions: number; rewards: number; cvr: number | null;
+  alpha: number; beta: number; posterior_mean: number; win_probability: number | null;
+};
+
 export default function AbResultsPage() {
   const [arms, setArms]       = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [pairs, setPairs]     = useState<Pair[]>([]);
+  const [pairsDays, setPairsDays] = useState(30);
+  const [pairsError, setPairsError] = useState("");
 
   useEffect(() => {
     apiFetch<any[]>("/api/v1/landings/arms")
@@ -12,6 +22,15 @@ export default function AbResultsPage() {
       .catch(() => setArms([]))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPairsError("");
+    apiFetch<{ pairs: Pair[] }>(`/api/v1/landings/pairs?days=${pairsDays}`)
+      .then((r) => { if (!cancelled) setPairs(r?.pairs ?? []); })
+      .catch((e: any) => { if (!cancelled) { setPairs([]); setPairsError(e?.message ?? "pairs unavailable"); } });
+    return () => { cancelled = true; };
+  }, [pairsDays]);
 
   return (
     <div className="space-y-6">
@@ -101,6 +120,66 @@ export default function AbResultsPage() {
           })}
         </div>
       )}
+
+      {/* ── Creative → landing pairs (Phase 11-5) ───────────────────────── */}
+      <section className="bg-white rounded-xl border border-gray-200 p-6">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+          <div>
+            <h2 className="font-semibold text-gray-800">Creative → landing pairs (last {pairsDays} days)</h2>
+            <p className="text-xs text-gray-400">Which creative with which landing converts. Organic / mail visits are the &quot;(no creative)&quot; row.</p>
+          </div>
+          <div className="flex gap-1">
+            {[7, 30, 90].map((d) => (
+              <button key={d} onClick={() => setPairsDays(d)}
+                className={`px-2 py-1 rounded text-xs ${pairsDays === d ? "bg-indigo-600 text-white" : "bg-white border border-gray-200 text-gray-600"}`}>
+                {d}d
+              </button>
+            ))}
+          </div>
+        </div>
+        {pairsError && <p className="text-xs text-red-600 mb-2">{pairsError}</p>}
+        <div className="overflow-x-auto">
+          <table className="text-xs w-full">
+            <thead>
+              <tr className="text-left text-gray-500">
+                <th className="pr-2">creative</th><th className="pr-2">landing</th><th className="pr-2 text-right">decisions</th>
+                <th className="pr-2 text-right">rewards</th><th className="pr-2 text-right">CVR</th><th className="pr-2 text-right">posterior</th><th>P(best)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pairs.map((p) => {
+                const cvr = p.cvr ?? (p.decisions ? p.rewards / p.decisions : 0);
+                const win = p.win_probability ?? 0;
+                return (
+                  <tr key={`${p.creative_id ?? "none"}-${p.variant_id}`} className="border-t border-gray-100">
+                    <td className="pr-2 py-1">
+                      {p.creative_id ? (
+                        <span><span className="font-mono text-gray-500">{p.creative_code ?? ""}</span> <span className="text-gray-900">{p.creative_title ?? p.creative_id}</span></span>
+                      ) : <span className="text-gray-400">(no creative)</span>}
+                    </td>
+                    <td className="pr-2 py-1 text-gray-900">{p.variant_name ?? p.variant_id}</td>
+                    <td className="pr-2 py-1 text-right">{p.decisions}</td>
+                    <td className="pr-2 py-1 text-right">{p.rewards}</td>
+                    <td className="pr-2 py-1 text-right">{(cvr * 100).toFixed(2)}%</td>
+                    <td className="pr-2 py-1 text-right">{(p.posterior_mean * 100).toFixed(2)}%</td>
+                    <td className="py-1 min-w-[8rem]">
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 bg-gray-100 rounded-full h-2">
+                          <div className={`h-2 rounded-full ${win > 0.9 ? "bg-green-500" : "bg-indigo-400"}`} style={{ width: `${Math.min(100, win * 100)}%` }} />
+                        </div>
+                        <span className={`${win > 0.9 ? "text-green-600 font-medium" : "text-gray-600"}`}>{(win * 100).toFixed(1)}%</span>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+              {pairs.length === 0 && !pairsError && (
+                <tr><td colSpan={7} className="text-gray-400 py-2">No pair data yet — pairs appear once ads published from the Meta ads page bring clicks with the creative id.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   );
 }

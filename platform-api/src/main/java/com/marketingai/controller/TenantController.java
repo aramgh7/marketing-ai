@@ -35,6 +35,27 @@ public class TenantController {
         return ResponseEntity.noContent().build();
     }
 
+    /** Roadmap Phase 11: what the publish flow needs (never the token itself). */
+    @GetMapping("/me/meta-credentials")
+    public ResponseEntity<Map<String, Object>> getMetaCredentials() {
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+                SELECT meta_ad_account_id, meta_app_id, meta_page_id, meta_instagram_actor_id, meta_token_status,
+                       (meta_access_token_enc IS NOT NULL) AS has_token, meta_write_stage
+                FROM tenants WHERE id = ?
+                """, currentTenant());
+        if (rows.isEmpty()) return ResponseEntity.notFound().build();
+        Map<String, Object> r = rows.get(0);
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("meta_ad_account_id", r.get("meta_ad_account_id"));
+        out.put("meta_app_id", r.get("meta_app_id"));
+        out.put("meta_page_id", r.get("meta_page_id"));
+        out.put("meta_instagram_actor_id", r.get("meta_instagram_actor_id"));
+        out.put("meta_token_status", r.get("meta_token_status"));
+        out.put("has_token", r.get("has_token"));
+        out.put("meta_write_stage", r.get("meta_write_stage"));
+        return ResponseEntity.ok(out);
+    }
+
     @GetMapping("/me/settings")
     public ResponseEntity<Map<String, Object>> getSettings() {
         return ResponseEntity.ok(tenantService.getSettings(currentTenant()));

@@ -32,11 +32,13 @@ public class ModerationProbeScheduler {
     @Scheduled(fixedDelay = 30 * 60 * 1000, initialDelay = 2 * 60 * 1000)
     public void poll() {
         List<Map<String, Object>> pending = jdbc.queryForList("""
-                SELECT mr.id, mr.tenant_id, mr.creative_id, a.meta_ad_id, a.meta_ad_set_id, t.meta_access_token_enc
+                SELECT mr.id, mr.tenant_id, mr.creative_id, mr.meta_ad_id AS probe_ad_id, a.meta_ad_id, a.meta_ad_set_id,
+                       t.meta_access_token_enc
                 FROM moderation_results mr
-                JOIN meta_ad_sets a ON a.id = mr.ad_set_id
+                LEFT JOIN meta_ad_sets a ON a.id = mr.ad_set_id
                 JOIN tenants t ON t.id = mr.tenant_id
-                WHERE mr.result = 'PENDING' AND mr.probe_type = 'meta_review' AND a.moderation_probe = TRUE
+                WHERE mr.result = 'PENDING' AND mr.probe_type = 'meta_review'
+                  AND (a.moderation_probe = TRUE OR mr.meta_ad_id IS NOT NULL)
                 ORDER BY mr.checked_at
                 LIMIT 200
                 """);
@@ -55,7 +57,9 @@ public class ModerationProbeScheduler {
     boolean pollOne(Map<String, Object> row) {
         String token = vault.openOrNull((byte[]) row.get("meta_access_token_enc"));
         if (token == null) return false;
-        String objectId = row.get("meta_ad_id") != null ? (String) row.get("meta_ad_id") : (String) row.get("meta_ad_set_id");
+        // Roadmap Phase 11: an ad published from the cabinet carries its own ad id on the probe row.
+        String objectId = row.get("probe_ad_id") != null ? (String) row.get("probe_ad_id")
+                : row.get("meta_ad_id") != null ? (String) row.get("meta_ad_id") : (String) row.get("meta_ad_set_id");
         if (objectId == null) return false;
 
         Map<String, String> status = metaApi.getAdReviewStatus(token, objectId);
@@ -75,10 +79,49 @@ public class ModerationProbeScheduler {
                     checked_at = now(), resolved_at = now()
                 WHERE id = ?
                 """, verdict, code, hasFeedback ? feedback : null, objectId, row.get("id"));
+        // Roadmap Phase 11: propagate the verdict to the ad map and the creative's publish status.
+        UUID tenantId = (UUID) row.get("tenant_id");
+        UUID creativeId = (UUID) row.get("creative_id");
+        if (row.get("probe_ad_id") != null) {
+            String mapStatus = "REJECTED".equals(verdict) ? "REJECTED" : "APPROVED";
+            jdbc.update("UPDATE meta_ad_map SET status = ?, updated_at = now() WHERE tenant_id = ? AND meta_ad_id = ?",
+                    mapStatus, tenantId, objectId);
+            if (creativeId != null) {
+                jdbc.update("UPDATE creatives SET publish_status = ? WHERE id = ? AND tenant_id = ?",
+                        "REJECTED".equals(verdict) ? "REJECTED" : "APPROVED_PAUSED", creativeId, tenantId);
+            }
+        }
         if ("REJECTED".equals(verdict)) {
             alertService.sendAlert("🚫 Moderation probe REJECTED by Meta for creative " + row.get("creative_id")
                     + " (" + code + "). Rework the creative before launching the real batch.");
+            if (creativeId != null) recordBlockedPostmortem(tenantId, creativeId, code, hasFeedback ? feedback : null);
         }
         return true;
+    }
+
+    /**
+     * Roadmap Phase 11 / 8-17: a rejected published ad sends the creative to the graveyard as 'blocked_by_meta'
+     * so BlockedCreativeRecoveryScheduler asks ML for a recovery brief with the blocked phrases as avoid-list.
+     */
+    void recordBlockedPostmortem(UUID tenantId, UUID creativeId, String code, String feedbackJson) {
+        try {
+            Integer existing = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM creative_postmortems WHERE tenant_id = ? AND creative_id = ? AND failure_mode = 'blocked_by_meta'",
+                    Integer.class, tenantId, creativeId);
+            if (existing != null && existing > 0) return;
+            String reason = code == null ? "rejected by Meta" : code;
+            String analysis = "{\"reason\":" + quote(reason) + ",\"meta_feedback\":" + (feedbackJson == null ? "null" : feedbackJson) + "}";
+            jdbc.update("""
+                    INSERT INTO creative_postmortems
+                        (tenant_id, creative_id, failure_mode, cvr, benchmark_cvr, sessions, analysis, postmortem_md)
+                    VALUES (?, ?, 'blocked_by_meta', 0, 0.02, 0, ?::jsonb, ?)
+                    """, tenantId, creativeId, analysis, "Rejected by Meta moderation: " + reason);
+        } catch (Exception e) {
+            log.warn("blocked_by_meta postmortem for creative {} skipped: {}", creativeId, e.getMessage());
+        }
+    }
+
+    private static String quote(String s) {
+        return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
     }
 }

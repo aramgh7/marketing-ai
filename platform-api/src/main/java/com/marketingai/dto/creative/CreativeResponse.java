@@ -30,6 +30,13 @@ public class CreativeResponse {
     String metaAdSetId;
     Instant createdAt;
 
+    /** Roadmap Phase 11 */
+    String publishStatus;
+    String creativeCode;
+    String metaVideoId;
+    String metaCreativeId;
+    Instant publishedAt;
+
     /** Included only on detail endpoint (GET /creatives/{id}) */
     List<CreativeAtomResponse> atoms;
 }

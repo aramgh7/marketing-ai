@@ -10,6 +10,29 @@ const API_BASE =
 
 const ML_SERVICE_URL = process.env.ML_SERVICE_URL ?? "http://localhost:8000";
 
+/** Roadmap Phase 11: our creative ids are UUIDs; anything else in `mai_c` is a Meta ad id ({{ad.id}}). */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Creative identity from the landing URL (`.ai/creative-publishing.md` §3):
+ *   mai_c = {{ad.id}} (Meta) or our creative UUID (manual / other channels), legacy `creative_id`
+ *   mai_p = {{placement}}, mai_s = {{site_source_name}} — context only, never a new arm.
+ */
+function creativeParams(params: URLSearchParams): { creativeId: string | null; context: Record<string, string> } {
+  const raw = (params.get("mai_c") ?? params.get("creative_id") ?? "").trim();
+  const context: Record<string, string> = {};
+  let creativeId: string | null = null;
+  if (raw) {
+    if (UUID_RE.test(raw)) creativeId = raw.toLowerCase();
+    else context.meta_ad_id = raw;
+  }
+  const placement = params.get("mai_p")?.trim();
+  const source = params.get("mai_s")?.trim();
+  if (placement) context.placement = placement;
+  if (source) context.site_source = source;
+  return { creativeId, context };
+}
+
 /** Runner mode or no ML access: decisions go through the platform API with the tenant's runner key. */
 const DECIDE_VIA_PUBLIC = RUNNER || (!process.env.ML_SERVICE_URL && !!RUNNER_KEY);
 
@@ -117,6 +140,10 @@ export async function middleware(request: NextRequest) {
         const ua = request.headers.get("user-agent") ?? "";
         context.device = /mobile/i.test(ua) ? "mobile" : "desktop";
 
+        // Phase 11: which creative brought the visitor (resolved to our creative by ML via meta_ad_map)
+        const creative = creativeParams(url.searchParams);
+        Object.assign(context, creative.context);
+
         // arch v1.1 §5.2 + vision v1.9.9 §12.1a: session_id only after consent.
         // Before consent decision, Thompson runs without a persistent identifier.
         const consentLevel = request.cookies.get("_consent")?.value;
@@ -136,6 +163,7 @@ export async function middleware(request: NextRequest) {
               slug,
               host: tenantHost,
               session_id: hasTracking ? sessionId : null,
+              creative_id: creative.creativeId,
               context,
             }),
           });
@@ -155,6 +183,7 @@ export async function middleware(request: NextRequest) {
               body: JSON.stringify({
                 tenant_id: variant.tenantId,
                 session_id: hasTracking ? sessionId : null,
+                creative_id: creative.creativeId,
                 context_key: "global",
                 context,
               }),
@@ -163,7 +192,7 @@ export async function middleware(request: NextRequest) {
         }
 
         if (decideRes?.ok) {
-          const decision: { variant_id: string; decision_id: string } =
+          const decision: { variant_id: string; decision_id: string; creative_id?: string | null } =
             await decideRes.json();
           response.cookies.set("_variant", decision.variant_id, {
             maxAge: 60 * 60, // 1h — reassign if page is revisited after an hour
@@ -180,6 +209,14 @@ export async function middleware(request: NextRequest) {
             httpOnly: true,
             sameSite: "lax",
           });
+          // Phase 11: the resolved creative travels with the session so every event carries creative_id
+          if (decision.creative_id) {
+            response.cookies.set("_creative", decision.creative_id, {
+              maxAge: 60 * 60,
+              httpOnly: false, // read by the tracker
+              sameSite: "lax",
+            });
+          }
         }
       } catch {
         // Decide failure is non-fatal — SSR page falls back to default variant

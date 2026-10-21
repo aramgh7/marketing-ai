@@ -10,6 +10,8 @@ from app.services.db_client import tenant_pool
 from app.services.ts_sampling_service import select_sampler
 from app.services.cluster_service import personalise_block_order
 from app.services.decide_service import derive_context_key
+from app.services.ad_map_service import classify_creative, resolve_creative_id
+from app.services.pair_service import CONVERSION_REWARD_TYPES, summarise_pairs, win_probabilities
 from app.services.cluster_refinement_service import build_refinement_plan, apply_refinement
 from app.services.thompson_service import (
     apply_churn_penalty,
@@ -107,6 +109,9 @@ class DecideResponse(BaseModel):
     alpha: float
     beta: float
     decision_id: str
+    # roadmap Phase 11-1: the creative the visitor came from (ours, resolved from Meta's ad id via meta_ad_map)
+    creative_id: Optional[str] = None
+    creative_source: str = "none"   # request | meta_ad_map | none
 
 
 class RewardRequest(BaseModel):
@@ -139,6 +144,22 @@ async def decide_landing(req: DecideRequest):
     # Phase 7: prefix context_key with channel so each channel has its own posteriors.
     # "global" becomes "channel:META"; cluster keys become "channel:META:cluster_2".
     channel = req.channel.upper() if req.channel else "META"
+
+    # roadmap Phase 11-1: creative identity in the click. `mai_c={{ad.id}}` arrives as context.meta_ad_id
+    # (or as a non-UUID creative_id); it is resolved to our creative via meta_ad_map. Never fails the decision.
+    creative_id, meta_ad_id, creative_source = classify_creative(req.creative_id, req.context)
+    if creative_id is None and meta_ad_id:
+        creative_id = await resolve_creative_id(req.tenant_id, meta_ad_id)
+        creative_source = "meta_ad_map" if creative_id else "none"
+    creative_ctx: dict = {"creative_source": creative_source}
+    if creative_id:
+        creative_ctx["creative_id"] = creative_id
+    if meta_ad_id:
+        creative_ctx["meta_ad_id"] = meta_ad_id
+    for k in ("placement", "site_source"):
+        if req.context.get(k):
+            creative_ctx[k] = req.context[k]
+
     base_key = _derive_context_key(req.context_key, req.cluster_id)
     effective_key = f"channel:{channel}:{base_key}" if base_key != "global" else f"channel:{channel}"
 
@@ -190,11 +211,11 @@ async def decide_landing(req: DecideRequest):
     else:
         chosen, candidates = sample_arms(arms)
 
-    context_with_key = {**req.context, "context_key": effective_key, "ts_mode": cfg["ts_mode"]}
+    context_with_key = {**req.context, **creative_ctx, "context_key": effective_key, "ts_mode": cfg["ts_mode"]}
     decision_id = await log_decision(
         req.tenant_id,
         req.session_id,
-        req.creative_id,
+        creative_id,
         chosen,
         candidates,
         context_with_key,
@@ -207,7 +228,58 @@ async def decide_landing(req: DecideRequest):
         alpha=chosen["alpha"],
         beta=chosen["beta"],
         decision_id=decision_id,
+        creative_id=creative_id,
+        creative_source=creative_source,
     )
+
+
+@router.get("/pairs")
+async def creative_landing_pairs(
+    tenant_id: str,
+    days: int = Query(default=30, ge=1, le=365),
+    min_decisions: int = Query(default=1, ge=1, le=100_000),
+    x_internal_api_key: str = Header(default=""),
+):
+    """Creative → landing pairs as arms (roadmap Phase 11-5).
+
+    One row per (creative, variant) seen in decision_log over the last `days`; a decision counts as
+    rewarded when thompson_reward_log holds a conversion-type reward for it (FORM_SUBMIT and later).
+    Beta(1,1) prior; win_probability by Monte Carlo over the pairs. Protected by X-Internal-API-Key.
+    """
+    _require_internal_key(x_internal_api_key)
+    pool = await tenant_pool(tenant_id)
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT
+                dl.creative_id::text            AS creative_id,
+                c.title                         AS creative_title,
+                c.creative_code                 AS creative_code,
+                dl.chosen_variant_id::text      AS variant_id,
+                lv.name                         AS variant_name,
+                COUNT(DISTINCT dl.id)           AS decisions,
+                COUNT(DISTINCT rl.decision_id)  AS rewards
+            FROM decision_log dl
+            LEFT JOIN creatives c
+                   ON c.id = dl.creative_id AND c.tenant_id = dl.tenant_id
+            LEFT JOIN landing_variants lv
+                   ON lv.id = dl.chosen_variant_id AND lv.tenant_id = dl.tenant_id
+            LEFT JOIN thompson_reward_log rl
+                   ON rl.decision_id = dl.id
+                  AND rl.tenant_id = dl.tenant_id
+                  AND rl.field_updated = 'alpha'
+                  AND rl.reward_type = ANY($3::text[])
+            WHERE dl.tenant_id = $1::uuid
+              AND dl.decided_at > now() - ($2 * INTERVAL '1 day')
+            GROUP BY dl.creative_id, c.title, c.creative_code, dl.chosen_variant_id, lv.name
+            """,
+            tenant_id,
+            days,
+            list(CONVERSION_REWARD_TYPES),
+        )
+    pairs = summarise_pairs([dict(r) for r in rows], min_decisions=min_decisions)
+    win_probabilities(pairs, draws=200)
+    return {"tenant_id": tenant_id, "days": days, "min_decisions": min_decisions, "pairs": pairs}
 
 
 @router.post("/reward", response_model=RewardResponse)

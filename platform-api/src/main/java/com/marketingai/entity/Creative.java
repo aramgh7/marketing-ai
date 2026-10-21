@@ -63,11 +63,31 @@ public class Creative {
 
     private String metaAdSetId;
 
+    /** Roadmap Phase 11: NOT_IN_META | PENDING_REVIEW | APPROVED_PAUSED | ACTIVE_IN_META | PAUSED_IN_META | REJECTED | UNMANAGED | DRIFT */
+    @Column(nullable = false)
+    private String publishStatus = "NOT_IN_META";
+
+    /** Roadmap Phase 11: short code placed in the Meta ad name (MAI-XXXXXX) so hand-made ads can still be matched. */
+    private String creativeCode;
+
+    private String metaVideoId;
+    private String metaCreativeId;
+    private Instant publishedAt;
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
 
     @PrePersist
     void onCreate() {
+        if (creativeCode == null) creativeCode = newCreativeCode();
         this.createdAt = Instant.now();
+    }
+
+    /** "MAI-" + 6 upper-hex characters; uniqueness per tenant is enforced by uq_creatives_code. */
+    public static String newCreativeCode() {
+        java.security.SecureRandom r = new java.security.SecureRandom();
+        StringBuilder sb = new StringBuilder("MAI-");
+        for (int i = 0; i < 6; i++) sb.append("0123456789ABCDEF".charAt(r.nextInt(16)));
+        return sb.toString();
     }
 }

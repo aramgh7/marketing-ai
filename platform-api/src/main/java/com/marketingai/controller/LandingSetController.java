@@ -17,6 +17,7 @@ import java.util.UUID;
 public class LandingSetController {
 
     private final LandingSetService sets;
+    private final com.marketingai.service.MlServiceClient mlClient;
 
     @PostMapping("/generate-set")
     @ResponseStatus(HttpStatus.CREATED)
@@ -27,6 +28,15 @@ public class LandingSetController {
     @GetMapping("/sets")
     public List<Map<String, Object>> listSets() {
         return sets.listSets();
+    }
+
+    /** Roadmap Phase 11-5: pairs "creative → landing variant" ranked by ML (/decide/pairs). */
+    @GetMapping("/pairs")
+    public Object pairs(@RequestParam(value = "days", required = false, defaultValue = "30") int days) {
+        String raw = com.marketingai.security.TenantContext.get();
+        if (raw == null) throw new org.springframework.web.server.ResponseStatusException(HttpStatus.UNAUTHORIZED, "No tenant context");
+        Object r = mlClient.get("/decide/pairs?tenant_id=" + raw + "&days=" + days, Object.class);
+        return r == null ? Map.of("pairs", List.of()) : r;
     }
 
     @PostMapping("/{id}/reject")

@@ -93,9 +93,12 @@ class EventTracker {
   track(
     eventType: string,
     eventData?: Record<string, unknown>,
-    opts?: { blockEventId?: string; revenue?: number; variantId?: string }
+    opts?: { blockEventId?: string; revenue?: number; variantId?: string; creativeId?: string }
   ): boolean {
     if (!this.isAllowed(eventType)) return false;
+
+    // Roadmap Phase 11: the creative that brought this visitor (set by the edge middleware after /decide)
+    const creativeId = opts?.creativeId ?? readCookie("_creative");
 
     const ev: RawEvent = {
       sessionId: this.sessionId,
@@ -109,6 +112,7 @@ class EventTracker {
       ...(opts?.blockEventId ? { blockEventId: opts.blockEventId } : {}),
       ...(opts?.revenue !== undefined ? { revenue: opts.revenue } : {}),
       ...(opts?.variantId ? { variantId: opts.variantId } : {}),
+      ...(creativeId ? { creativeId } : {}),
     };
 
     this.queue.push(ev);
@@ -212,6 +216,21 @@ class EventTracker {
   private startFlushTimer(): void {
     this.timer = setInterval(() => void this.flush(), BATCH_INTERVAL_MS);
   }
+}
+
+/** Cookie value by name; null on the server or when absent. */
+function readCookie(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  try {
+    const prefix = `${name}=`;
+    for (const part of document.cookie.split(";")) {
+      const c = part.trim();
+      if (c.startsWith(prefix)) return decodeURIComponent(c.slice(prefix.length)) || null;
+    }
+  } catch {
+    // cookie access can throw in sandboxed frames
+  }
+  return null;
 }
 
 function extractUtms(): Record<string, string> {

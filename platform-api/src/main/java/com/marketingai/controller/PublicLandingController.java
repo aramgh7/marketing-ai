@@ -113,6 +113,8 @@ public class PublicLandingController {
         req.put("session_id", body.get("session_id"));
         req.put("context_key", "global");
         req.put("context", body.get("context") instanceof Map<?, ?> m ? m : Map.of());
+        // Roadmap Phase 11-1: the runner forwards the creative id (or the Meta ad id inside context) unchanged.
+        if (body.get("creative_id") != null) req.put("creative_id", String.valueOf(body.get("creative_id")));
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> result = mlClient.post("/decide/landing", req, Map.class);

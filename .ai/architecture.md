@@ -15,6 +15,7 @@
 >
 > v1.5: **sync with the code after the 2026-10-20 conformance review** (`.ai/conformance-review-2026-10-20.md`). §5.1/§5.2 route tables now name the paths that exist (`/decide/landing`, `/capi-events`, `/analytics/creatives`, `/mmf/offers/*`, `/evolve/*`, `POST /explain/{entity_type}`, `/predict/score`, `/simulate`); the `/model/*` family is replaced by the incremental reward path (`/decide/reward`, `RewardSweepScheduler`, lazy decay in `load_arms`). §8: Spring sets the GUC per statement at session level with a reset on connection return (Hikari autocommit); ml-service role becomes `mai_ml` (roadmap 9-4). §9: Quality Score / taxonomy / proxy-calibration jobs run in Spring; jobs still missing are marked with their roadmap 9-x item. §16.3: the seeded CAPI map follows vision §19.4 (roadmap 9-7). Tags: **[v1.5 — changed]** / **[v1.5 — added]**.
 > v1.6: **landing hosting (roadmap Phase 10, `.ai/landing-hosting.md`)**. §4.3 adds `set_id` / `reject_reason` / `style_angle` on `landing_variants`, and the new `tenant_domains` + `runner_keys` tables; §5.1 adds `/landings/generate-set`, `/landings/sets`, `/landings/{id}/reject`, `/domains/*`, `GET /public/domain/{host}`, `POST /public/decide`; §6 the edge middleware is host-aware (platform hosts = admin, any verified tenant host = that tenant's landings only); §11 CORS whitelist is read from `tenant_domains`; new **§17 Landing hosting modes** (platform host, CNAME, client-hosted runner). Tags: **[v1.6 — added]** / **[v1.6 — changed]**.
+> v1.7: **creative publishing (roadmap Phase 11, `.ai/creative-publishing.md`)**. §4.2 `creatives.publish_status` / `creative_code` / Meta ids and the new `meta_ad_map` table; §5.1 `/creatives/{id}/publish-preview|publish|activate|pause`, `/meta/ad-map/*`, `/meta/linkage-health`, `/landings/pairs`; §5.2 `/decide/landing` resolves `meta_ad_id` → `creative_id`, new `GET /decide/pairs`; §6 the click carries Meta url_tags (`mai_c={{ad.id}}`); §9 `MetaAdReconcileScheduler` (hourly) and the extended moderation probe; §11 write class `CREATE_AD_PAUSED`; new **§18 Creative publishing** (single road into Meta). Tags: **[v1.7 — added]** / **[v1.7 — changed]**.
 >
 > **Marking convention for v1.2 edits**: same as v1.1, with the tag **[v1.2 — added]** / **[v1.2 — changed]**. §15 is entirely new, so only its heading carries the tag.
 
@@ -257,6 +258,25 @@ CREATE TABLE creative_atoms (
 );
 CREATE INDEX idx_atoms_creative ON creative_atoms(creative_id);
 CREATE INDEX idx_atoms_type_val ON creative_atoms(tenant_id, atom_type, atom_value);
+```
+
+**[v1.7 — added] Phase 11 columns and table (V136).** `creatives` gains `publish_status` (NOT_IN_META | PENDING_REVIEW | APPROVED_PAUSED | ACTIVE_IN_META | PAUSED_IN_META | REJECTED | UNMANAGED | DRIFT), `creative_code` (`MAI-xxxxxx`, used in Meta ad names so hand-made ads can still be matched), `meta_video_id`, `meta_creative_id`, `published_at`; `tenants` gains `meta_page_id`, `meta_instagram_actor_id`.
+
+```sql
+CREATE TABLE meta_ad_map (                -- one row per Meta ad; identity = our creative
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL REFERENCES tenants(id),
+    meta_ad_id VARCHAR(100) NOT NULL, meta_adset_id VARCHAR(100), meta_campaign_id VARCHAR(100),
+    meta_creative_id VARCHAR(100), meta_video_id VARCHAR(100), meta_image_hash VARCHAR(100),
+    creative_id UUID REFERENCES creatives(id),       -- NULL = unmanaged (created by hand, not yet linked)
+    entry_slug VARCHAR(100), destination_url TEXT, url_tags TEXT, ad_name VARCHAR(255),
+    source VARCHAR(12) NOT NULL DEFAULT 'MANAGED',   -- MANAGED (published by us) | RECONCILED (found by reading) | MANUAL (linked in the cabinet)
+    status VARCHAR(16) NOT NULL DEFAULT 'PAUSED',    -- PAUSED | PENDING_REVIEW | APPROVED | ACTIVE | REJECTED | ARCHIVED | UNMANAGED | DRIFT | UNKNOWN
+    drift JSONB, drift_detected_at TIMESTAMPTZ, last_seen_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, meta_ad_id)
+);
+-- RLS tenant_isolation; mai_app read/write; mai_ml SELECT (resolves meta_ad_id → creative_id inside /decide/landing)
 ```
 
 ### 4.3 Landing Pages
@@ -646,6 +666,17 @@ Full contracts in §15; summary so the surface is visible in one place:
 | GET | `/public/l/{slug}?host=` | Slug scoped to the host's tenant (without `host`: unchanged) |
 | POST | `/public/decide` | Header `X-Runner-Key`; `{slug, host, session_id, context}` → platform calls ML `/decide/landing`; per-key rate limit |
 
+**[v1.7 — added] Phase 11 routes.**
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/creatives/{id}/publish-preview?entry_slug=` | Ad name (`creative_code · title`), destination URL on the tenant's domain, `url_tags = mai_c={{ad.id}}&mai_p={{placement}}&mai_s={{site_source_name}}&utm_…`, readiness list (stage, token, ad account, page id, file, compliance) |
+| POST | `/creatives/{id}/publish` | Text compliance PASS → gate `CREATE_AD_PAUSED` → video/image upload → ad creative (Advantage+ enhancements OPT_OUT) → ad **PAUSED** → `meta_ad_map` MANAGED → `moderation_results` PENDING |
+| POST | `/creatives/{id}/activate` · `/pause` | `RESUME` after the moderation verdict APPROVED (409 otherwise) · protective `PAUSE` |
+| GET/POST | `/meta/ad-map?status=`, `/meta/ad-map/{id}/link`, `/meta/ad-map/{id}/acknowledge-drift` | Every Meta ad of the account with its creative; manual link for unmanaged ads; accept a drift as the new baseline |
+| GET | `/meta/linkage-health` | Red when an ACTIVE ad has no creative or no `mai_c` tag, or a DRIFT row exists; `LAUNCH` writes are denied while red; onboarding checklist item `linkage` |
+| GET | `/landings/pairs?days=` | Proxy of ML `GET /decide/pairs`: creative → landing variant pairs with decisions, rewards, Beta posterior, win probability |
+
 ### 5.2 FastAPI — ML Service (port 8000)
 
 #### Thompson Sampling
@@ -756,6 +787,8 @@ Full contracts in §15; summary so the surface is visible in one place:
 ---
 
 **[v1.6 — changed] Host-aware edge.** The middleware first classifies the request host: a host in `PLATFORM_HOSTS` serves the admin and `/l/*`; any other host is looked up in `tenant_domains` (`GET /public/domain/{host}`, 60 s cache) and serves only that tenant's `/l/*` (`/` → `default_slug`, everything else 404). In `LANDING_RUNNER=1` mode (the same image on the client's server) the arm is requested through `POST /public/decide` with the runner key instead of calling FastAPI directly — the runner holds no internal key, DB or Meta credentials. Preview of DRAFT/REVIEW variants is `/l/preview/{id}` (JWT, tracker off). See §17.
+
+**[v1.7 — changed] The click carries the creative.** Ads published from the cabinet have `url_tags` with Meta macros; the landing URL arrives as `/l/{slug}?mai_c=<ad id>&mai_p=<placement>&mai_s=<source>`. The edge middleware sends a UUID as `creative_id` and anything else as `context.meta_ad_id`; `/decide/landing` resolves the Meta ad id through `meta_ad_map` (60 s cache), logs `creative_id` in `decision_log`, returns it, and the middleware sets a `_creative` cookie that the tracker copies onto every event. A visit without a creative is `creative_source = none` and trains the landing only. See §18.
 
 ## 7. Service Communication
 
@@ -924,6 +957,7 @@ volumes:
 | Consent | Cookiebot integration | Same |
 | **[v1.2 — added]** Token lifecycle (vision §12.7) | Rotate Meta long-lived tokens at day 50 of 60 via token exchange; alert on failure; per-tenant data-encryption key (envelope encryption, master key in env) | Vault transit engine; automatic key rotation |
 | **[v1.2 — added]** Audit log (vision §12.7) | Append-only `meta_api_audit` row for **every** Marketing API / CAPI call: who (user or job), tenant, action, target id, request hash, result; no UPDATE/DELETE grants on the table | Ship to immutable store (S3 Object Lock / BigQuery) |
+| **[v1.7 — added]** Write class `CREATE_AD_PAUSED` | Creating an ad PAUSED is allowed from stage GUARDED_WRITES (spends nothing, activates nothing); activation is a separate `RESUME` after Meta's verdict; `MetaWriteGuardTest` scans `uploadVideo/uploadImage/createAdCreative/createAd/setAdStatus` for a preceding gate call | Same |
 | **[v1.2 — added]** Minimal OAuth scope | Request only `ads_management`, `ads_read`, `business_management`; scope recorded per tenant and shown in admin | Same |
 | **[v1.2 — added]** Right to erasure (vision §22, §23 Phase 0) | `POST /api/v1/privacy/erasure` by `external_id_hash` / `crm_user_id`: delete matching `sessions`, `events`, `decision_log` rows, null PII in `ghl_webhook_log`; schedule arms recalc; log the request | Same, plus automated DSAR intake |
 
@@ -1679,3 +1713,22 @@ Decision record: `.ai/landing-hosting.md`. Meta blocks **domains** (URL blacklis
 | D static export | client's server | client's | none (no Thompson, no personalisation, no RLHA) | would need client JS | not planned |
 
 Verification: TXT `_mai-verify.<host>` = token (all modes), CNAME → `app.landing.cname-target` (mode B). TLS for custom hostnames is an infrastructure choice (Cloudflare for SaaS or Caddy on-demand TLS) and does not change the code path.
+
+---
+
+## 18. Creative Publishing — the only road into Meta (roadmap Phase 11) **[v1.7 — added]**
+
+Decision record: `.ai/creative-publishing.md`. The product's value is the measurable pair *creative → landing → funnel path*; the pair is measurable only when the click identifies the creative. Hence:
+
+```
+cabinet  ──publish──▶  Marketing API: /advideos (chunked) → /adcreatives (url_tags, enhancements OPT_OUT) → /ads (PAUSED)
+   │                        │
+   │                        ▼
+   │                  meta_ad_map (MANAGED)  ◀──hourly──  MetaAdReconcileScheduler reads /act_x/ads
+   │                        │                               • no row → RECONCILED (code match) or UNMANAGED + alert
+   │                        │                               • link/url_tags/video changed → DRIFT + alert
+   ▼                        ▼
+moderation_results PENDING → ModerationProbeScheduler → APPROVED (activate from the cabinet = RESUME) | REJECTED (postmortem blocked_by_meta → recovery brief)
+```
+
+Rules enforced in code: one publishing road (download is allowed but marks the creative NOT_IN_META; tenants may set `creative_download_mode = PREVIEW_ONLY` to refuse final downloads); `CREATE_AD_PAUSED` from GUARDED_WRITES; Advantage+ creative enhancements off for test ads; identity = our creative (one creative in several ads/placements is one arm, placement is context); linkage health gates `LAUNCH` writes and is an onboarding checklist item; organic visits learn the landing only.

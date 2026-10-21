@@ -213,6 +213,11 @@ public class CreativeService {
                 .isAnchor(c.isAnchor())
                 .metaAdSetId(c.getMetaAdSetId())
                 .createdAt(c.getCreatedAt())
+                .publishStatus(c.getPublishStatus())
+                .creativeCode(c.getCreativeCode())
+                .metaVideoId(c.getMetaVideoId())
+                .metaCreativeId(c.getMetaCreativeId())
+                .publishedAt(c.getPublishedAt())
                 .atoms(atoms)
                 .build();
     }

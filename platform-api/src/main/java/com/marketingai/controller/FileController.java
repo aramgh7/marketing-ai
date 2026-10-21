@@ -1,6 +1,8 @@
 package com.marketingai.controller;
 
 import com.marketingai.config.AppProperties;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.http.HttpStatus;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.io.FileSystemResource;
@@ -29,6 +31,7 @@ import java.util.UUID;
 public class FileController {
 
     private final AppProperties props;
+    private final JdbcTemplate jdbc;
 
     @GetMapping("/{tenantId}/{creativeId}/{filename}")
     public ResponseEntity<Resource> serve(
@@ -42,6 +45,13 @@ public class FileController {
         if (!Files.exists(file)) {
             return ResponseEntity.notFound().build();
         }
+        // Roadmap Phase 11 (rule 2): with creative_download_mode = PREVIEW_ONLY the final render is not downloadable —
+        // it reaches Meta only through the cabinet's publish flow. Thumbnails stay available.
+        if (previewOnly(tenantId) && isFinalRender(tenantId, creativeId, filename)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .header("X-Error", "final renders are published from the cabinet; download is preview-only for this tenant")
+                    .build();
+        }
 
         Resource resource = new FileSystemResource(file);
         String contentType = detectContentType(filename);
@@ -50,6 +60,28 @@ public class FileController {
                 .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + filename + "\"")
                 .contentType(MediaType.parseMediaType(contentType))
                 .body(resource);
+    }
+
+    private boolean previewOnly(UUID tenantId) {
+        try {
+            java.util.List<String> rows = jdbc.queryForList(
+                    "SELECT settings->>'creative_download_mode' FROM tenants WHERE id = ?", String.class, tenantId);
+            return !rows.isEmpty() && "PREVIEW_ONLY".equalsIgnoreCase(rows.get(0));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private boolean isFinalRender(UUID tenantId, UUID creativeId, String filename) {
+        try {
+            java.util.List<String> rows = jdbc.queryForList(
+                    "SELECT file_url FROM creatives WHERE id = ? AND tenant_id = ?", String.class, creativeId, tenantId);
+            if (rows.isEmpty() || rows.get(0) == null) return false;
+            String url = rows.get(0);
+            return url.endsWith("/" + sanitize(filename));
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private String sanitize(String filename) {

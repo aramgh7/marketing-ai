@@ -33,6 +33,7 @@ public class MetaWriteGate {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final JdbcTemplate jdbc;
+    private final LinkageHealthService linkageHealth;   // roadmap Phase 11
 
     public record Request(MetaWriteAction action, String targetId, Double budgetDeltaPct, boolean probe) {
         public static Request of(MetaWriteAction action) { return new Request(action, null, null, false); }
@@ -68,6 +69,15 @@ public class MetaWriteGate {
                 learningPhase(tenantId, req.targetId()),
                 req.probe(), overrideId != null);
         MetaWritePolicy.Decision d = MetaWritePolicy.evaluate(ctx, t);
+        // Roadmap Phase 11-4: a test launch is refused while active Meta ads are unmapped / untagged / drifted —
+        // otherwise the pair "creative → landing" cannot be measured for them.
+        if (d.allowed() && req.action() == MetaWriteAction.LAUNCH) {
+            LinkageHealthService.Health h = linkageHealth.check(tenantId);
+            if (!h.healthy()) {
+                d = new MetaWritePolicy.Decision(MetaWritePolicy.Verdict.DENY, "linkage health red: " + h.summary()
+                        + " — fix on the Meta ads page before launching");
+            }
+        }
 
         UUID decisionId = UUID.randomUUID();
         try {

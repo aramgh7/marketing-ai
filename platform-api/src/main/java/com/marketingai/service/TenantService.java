@@ -29,12 +29,26 @@ public class TenantService {
     public void setMetaCredentials(UUID tenantId, MetaCredentialsRequest req) {
         Tenant tenant = tenantRepo.findById(tenantId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tenant not found"));
-        tenant.setMetaAccessTokenEnc(vault.seal(req.getAccessToken()));
-        tenant.setMetaAdAccountId(req.getAdAccountId());
+        // Roadmap Phase 11: partial updates (page / instagram / ad account) without re-sending the token.
+        if (req.hasToken()) {
+            if (req.getAdAccountId() == null || req.getAdAccountId().isBlank()) {
+                throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "adAccountId is required when accessToken is sent");
+            }
+            tenant.setMetaAccessTokenEnc(vault.seal(req.getAccessToken()));
+        }
+        if (req.getAdAccountId() != null && !req.getAdAccountId().isBlank()) tenant.setMetaAdAccountId(req.getAdAccountId().trim());
         if (req.getAppId() != null) {
             tenant.setMetaAppId(req.getAppId());
         }
+        if (req.getPageId() != null) tenant.setMetaPageId(req.getPageId().isBlank() ? null : req.getPageId().trim());
+        if (req.getInstagramActorId() != null) {
+            tenant.setMetaInstagramActorId(req.getInstagramActorId().isBlank() ? null : req.getInstagramActorId().trim());
+        }
         tenantRepo.save(tenant);
+        if (!req.hasToken()) {
+            log.info("Meta credential fields updated for tenant {} (no token change)", tenantId);
+            return;
+        }
         // Token age starts now (TokenRotationScheduler counts from meta_token_created_at)
         jdbc.update("UPDATE tenants SET meta_token_created_at = now(), meta_token_status = 'OK' WHERE id = ?", tenantId);
         // Roadmap 9-2: a token that went INVALID dropped autonomy to OBSERVER — restore the previous level on re-auth
@@ -54,6 +68,8 @@ public class TenantService {
         result.put("report_email",      tenant.getReportEmail());
         result.put("alert_channel",     tenant.getAlertChannel() != null ? tenant.getAlertChannel() : "TELEGRAM");
         result.put("slack_webhook_url", tenant.getSlackWebhookUrl());
+        // Roadmap Phase 11: FINAL (default) lets the final render be downloaded; PREVIEW_ONLY serves 403 for it
+        result.put("creative_download_mode", com.marketingai.util.Jsonb.asMap(tenant.getSettings()).getOrDefault("creative_download_mode", "FINAL"));
         return result;
     }
 
@@ -65,6 +81,14 @@ public class TenantService {
         if (body.containsKey("alert_channel"))     tenant.setAlertChannel(body.get("alert_channel"));
         if (body.containsKey("slack_webhook_url")) tenant.setSlackWebhookUrl(body.get("slack_webhook_url"));
         tenantRepo.save(tenant);
+        if (body.containsKey("creative_download_mode")) {
+            String mode = body.get("creative_download_mode") == null ? "FINAL" : body.get("creative_download_mode").toUpperCase();
+            if (!mode.equals("FINAL") && !mode.equals("PREVIEW_ONLY")) {
+                throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "creative_download_mode must be FINAL or PREVIEW_ONLY");
+            }
+            jdbc.update("UPDATE tenants SET settings = COALESCE(settings, '{}'::jsonb) || jsonb_build_object('creative_download_mode', ?::text) WHERE id = ?",
+                    mode, tenantId);
+        }
         log.info("Settings updated for tenant {}", tenantId);
     }
 

@@ -67,11 +67,13 @@
 |---|---|
 | Стадия клиента `READ_ONLY → GUARDED_WRITES → FULL` | `tenants.meta_write_stage` (V133); меняется через `PUT /tenants/me/meta-write/stage` |
 | Условия перехода (про данные, не про даты) | `MetaWriteStageService`: → GUARDED: токен OK, ≥ 50 отправленных CAPI-событий за ≥ 14 дней, EMQ pre-check PASS, клиент подтвердил Automated Rules + Spending Limit; → FULL: ≥ 14 дней в GUARDED, OPE PASS ≤ 7 дней, автономия ≥ SEMI_AUTOPILOT, ни одного отказа за 7 дней. Понижение — всегда; принудительный переход — только с причиной, в журнал |
-| Классы записей | `MetaWriteAction`: PAUSE (защитная — никогда не блокируется), RESUME, BUDGET_CHANGE, LAUNCH, CREATE_AD_SET, CREATE_CAMPAIGN, AUDIENCE_UPDATE |
+| Классы записей | `MetaWriteAction`: PAUSE (защитная — никогда не блокируется), RESUME, BUDGET_CHANGE, LAUNCH, CREATE_AD_SET, CREATE_CAMPAIGN, AUDIENCE_UPDATE, **CREATE_AD_PAUSED** (v1.2, roadmap 11-3: создание объявления на паузе, разрешено с GUARDED_WRITES; `MetaWriteGuardTest` проверяет и загрузку видео/изображения, создание креатива и объявления, смену статуса объявления) |
 | Таблица решений | `MetaWritePolicy` (чистая логика, `MetaWritePolicyTest`): стадия → автономия для джоб (SEMI_AUTOPILOT / AUTOPILOT) → learning-phase lock → бюджет ≤ 20 % за шаг и ≥ 24 ч между шагами → ≤ 10 записей в час. Превышение порога = RECOMMEND (запись в `autopilot_actions` для человека, HTTP 409), нарушение стадии = DENY (403) |
 | Единая точка | `MetaWriteGate.assertAllowed` перед каждым из 9 вызовов `MetaApiService`, в `MetaApiClient.enqueue` и `AutonomyService.checkAndExecute`; `MetaWriteGuardTest` сканирует исходники — новый путь записи без gate валит сборку |
 | Override | `POST /tenants/me/meta-write/overrides`: одноразовый, ≤ 4 ч, причина ≥ 10 символов, обязательно в журнале; не обходит learning-phase lock для бюджета |
 | Журнал | `meta_write_decisions` — каждое решение (ALLOW / DENY / RECOMMEND) с инициатором (USER / JOB), стадией и причиной; админ-страница `/meta-write` |
+
+| Линковка креативов (v1.2, roadmap 11-4) | `LinkageHealthService`: активное объявление без карты или без `mai_c` в url_tags, либо расхождение (DRIFT) → `LAUNCH` запрещён, пункт `linkage` в онбординг-чеклисте красный; `MetaAdReconcileScheduler` раз в час читает объявления аккаунта |
 
 ## 7. Инфраструктурный чек-лист
 

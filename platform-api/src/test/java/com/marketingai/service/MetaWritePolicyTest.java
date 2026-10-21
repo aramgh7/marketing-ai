@@ -48,6 +48,20 @@ class MetaWritePolicyTest {
         assertThat(MetaWritePolicy.evaluate(ctx(GUARDED_WRITES, "ADVISOR", USER, MetaWriteAction.RESUME), T).verdict()).isEqualTo(ALLOW);
     }
 
+    /** Roadmap Phase 11: publishing a creative as a PAUSED ad is the safest write and needs no probe flag. */
+    @Test
+    void guarded_stage_allows_paused_ad_creation_without_probe_flag() {
+        assertThat(MetaWritePolicy.evaluate(ctx(GUARDED_WRITES, "ADVISOR", USER, MetaWriteAction.CREATE_AD_PAUSED), T).verdict()).isEqualTo(ALLOW);
+        assertThat(MetaWritePolicy.evaluate(ctx(READ_ONLY, "AUTOPILOT", USER, MetaWriteAction.CREATE_AD_PAUSED), T).verdict()).isEqualTo(DENY);
+        assertThat(MetaWritePolicy.evaluate(ctx(FULL, "OBSERVER", USER, MetaWriteAction.CREATE_AD_PAUSED), T).verdict()).isEqualTo(ALLOW);
+        // LAUNCH (real ad sets) still needs the probe flag in GUARDED
+        assertThat(MetaWritePolicy.evaluate(ctx(GUARDED_WRITES, "ADVISOR", USER, MetaWriteAction.LAUNCH), T).verdict()).isEqualTo(DENY);
+        // jobs: SEMI_AUTOPILOT needed, ADVISOR → recommendation
+        assertThat(MetaWritePolicy.evaluate(ctx(GUARDED_WRITES, "ADVISOR", JOB, MetaWriteAction.CREATE_AD_PAUSED), T).verdict()).isEqualTo(RECOMMEND);
+        assertThat(MetaWriteAction.fromLegacyName("CREATE_AD_PAUSED")).isEqualTo(MetaWriteAction.CREATE_AD_PAUSED);
+        assertThat(MetaWriteAction.fromLegacyName("CREATE_AD_SET")).isEqualTo(MetaWriteAction.CREATE_AD_SET);
+    }
+
     @Test
     void full_stage_lets_humans_do_everything_within_thresholds() {
         assertThat(MetaWritePolicy.evaluate(ctx(FULL, "OBSERVER", USER, MetaWriteAction.CREATE_CAMPAIGN), T).verdict()).isEqualTo(ALLOW);
