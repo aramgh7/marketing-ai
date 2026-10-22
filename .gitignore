@@ -62,3 +62,10 @@ logs/
 *.pdf
 *.html
 !.ai/
+
+# audit 2026-10-22 (X-1, X-17): local tool configs with credentials, build artifacts, scratch files
+amazon bedrock settings.txt
+platform-api/bin/
+*.tsbuildinfo
+temp.txt
+.vscode/

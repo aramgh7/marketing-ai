@@ -1,0 +1,12 @@
+#!/bin/sh
+# Secret scan on staged changes (audit 2026-10-22, X-1). Install: git config core.hooksPath scripts/githooks
+# Blocks commits that add high-signal credential patterns. Bypass only with a deliberate --no-verify.
+PATTERNS='AKIA[0-9A-Z]{16}|sk-ant-[a-z0-9]+-[A-Za-z0-9_-]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|-----BEGIN [A-Z ]*PRIVATE KEY-----|(AWS_SECRET_ACCESS_KEY|ANTHROPIC_API_KEY|OPENAI_API_KEY|ENCRYPTION_KEY|JWT_SECRET)["'"'"' ]*[:=]["'"'"' ]*[A-Za-z0-9+/_=-]{16,}'
+hits=$(git diff --cached --no-color -U0 --diff-filter=ACM -- . ':(exclude)*.md' ':(exclude)scripts/githooks/*' | grep -E '^\+' | grep -v '^+++' | grep -E -n "$PATTERNS" | grep -v -E 'example|placeholder|your-|changeme|<' | head -5)
+if [ -n "$hits" ]; then
+  echo "pre-commit: possible secret in staged changes — refusing to commit:" >&2
+  echo "$hits" | sed -E 's/(AKIA[0-9A-Z]{4}|sk-[a-z]+-[A-Za-z0-9]{4}|[:=]["'"'"' ]*[A-Za-z0-9+/_=-]{4})[A-Za-z0-9+/_=-]+/\1…/g' >&2
+  echo "If this is a false positive, commit with --no-verify and say why in the message." >&2
+  exit 1
+fi
+exit 0
