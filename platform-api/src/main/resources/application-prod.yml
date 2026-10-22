@@ -1,0 +1,61 @@
+# Production profile (audit 2026-10-22, X-8). Activated by SPRING_PROFILES_ACTIVE=prod (docker-compose.yml default).
+# Every credential comes from the environment — no defaults here; a missing variable fails startup.
+spring:
+  datasource:
+    # stringtype=unspecified: String parameters are coerced to JSONB by PostgreSQL
+    url: jdbc:postgresql://${DB_HOST}:${DB_PORT:5432}/${DB_NAME:marketingai}?stringtype=unspecified
+    # Non-owner application role: RLS policies are FORCEd for it (V116). Flyway below uses the schema owner.
+    username: ${DB_APP_USER:mai_app}
+    password: ${DB_APP_PASS}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      minimum-idle: 2
+      connection-timeout: 10000
+      validation-timeout: 5000
+      max-lifetime: 1800000
+  jpa:
+    hibernate:
+      ddl-auto: none   # Flyway owns the schema
+    open-in-view: false
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD}
+      timeout: 2s
+  flyway:
+    url: jdbc:postgresql://${DB_HOST}:${DB_PORT:5432}/${DB_NAME:marketingai}
+    user: ${DB_USER:mai}
+    password: ${DB_PASS}
+    placeholders:
+      app_role_password: ${DB_APP_PASS}   # V116: ALTER ROLE mai_app LOGIN PASSWORD
+      ml_role_password: ${DB_ML_PASS}     # V127: ml-service role mai_ml
+
+server:
+  # Behind Cloudflare Tunnel / reverse proxy: honour X-Forwarded-* for scheme/host in redirects and links.
+  forward-headers-strategy: framework
+  shutdown: graceful
+  error:
+    include-stacktrace: never
+    include-message: never
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when_authorized
+      probes:
+        enabled: true
+
+logging:
+  level:
+    root: INFO
+    com.marketingai: INFO
+    org.springframework.security: WARN
+    org.springframework.web: WARN
+    org.hibernate: WARN
+    org.flywaydb: INFO

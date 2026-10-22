@@ -4,6 +4,16 @@
 Audit 2026-10-17 §1.4: several Java call sites targeted routes that were never defined
 (/thompson/reward, /form/calibrate-value, ...). Failures were caught and logged as warn,
 so the UI looked healthy. Run from repo root:  python scripts/check-ml-routes.py
+
+Audit 2026-10-22 X-16: call patterns now cover every form used in platform-api —
+  appProperties.getMlServiceUrl() + "/path"      mlUrl + "/path"
+  mlClient.post("/path", ...) / mlClient.get("/path?...")      (MlServiceClient)
+  mlPost("/path") / mlGet("/path/" + id)                       (VideoController)
+  callFastApi("/path") / callFastApiGet("/path/" + id)         (AiVideo/GeoLift controllers)
+  callMl*("/path")
+and the reverse check lists ML routes that no Java code calls (WARN, never a failure —
+some are called by the frontend/runner or are internal to the ML service).
+Exit code 1 only for Java call paths that do not exist in the ML service.
 """
 import glob
 import io
@@ -14,6 +24,16 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ML = os.path.join(ROOT, "ml-service")
 JAVA = os.path.join(ROOT, "platform-api", "src", "main", "java")
+
+# ML routes that are legitimately not called from Java (infrastructure / called by other clients)
+REVERSE_IGNORE = {"/health"}
+
+CALL_PATTERNS = [
+    # base-url concatenation: appProperties.getMlServiceUrl() + "/path", mlUrl + "/path", url + "/path"
+    re.compile(r'(?:getMlServiceUrl\(\)|\bmlUrl|\bmlBase(?:Url)?|\bmlServiceUrl)\s*\+\s*"(/[^"]*)"'),
+    # helper / client methods with a literal first argument
+    re.compile(r'\b(?:callMl\w*|callFastApi\w*|mlPost|mlGet|mlClient\.(?:post|get)|mlServiceClient\.(?:post|get))\(\s*"(/[^"]*)"'),
+]
 
 
 def ml_routes() -> set[str]:
@@ -35,12 +55,12 @@ def java_calls() -> set[tuple[str, str]]:
     calls = set()
     for f in glob.glob(os.path.join(JAVA, "**", "*.java"), recursive=True):
         s = io.open(f, encoding="utf-8").read()
-        for m in re.finditer(r'getMlServiceUrl\(\)\s*\+\s*"(/[A-Za-z0-9_\-/{}.]+)', s):
-            calls.add((m.group(1), os.path.basename(f)))
-        for m in re.finditer(r'callMl\w*\(\s*"(/[^"]+)"', s):
-            calls.add((m.group(1), os.path.basename(f)))
+        name = os.path.basename(f)
+        for pat in CALL_PATTERNS:
+            for m in pat.finditer(s):
+                calls.add((m.group(1).split("?", 1)[0], name))   # drop query string
         for m in re.finditer(r'"(http://ml-service:\d+/[^"]*)"', s):
-            calls.add((m.group(1), os.path.basename(f)))  # hardcoded host: always reported
+            calls.add((m.group(1), name))  # hardcoded host: always reported
     return calls
 
 
@@ -50,14 +70,32 @@ def norm(p: str) -> str:
 
 def main() -> int:
     routes = {norm(r) for r in ml_routes()}
-    def known(p: str) -> bool:
-        # "…/benchmark/" + tenantId  -> matches "/benchmark/{tenant_id}"
-        return norm(p) in routes or (p.endswith("/") and norm(p) + "/{x}" in routes)
+    calls = java_calls()
 
-    missing = sorted((p, f) for p, f in java_calls() if not known(p))
-    print(f"ML routes: {len(routes)}; missing Java call paths: {len(missing)}")
+    def segs_match(c: list[str], r: list[str]) -> bool:
+        return len(c) == len(r) and all(rs == "{x}" or rs == cs for cs, rs in zip(c, r))
+
+    def matches(call: str, route: str) -> bool:
+        # segment-wise: "/explain/campaign" matches "/explain/{x}"; a call ending in "/" is either the route
+        # itself ("/simulate/" -> POST /simulate/) or a prefix for a dynamic id ("/benchmark/" + id -> "/benchmark/{x}")
+        c, r = norm(call).split("/"), route.split("/")
+        return segs_match(c, r) or (call.endswith("/") and segs_match(c + ["{x}"], r))
+
+    def known(p: str) -> bool:
+        return any(matches(p, r) for r in routes)
+
+    missing = sorted((p, f) for p, f in calls if not known(p))
+    print(f"ML routes: {len(routes)}; Java call sites: {len(calls)}; missing Java call paths: {len(missing)}")
     for p, f in missing:
         print(f"  MISSING {p}  <- {f}")
+
+    # reverse check: ML routes nobody in platform-api calls (WARN only)
+    uncalled = sorted(r for r in routes
+                      if r not in REVERSE_IGNORE and not any(matches(p, r) for p, _ in calls))
+    print(f"WARN: {len(uncalled)} of {len(routes)} ML routes have no Java caller "
+          f"(frontend/runner-called or dormant - see audit 2026-10-22 section 8.3):")
+    for r in uncalled:
+        print(f"  UNCALLED {r}")
     return 1 if missing else 0
 
 

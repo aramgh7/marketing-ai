@@ -130,7 +130,7 @@ def start_container(port: int) -> str:
         time.sleep(2)
     mig = MIG.replace("\\", "/")
     env = dict(os.environ, MSYS_NO_PATHCONV="1")
-    r = subprocess.run(["docker", "run", "--rm", "-v", f"{mig}:/flyway/sql", "flyway/flyway:10",
+    r = subprocess.run(["docker", "run", "--rm", "--add-host=host.docker.internal:host-gateway", "-v", f"{mig}:/flyway/sql", "flyway/flyway:10",
                         f"-url=jdbc:postgresql://host.docker.internal:{port}/marketingai", "-user=mai", "-password=mai_local",
                         "-placeholders.app_role_password=mai_app_local", "-placeholders.ml_role_password=mai_ml_local", "migrate"], capture_output=True, env=env, text=True)
     if "Successfully applied" not in r.stdout and "up to date" not in r.stdout:

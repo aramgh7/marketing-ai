@@ -1,0 +1,13 @@
+# audit 2026-10-22 (X-10): small build context, never ship secrets or local artifacts
+build/
+bin/
+.gradle/
+out/
+.idea/
+*.iml
+*.md
+.env
+.env.*
+!.env.example
+logs/
+*.log

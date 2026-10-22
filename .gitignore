@@ -69,3 +69,8 @@ platform-api/bin/
 *.tsbuildinfo
 temp.txt
 .vscode/
+
+# audit 2026-10-22 (X-3): local database dumps (scripts/backup-db.sh); offsite copies go to R2
+backups/*
+!backups/.gitkeep
+архив/

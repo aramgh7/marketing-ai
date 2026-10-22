@@ -1,123 +1,306 @@
+# Marketing AI Platform — production-shaped compose for the pilot server (audit 2026-10-22, X-2/X-3/X-11/X-12/X-25).
+#
+#   cp .env.example .env            # fill every ${VAR:?required} (see README "Запуск с нуля")
+#   docker compose up -d --build
+#
+# Network exposure: Postgres and Redis publish NO ports (reachable only on the compose network); platform-api,
+# ml-service and frontend bind to 127.0.0.1 — Cloudflare Tunnel on the host forwards to localhost:3000 / :8080.
+# For local development add the override:  docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+# Memory limits are sized for the 64 GB pilot server (JVM 6g, ML 8g, Postgres 8g, Redis 1g, frontend 1g).
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:0.8.0-pg16
     container_name: mai-postgres
-    ports:
-      - "5432:5432"
+    restart: unless-stopped
+    logging: *default-logging
+    # no `ports:` — the database is reachable only from the compose network (X-2)
+    shm_size: 1g
+    command:
+      - postgres
+      - -c
+      - shared_buffers=2GB
+      - -c
+      - effective_cache_size=6GB
+      - -c
+      - maintenance_work_mem=512MB
+      - -c
+      - work_mem=16MB
+      - -c
+      - max_connections=200
     environment:
-      POSTGRES_DB: marketingai
-      POSTGRES_USER: mai
-      POSTGRES_PASSWORD: mai_local
+      POSTGRES_DB: ${DB_NAME:-marketingai}
+      POSTGRES_USER: ${DB_USER:-mai}                         # schema owner, used by Flyway and backups
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mai -d marketingai"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-mai} -d ${DB_NAME:-marketingai}"]
+      interval: 10s
       timeout: 5s
       retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 8g
 
   redis:
-    image: redis:7-alpine
+    # 7.2 is the last BSD-licensed line (7.4+ is RSALv2/SSPL) — X-25; keep on 7.2.x or move to valkey.
+    image: redis:7.2-alpine
     container_name: mai-redis
-    ports:
-      - "6379:6379"
+    restart: unless-stopped
+    logging: *default-logging
+    # no `ports:` (X-2); password required for every client
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:?required}
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 768mb
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?required}             # lets the healthcheck's redis-cli authenticate
+    volumes:
+      - redisdata:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 10s
       timeout: 3s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1g
 
   platform-api:
     build:
       context: ./platform-api
       dockerfile: Dockerfile
     container_name: mai-platform-api
+    restart: unless-stopped
+    logging: *default-logging
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
-      SPRING_PROFILES_ACTIVE: local
+      # `prod` = application-prod.yml (INFO logs, forward-headers, no defaults). Override with SPRING_PROFILES_ACTIVE=local.
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70 -XX:+ExitOnOutOfMemoryError}
+      LOG_PATH: /app/logs
+      # database: Flyway runs as the owner (DB_USER/DB_PASS), the application as the RLS-enforced role (DB_APP_*)
       DB_HOST: postgres
       DB_PORT: 5432
-      DB_NAME: marketingai
-      DB_USER: mai                      # Flyway (schema owner)
-      DB_PASS: mai_local
-      DB_APP_USER: mai_app              # application role — RLS enforced
-      DB_APP_PASS: ${DB_APP_PASS:-mai_app_local}
-      DB_ML_PASS: ${DB_ML_PASS:-mai_ml_local}
+      DB_NAME: ${DB_NAME:-marketingai}
+      DB_USER: ${DB_USER:-mai}
+      DB_PASS: ${POSTGRES_PASSWORD:?required}
+      DB_APP_USER: mai_app
+      DB_APP_PASS: ${DB_APP_PASS:?required}                   # V116 placeholder app_role_password
+      DB_ML_PASS: ${DB_ML_PASS:?required}                     # V127 placeholder ml_role_password (role mai_ml)
+      # redis
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?required}  # relaxed binding -> spring.data.redis.password
+      # internal services
       ML_SERVICE_URL: http://ml-service:8000
-      JWT_SECRET: local-dev-secret-min-32-chars-long!!
-      JWT_EXPIRY_MS: 86400000
-      GHL_WEBHOOK_SECRET: ${GHL_WEBHOOK_SECRET:-local-ghl-secret}
-      DB_APP_ROLE: mai_app
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:?required}
+      # auth / crypto
+      JWT_SECRET: ${JWT_SECRET:?required}
+      JWT_EXPIRY_MS: ${JWT_EXPIRY_MS:-86400000}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?required}             # TokenVault AES key — without it Meta/GHL tokens are stored in clear (X-4)
+      GHL_WEBHOOK_SECRET: ${GHL_WEBHOOK_SECRET:?required}
+      # public URLs / hosting
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?required}
+      PLATFORM_HOSTS: ${PLATFORM_HOSTS:?required}
+      LANDING_CNAME_TARGET: ${LANDING_CNAME_TARGET:?required}
+      # Meta
+      META_APP_ID: ${META_APP_ID:-}
+      META_APP_SECRET: ${META_APP_SECRET:-}
+      # alerts
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      ALERT_CHANNEL: ${ALERT_CHANNEL:-BOTH}
+      # storage (local -> /app/files volume; r2 -> Cloudflare R2)
+      STORAGE_TYPE: ${STORAGE_TYPE:-local}
+      STORAGE_LOCAL_PATH: /app/files
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+      R2_BUCKET: ${R2_BUCKET:-marketing-ai-assets}
+      R2_PUBLIC_URL: ${R2_PUBLIC_URL:-}
+      # e-mail (weekly report)
+      MAIL_HOST: ${MAIL_HOST:-}
+      MAIL_PORT: ${MAIL_PORT:-587}
+      MAIL_USERNAME: ${MAIL_USERNAME:-}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+      REPORT_EMAIL_TO: ${REPORT_EMAIL_TO:-}
+      REPORT_EMAIL_FROM: ${REPORT_EMAIL_FROM:-noreply@marketing-ai.local}
+      REPORT_ENABLED: ${REPORT_ENABLED:-true}
+      # reCAPTCHA (public forms)
+      RECAPTCHA_SECRET_KEY: ${RECAPTCHA_SECRET_KEY:-}
+    volumes:
+      - api-logs:/app/logs
+      - api-files:/app/files
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/v1/actuator/health | grep -q '\"UP\"' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 6g
 
   ml-service:
     build:
       context: ./ml-service
       dockerfile: Dockerfile
     container_name: mai-ml-service
+    restart: unless-stopped
+    logging: *default-logging
     ports:
-      - "127.0.0.1:8000:8000"   # internal service: loopback only (audit §3.4 — was published on all interfaces)
+      - "127.0.0.1:8000:8000"   # internal service: loopback only
     environment:
-      # Roadmap 9-4: non-owner RLS role (V127); the password is the Flyway placeholder ml_role_password
-      DATABASE_URL: postgresql://mai_ml:${DB_ML_PASS:-mai_ml_local}@postgres:5432/marketingai
-      REDIS_URL: redis://redis:6379/0
+      # non-owner RLS role mai_ml (V127); the password is the Flyway placeholder ml_role_password (DB_ML_PASS)
+      DATABASE_URL: postgresql://mai_ml:${DB_ML_PASS:?required}@postgres:5432/${DB_NAME:-marketingai}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?required}@redis:6379/0
+      PLATFORM_API_URL: http://platform-api:8080
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:?required}
+      # LLM / media providers
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      PLATFORM_API_URL: http://platform-api:8080
-      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-local-internal-key}
+      LLM_MODEL_FAST: ${LLM_MODEL_FAST:-claude-haiku-5-5}
+      LLM_MODEL_DEFAULT: ${LLM_MODEL_DEFAULT:-claude-sonnet-5-5}
+      LLM_MODEL_VISION: ${LLM_MODEL_VISION:-claude-opus-5-5}
+      WHISPER_MODEL: ${WHISPER_MODEL:-whisper-1}
+      TTS_PROVIDER: ${TTS_PROVIDER:-openai}
+      TTS_VOICE: ${TTS_VOICE:-alloy}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      HEYGEN_API_KEY: ${HEYGEN_API_KEY:-}
+      SYNTHESIA_API_KEY: ${SYNTHESIA_API_KEY:-}
+      RUNWAY_API_KEY: ${RUNWAY_API_KEY:-}
+      # storage for renders (same R2 bucket as platform-api)
+      VIDEO_OUTPUT_DIR: /tmp/marketing-ai/renders
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+      R2_BUCKET: ${R2_BUCKET:-marketing-ai-assets}
+      R2_PUBLIC_URL: ${R2_PUBLIC_URL:-}
       # vision §16.1: false for B2B clients (GHL sends call/meeting rewards via webhook)
       REWARD_ON_FORM_SUBMIT: ${REWARD_ON_FORM_SUBMIT:-true}
+    volumes:
+      - ml-renders:/tmp/marketing-ai/renders
+    healthcheck:
+      # python:3.12-slim has neither curl nor wget
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 8g
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # NEXT_PUBLIC_* are inlined at build time — rebuild after changing them
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?required}
+        NEXT_PUBLIC_COOKIEBOT_DOMAIN_ID: ${NEXT_PUBLIC_COOKIEBOT_DOMAIN_ID:-}
+        NEXT_PUBLIC_RECAPTCHA_SITE_KEY: ${NEXT_PUBLIC_RECAPTCHA_SITE_KEY:-}
     container_name: mai-frontend
+    restart: unless-stopped
+    logging: *default-logging
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8080/api/v1
-      # Server-side (SSR/middleware) calls use the internal Docker network URL
-      API_INTERNAL_URL: http://platform-api:8080/api/v1
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?required}        # browser -> API, e.g. https://app.example.com/api/v1
+      API_INTERNAL_URL: http://platform-api:8080/api/v1             # SSR / middleware -> API over the compose network
       ML_SERVICE_URL: http://ml-service:8000
-      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-local-internal-key}
-      NODE_ENV: development
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:?required}
+      PLATFORM_HOSTS: ${PLATFORM_HOSTS:?required}                   # host names that are the platform (not a landing)
+      TRUST_PROXY: ${TRUST_PROXY:-1}                                # "1" behind Cloudflare Tunnel / reverse proxy only (F-11)
+      NEXT_PUBLIC_COOKIEBOT_DOMAIN_ID: ${NEXT_PUBLIC_COOKIEBOT_DOMAIN_ID:-}
+      NEXT_PUBLIC_RECAPTCHA_SITE_KEY: ${NEXT_PUBLIC_RECAPTCHA_SITE_KEY:-}
+    healthcheck:
+      # `/` may answer 200 or redirect to /login (3xx) — both mean the server is up
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/', r => process.exit(r.statusCode < 400 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
     depends_on:
-      - platform-api
-      - ml-service
+      platform-api:
+        condition: service_healthy
+      ml-service:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 1g
 
-  mlflow:
-    image: ghcr.io/mlflow/mlflow:v2.15.0
-    container_name: mai-mlflow
-    ports:
-      - "5001:5000"
+  db-backup:
+    # Daily pg_dump to ./backups (14 local copies) + offsite copy to R2 (30 days) — scripts/backup-db.sh (X-3).
+    # Monthly restore drill: scripts/restore-db.sh backups/<latest>.dump
+    build:
+      context: ./docker/db-backup
+    container_name: mai-db-backup
+    restart: unless-stopped
+    logging: *default-logging
     environment:
-      MLFLOW_BACKEND_STORE_URI: postgresql://mai:mai_local@postgres:5432/marketingai
-      MLFLOW_DEFAULT_ARTIFACT_ROOT: /mlflow/artifacts
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: ${DB_USER:-mai}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?required}
+      PGDATABASE: ${DB_NAME:-marketingai}
+      BACKUP_DIR: /backups
+      BACKUP_KEEP: ${BACKUP_KEEP:-14}
+      BACKUP_INTERVAL_SEC: ${BACKUP_INTERVAL_SEC:-86400}
+      BACKUP_REMOTE_RETENTION_DAYS: ${BACKUP_REMOTE_RETENTION_DAYS:-30}
+      # offsite: either a ready rclone remote (RCLONE_REMOTE + rclone env/config) or R2 bucket + keys
+      RCLONE_REMOTE: ${BACKUP_RCLONE_REMOTE:-}
+      BACKUP_R2_BUCKET: ${BACKUP_R2_BUCKET:-}
+      BACKUP_R2_ACCESS_KEY_ID: ${BACKUP_R2_ACCESS_KEY_ID:-}
+      BACKUP_R2_SECRET_ACCESS_KEY: ${BACKUP_R2_SECRET_ACCESS_KEY:-}
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
     volumes:
-      - mlflow_artifacts:/mlflow/artifacts
+      - ./backups:/backups
+      - ./scripts:/scripts:ro
     depends_on:
       postgres:
         condition: service_healthy
-    command: >
-      mlflow server
-      --backend-store-uri postgresql://mai:mai_local@postgres:5432/marketingai
-      --default-artifact-root /mlflow/artifacts
-      --host 0.0.0.0
-      --port 5000
+    deploy:
+      resources:
+        limits:
+          memory: 512m
 
 volumes:
   pgdata:
-  mlflow_artifacts:
+  redisdata:
+  api-logs:
+  api-files:
+  ml-renders:

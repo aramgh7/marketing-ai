@@ -24,7 +24,7 @@ docker run -d --name "$NAME" -e POSTGRES_USER=mai -e POSTGRES_PASSWORD=mai_local
 for _ in $(seq 1 30); do docker exec "$NAME" pg_isready -U mai -d marketingai >/dev/null 2>&1 && break; sleep 2; done
 
 case "$(uname -s)" in MINGW*|MSYS*) MIG="$(cygpath -m "$MIG")"; export MSYS_NO_PATHCONV=1;; esac
-docker run --rm -v "$MIG:/flyway/sql" flyway/flyway:10 \
+docker run --rm --add-host=host.docker.internal:host-gateway -v "$MIG:/flyway/sql" flyway/flyway:10 \
   -url="jdbc:postgresql://host.docker.internal:$PORT/marketingai" -user=mai -password=mai_local \
   -placeholders.app_role_password="$APP_PASS" -placeholders.ml_role_password="$ML_PASS" migrate | grep -E "Successfully|ERROR" || true
 

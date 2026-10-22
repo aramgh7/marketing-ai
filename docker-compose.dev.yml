@@ -1,0 +1,28 @@
+# Local-development override (audit 2026-10-22, X-2). Publishes Postgres / Redis on loopback so IDE, psql and
+# `./gradlew bootRun` can reach them, and runs platform-api on the `local` profile.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres redis   # infra only
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build             # everything
+#
+# The verification scripts (scripts/check-sql.py :5441, verify-rls.sh :5440, verify-migrations.sh :5439) start
+# their own throwaway containers and do not depend on this file.
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"
+
+  platform-api:
+    environment:
+      SPRING_PROFILES_ACTIVE: local
+
+  frontend:
+    environment:
+      TRUST_PROXY: "0"
+
+  db-backup:
+    environment:
+      BACKUP_INITIAL_DELAY_SEC: 60

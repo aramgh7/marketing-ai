@@ -1,0 +1,11 @@
+# audit 2026-10-22 (X-10)
+node_modules/
+.next/
+out/
+*.md
+.env
+.env.*
+!.env.local.example
+!.env.runner.example
+*.tsbuildinfo
+npm-debug.log*
