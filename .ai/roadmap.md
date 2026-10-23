@@ -1396,6 +1396,112 @@
 
 ---
 
+## Phase 12 — Statistical & Mathematical Correctness (ML math audit 2026-10-23) **[v1.6 — added]**
+
+> Goal: fix all 14 confirmed mathematical/statistical flaws found by external review (2026-10-23).
+> Source: `ml-service` code audit — experiment_service, thompson_service, cluster_service,
+> propensity_service, hierarchy_prior_service, lead_value_service, geo_lift_service,
+> diagnostics_service, budget_curve_service, noshow_service + GateEvaluationService.java.
+> Verification baseline: ML 1097, Java 295, tsc clean.
+
+### 12-1. P0 — Replace joblib pickle deserialization with safe format ✅
+
+- [ ] `propensity_service.py:178` — `joblib.load(io.BytesIO(model_bytes))` from DB = arbitrary code execution if DB is compromised
+- [ ] Replace with ONNX export (`skl2onnx`) + `onnxruntime` for inference, or add strict SHA-256 hash validation before load
+- [ ] Update `propensity_service.py` store/load path; add migration if model_bytes column needs schema change
+
+### 12-2. P1 — Fix ESS formula for informed priors ✅
+
+- [ ] `experiment_service.py:17` — `sum(α+β−2)` correct only for Beta(1,1)
+- [ ] Replace with `sum(α+β) − 2 × n_arms × α₀` where `α₀, β₀` are the prior params, or use the variance-based ESS: `ESS_i = (α_i+β_i−2) / (α_i+β_i)² × (α_i+β_i+1)` (Wilson ESS for Beta)
+- [ ] Update `followup_service.py` same formula if present
+
+### 12-3. P1 — Fix Student-T / Normal-Normal distribution family mismatch ✅
+
+- [ ] `hierarchy_prior_service.py:64` — niche-level StudentT(ν=4) prior + client-level Normal-Normal conjugate update = incompatible families
+- [ ] Either: (a) switch both levels to Normal (Gaussian) family with inflated σ for robustness, or (b) use moment-matching: compute mean/variance of StudentT draw, pass as Normal hyperprior to conjugate update, document the approximation explicitly
+- [ ] Add comment `# Approximation: StudentT moments matched to Normal for conjugate update (Phase 12-3)`
+
+### 12-4. P1 — PLV slope auto-recalibration when OLS clamp exceeded ✅
+
+- [ ] `lead_value_service.py:96` — when `slope ∉ [0.8, 1.2]`, function returns `calibrated: False` but base coefficients `SEED_P_VERIFIED_GIVEN_SHOW` / `SEED_P_INVEST_GIVEN_VERIFIED` stay unchanged indefinitely
+- [ ] Add: if `slope > 1.2` → scale up `SEED_P_INVEST_GIVEN_VERIFIED` by `min(slope, 1.5)` and log WARN; if `slope < 0.8` → scale down and log WARN; alert via AlertService after 3 consecutive out-of-range calibrations
+
+### 12-5. P1 — Fix StandardScaler / abs(centroid) mismatch in cluster assignment ✅
+
+- [ ] `cluster_service.py:223` — `fit_clusters` scales via `StandardScaler` then `inverse_transform` centroids back to raw space; `assign_cluster` divides distance by `np.abs(centroid_vec)` = different normalisation, different space
+- [ ] Fix: persist the fitted `StandardScaler` alongside centroids; in `assign_cluster` apply `scaler.transform([session_vec])` before computing L2 distance to scaled centroids
+
+### 12-6. P2 — Increase MC draws for P(best): 5 000 → 10 000 ✅
+
+- [ ] `experiment_service.py:22` — `n_samples=5000`, SE ≈ 0.7% at P=0.95 (borderline)
+- [ ] Change default to `n_samples=10_000`; update `followup_service.py` same constant
+
+### 12-7. P2 — Increase propensity OPE draws: 200 → 2 000 ✅
+
+- [ ] `thompson_service.py:44` — `N_PROPENSITY = 200` insufficient for stable IS-weighted OPE
+- [ ] Change to `N_PROPENSITY = 2_000`; verify latency impact in tests
+
+### 12-8. P2 — Increase Shapley coalition samples: 200 → 1 000 ✅
+
+- [ ] `attribution_service.py:146` — `n_samples = 200` → ±5% error for 6+ channels
+- [ ] Change to `n_samples = 1_000`; add docstring with SE formula: `SE ≈ sqrt(p(1-p)/n)`
+
+### 12-9. P2 — Add Hill-curve saturation to budget MC sampling ✅
+
+- [ ] `budget_curve_service.py:28` — `sessions = budget * sessions_per_dollar` is linear, ignores diminishing returns
+- [ ] Replace with Hill model: `sessions = sessions_max * budget^k / (EC50^k + budget^k)` where `k` and `EC50` are estimated from historical CPM curve or seeded from industry prior
+- [ ] Fallback: if insufficient history, use linear with explicit saturation warning in response
+
+### 12-10. P2 — Fix Random seed in GateEvaluationService ✅
+
+- [ ] `GateEvaluationService.java:310` — `new Random()` per call, non-reproducible MC at P≈0.10
+- [ ] Replace with class-level `private static final SplittableRandom RNG = new SplittableRandom(42L)` or thread-local; use `RNG.nextDouble()` in `probBetter()`
+
+### 12-11. P2 — Separate CTR/CVR in Benjamini-Hochberg correction ✅
+
+- [ ] `diagnostics_service.py` — CTR and CVR computed on same sessions, potentially anti-correlated (clickbait); BH requires PRDS; anti-correlation violates it
+- [ ] Fix: apply BH separately to CTR-family tests and CVR-family tests; add cross-family Bonferroni only if joint alert needed; document assumption in code
+
+### 12-12. P2 — Block bootstrap for temporal autocorrelation in Geo Lift ✅
+
+- [ ] `geo_lift_service.py:94` — IID `_RNG.choice(time_points, replace=True)` destroys autocorrelation of ad traffic (day-of-week, seasonal patterns) → CI underestimated
+- [ ] Replace with block bootstrap: sample contiguous blocks of length `block_size = max(7, int(sqrt(n)))` days; preserve within-block temporal structure
+
+### 12-13. P3 — Document expert constants in noshow model ✅
+
+- [ ] `noshow_service.py:10-11` — `TZ_UNKNOWN_PENALTY = 0.10`, `INTERNATIONAL_PENALTY = 0.08` are seed constants without empirical backing
+- [ ] Add docstring: `# Seed constants (no empirical basis yet). Replace with fitted logistic regression coefficients once ≥200 labelled leads available.`
+
+### 12-14. P3 — Document slot-independence assumption ✅
+
+- [ ] `noshow_service.py:101` — `p_no_one *= p` assumes independent no-shows; ignores paired/group bookings
+- [ ] Add comment: `# Independence assumption: valid for solo bookings; underestimates P(no_one) for group/paired slots.`
+
+---
+
+## Phase 13 — Statistical & Algorithmic Correctness II (ML audit 2026-10-23 wave 2) **[v1.7 — added]** — COMPLETE (code, 2026-10-23)
+
+> Goal: fix 12 additional mathematical/algorithmic/safety flaws identified by colleague review.
+> Commit: `be0e9e6`. Tests: ML 1097, Java BUILD SUCCESSFUL.
+
+- [x] **13-1** `segment_re_service.py`: TAU_SQUARED 4.0→0.25 — prior precision=4 now gives 50% shrinkage at n≈4 (was w≈0.976 at n=10, effectively disabling partial pooling)
+- [x] **13-2** `glm_interactions_service.py`: clamp `delta_bic ≤ 700` before `math.exp()` — prevents `OverflowError` on large datasets with high ΔBIC
+- [x] **13-3** `agency_service.py`: divide CI-recovered SE by 1.282 — `se = (ci_upper - mean) / z₀.₈` (was inflated 1.28×, deflating the comparison z-score)
+- [x] **13-4** `portfolio_service.py`: `_sharpe_weight` accepts `periods_per_year` param (365 daily / 52 weekly / 12 monthly) — hardcoded 365 incorrect for non-daily series
+- [x] **13-5** `evolution_service.py`: skip crossover when single ranked parent (mutation-only path) — crossover of identical parents produced exact copy, wasting exploration budget
+- [x] **13-6** `compliance_service.py`: LLM unavailable → FAIL not WARN — safety gate must not silently degrade on infra failure
+- [x] **13-7** `quality_service.py`: add `np≥5` and `n(1-p)≥5` guards to `_prob_a_greater_b` — normal approximation unreliable for sparse events (e.g. CVR≈1% at n=30)
+- [x] **13-8** `red_flags_service.py`: `Random(0)` → `Random()` (unseeded) — deterministic seed hid MC variance on repeated calls for same landing page
+- [x] **13-9** `burnout_survival_service.py`: Weibull `scale` 14d→21d; rename `DEFAULT_BETAS`→`EXPERT_PRIOR_BETAS` — 14d too aggressive for B2B/investment funnels; betas are expert priors not fitted coefficients
+- [x] **13-10** `attribution_service.py`: `half_life` 7d→21d — 7d discount zeroed out awareness-stage touches critical in capital-raise funnels
+- [x] **13-11** `cb_bayesian_service.py`: remove deterministic `Random(42)` seed — near-zero CVR guard (count as exceed) was already correct
+- [x] **13-12** `funnel_path_service.py`: check `progress`/`percent` as aliases for `progress_pct` — silent 0 on key rename would unfairly block users at engagement gate
+
+Already correct (verified, no change): thompson `churn_penalty_delta` already floors to `int`; `N_PROPENSITY=2000` already fixed in Phase 12.
+
+---
+
 ## Bug List
 
 _(empty — project not started)_
@@ -1421,6 +1527,8 @@ _(empty — project not started)_
 | **[v1.4 — added]** Phase 9 | **COMPLETE** | 9-1 ✅ … 9-20 ✅ — pre-production gap closure from the 2026-10-20 conformance review (open: vitest for admin pages; frontend/mlflow containers not booted — platform-api + ml-service + postgres + redis booted live at V132 and smoke-tested end to end) | — |
 | **[v1.5 — added]** Phase 10 | **COMPLETE** (code) | 10-1 ✅ 10-2 ✅ 10-3 ✅ 10-4 ✅ 10-5 ✅ — variant choice, preview, tenant domains, client-hosted runner (open: TLS proxy choice for custom hostnames; client one-pager) | — |
 | **[v1.5 — added]** Phase 11 | **COMPLETE** (code) | 11-1 ✅ 11-2 ✅ 11-3 ✅ 11-4 ✅ 11-5 ✅ — creative publishing only through the platform (`.ai/creative-publishing.md`); real upload path needs a live Meta account at stage GUARDED_WRITES | — |
+| **[v1.6 — added]** Phase 12 | **COMPLETE** (code, 2026-10-23) | 12-1 ✅ 12-2 ✅ 12-3 ✅ 12-4 ✅ 12-5 ✅ 12-6 ✅ 12-7 ✅ 12-8 ✅ 12-9 ✅ 12-10 ✅ 12-11 ✅ 12-12 ✅ 12-13 ✅ 12-14 ✅ — ML math audit fixes (ML 1097, Java BUILD SUCCESSFUL) | — |
+| **[v1.7 — added]** Phase 13 | **COMPLETE** (code, 2026-10-23) | 13-1 ✅ … 13-12 ✅ — ML audit wave 2: shrinkage, BF overflow, SE recovery, Sharpe period, evolution, compliance fail-safe, normal approx, RNG seeds, Weibull scale/naming, time decay, CPA CB, funnel gate aliases (ML 1097) | — |
 
 **Immediate priority**: ~~Phase 7 (Multi-Channel) or Phase 0.5 (Universal Cross-Niche Model) — Phase 6 complete~~ **[v1.1 — changed]** Before onboarding client #1 on anything above ADVISOR: the Phase 0 items (0-11, 0-12, 0-13), then Phase 2 content path (2-9 → 2-10 → 2-11, 2-12), then the Phase 3 protective set in this order — 3-15 queue → 3-13 Site Health → 3-14 anchors → 3-12 external signals → 3-16 recovery → 3-17/3-18 autonomy + OPE (unlocks 6-6). Phase 7 and 0.5 after that. **[v1.2 — changed]** With all v1.1 items ✅, the immediate priority is **Phase 8 pre-onboarding set (8-1 → 8-2 → 8-3 → 8-7 → 8-4)**: the implemented CAPI gate, reward map and gates are coded on the wrong funnel for client #1, and nothing should go live on their account until they read the configured funnel.
 
@@ -1485,6 +1593,32 @@ _(empty — project not started)_
 | **[v1.3 — added]** G51 | §19.18.6 | Investor archetypes → path / touch / brief | 8-19 | §16.19 |
 | **[v1.3 — added]** G52 | §19.18.7 | Agency measurability (creative sources) | 8-20 | §16.20 |
 | **[v1.3 — added]** G53 | §19.18.8 | Reg CF waitlist value | 8-21 | §16.20 |
+| **[v1.6 — added]** G65 | ML math audit 2026-10-23 | joblib pickle deserialization → ONNX safe format | 12-1 | — |
+| **[v1.6 — added]** G66 | ML math audit 2026-10-23 | ESS formula corrected for informed priors | 12-2 | — |
+| **[v1.6 — added]** G67 | ML math audit 2026-10-23 | Student-T / Normal-Normal family mismatch in hierarchy prior | 12-3 | — |
+| **[v1.6 — added]** G68 | ML math audit 2026-10-23 | PLV slope auto-recalibration when OLS clamp exceeded | 12-4 | §16.16 |
+| **[v1.6 — added]** G69 | ML math audit 2026-10-23 | cluster_service: StandardScaler vs abs(centroid) mismatch | 12-5 | — |
+| **[v1.6 — added]** G70 | ML math audit 2026-10-23 | MC draws P(best): 5 000 → 10 000 | 12-6 | — |
+| **[v1.6 — added]** G71 | ML math audit 2026-10-23 | Propensity OPE draws: 200 → 2 000 | 12-7 | §15.11 |
+| **[v1.6 — added]** G72 | ML math audit 2026-10-23 | Shapley coalition samples: 200 → 1 000 | 12-8 | §7.5 |
+| **[v1.6 — added]** G73 | ML math audit 2026-10-23 | Budget curve: linear → Hill-curve saturation in sampling | 12-9 | — |
+| **[v1.6 — added]** G74 | ML math audit 2026-10-23 | GateEvaluationService: new Random() → SplittableRandom(seed) | 12-10 | §15.13 |
+| **[v1.6 — added]** G75 | ML math audit 2026-10-23 | BH correction: separate CTR-family / CVR-family tests | 12-11 | — |
+| **[v1.6 — added]** G76 | ML math audit 2026-10-23 | Geo Lift: IID bootstrap → block bootstrap (temporal autocorrelation) | 12-12 | §17.3 |
+| **[v1.6 — added]** G77 | ML math audit 2026-10-23 | noshow_service: document expert constants as seed priors | 12-13 | §16.15 |
+| **[v1.6 — added]** G78 | ML math audit 2026-10-23 | noshow_service: document slot-independence assumption | 12-14 | §16.15 |
+| **[v1.7 — added]** G79 | ML audit wave 2 2026-10-23 | segment_re_service: TAU_SQUARED too large, disabling partial pooling | 13-1 | §15.9 |
+| **[v1.7 — added]** G80 | ML audit wave 2 2026-10-23 | glm_interactions_service: BF exp() overflow on large ΔBIC | 13-2 | §15.8 |
+| **[v1.7 — added]** G81 | ML audit wave 2 2026-10-23 | agency_service: SE inflated 1.28× via CI inverse | 13-3 | §17.4 |
+| **[v1.7 — added]** G82 | ML audit wave 2 2026-10-23 | portfolio_service: hardcoded 365 annualisation breaks weekly/monthly series | 13-4 | §8.5 |
+| **[v1.7 — added]** G83 | ML audit wave 2 2026-10-23 | evolution_service: crossover degenerates when single parent | 13-5 | §15.7 |
+| **[v1.7 — added]** G84 | ML audit wave 2 2026-10-23 | compliance_service: LLM unavailable silently downgrades to WARN | 13-6 | §15.1 |
+| **[v1.7 — added]** G85 | ML audit wave 2 2026-10-23 | quality_service: normal approx used without np≥5 check for sparse CVR | 13-7 | §15.5 |
+| **[v1.7 — added]** G86 | ML audit wave 2 2026-10-23 | red_flags_service: deterministic RNG seed hides MC variance | 13-8 | §16.15 |
+| **[v1.7 — added]** G87 | ML audit wave 2 2026-10-23 | burnout_survival_service: 14d Weibull scale too aggressive for B2B; betas not fitted | 13-9 | §15.7 |
+| **[v1.7 — added]** G88 | ML audit wave 2 2026-10-23 | attribution_service: 7d half-life erases early funnel touches in capital-raise | 13-10 | §7.1 |
+| **[v1.7 — added]** G89 | ML audit wave 2 2026-10-23 | cb_bayesian_service: deterministic CB simulation seed | 13-11 | §12.5 |
+| **[v1.7 — added]** G90 | ML audit wave 2 2026-10-23 | funnel_path_service: silent 0 on progress_pct key rename | 13-12 | §8.14 |
 | **[v1.4 — added]** G54 | §12.7, arch §11 | Token encryption at rest, real token rotation, autonomy downgrade | 9-1, 9-2 | §11, §15.15 |
 | **[v1.4 — added]** G55 | §12.4–12.5, arch §15.11 | OPE gate enforced on autonomy upgrade; weekly OPE | 9-3 | §15.11, §15.13 |
 | **[v1.4 — added]** G56 | arch §8 | ML service as non-owner RLS role; event hygiene; admin UI | 9-4, 9-5, 9-6 | §8, §4.5 |
