@@ -21,7 +21,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class MetaWriteGuardTest {
 
     private static final Pattern WRITE_CALL = Pattern.compile(
-            "metaApi(?:Service)?\\.(createCampaign|createAdSet|setCampaignStatus|setAdSetStatus|uploadVideo|uploadImage|createAdCreative|createAd|setAdStatus)\\(");
+            "metaApi(?:Service)?\\.(createCampaign|createAdSet|setCampaignStatus|setAdSetStatus|uploadVideo|uploadImage|createAdCreative|createAd|setAdStatus|upsertCustomAudience)\\(");
     private static final Pattern GATE_CALL = Pattern.compile("metaWriteGate\\.(assertAllowed|decide)\\(");
 
     @Test

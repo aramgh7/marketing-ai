@@ -44,9 +44,15 @@ public class LinkageHealthService {
             if ("DRIFT".equals(status)) { drift++; active++; continue; }
             if ("UNMANAGED".equals(status)) { unmanaged++; active++; continue; }
             active++;
-            if (r.get("creative_id") == null) unmanaged++;
-            Object tags = r.get("url_tags");
-            if (tags == null || !String.valueOf(tags).contains(TAG_MARKER)) missingTags++;
+            boolean isMapped = r.get("creative_id") != null;
+            if (!isMapped) {
+                unmanaged++;
+            } else {
+                // M-6: only flag missing url_tags for mapped (creative_id != null) ads; unmapped ads
+                // already count in unmanaged — checking their tags too causes false positives.
+                Object tags = r.get("url_tags");
+                if (tags == null || !String.valueOf(tags).contains(TAG_MARKER)) missingTags++;
+            }
         }
         boolean healthy = unmanaged == 0 && missingTags == 0 && drift == 0;
         return new Health(healthy, active, unmanaged, missingTags, drift);

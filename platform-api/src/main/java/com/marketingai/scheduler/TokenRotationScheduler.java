@@ -43,7 +43,8 @@ public class TokenRotationScheduler {
         log.info("TokenRotationScheduler: checking Meta token ages");
 
         List<Map<String, Object>> tenants = jdbc.queryForList("""
-                SELECT id, name, meta_token_status, meta_token_created_at, meta_access_token_enc, autonomy_level
+                SELECT id, name, meta_token_status, meta_token_created_at, meta_access_token_enc,
+                       autonomy_level, meta_token_type
                 FROM tenants
                 WHERE meta_access_token_enc IS NOT NULL
                 """);
@@ -51,6 +52,14 @@ public class TokenRotationScheduler {
         for (Map<String, Object> tenant : tenants) {
             UUID tenantId = (UUID) tenant.get("id");
             String name   = (String) tenant.get("name");
+            // M-7: System User tokens do not expire and cannot be renewed via fb_exchange_token;
+            // they must be regenerated in Meta Business Manager if ever revoked.
+            String tokenType = tenant.get("meta_token_type") != null
+                    ? (String) tenant.get("meta_token_type") : "USER";
+            if ("SYSTEM_USER".equals(tokenType)) {
+                log.debug("TokenRotationScheduler: tenant {} uses SYSTEM_USER token — skipping fb_exchange_token rotation", name);
+                continue;
+            }
             Timestamp createdAt = (Timestamp) tenant.get("meta_token_created_at");
             if (createdAt == null) continue;
 

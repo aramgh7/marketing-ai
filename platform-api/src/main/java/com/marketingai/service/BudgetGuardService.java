@@ -8,6 +8,7 @@ import com.marketingai.repository.TenantRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -15,6 +16,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Slf4j
@@ -25,6 +27,9 @@ public class BudgetGuardService {
     private final BudgetGuardRepository guardRepo;
     private final TenantRepository tenantRepo;
     private final AlertService alertService;
+    private final MetaApiService metaApiService;  // M-10/D-3: real-time spend from Meta API
+    private final TokenVault vault;               // M-10/D-3: decrypt tenant Meta access token
+    private final JdbcTemplate jdbc;              // M-10/D-3: look up tenant token
 
     private static final List<String> VALID_TYPES =
             List.of("PER_CREATIVE_STOP_LOSS", "MONTHLY_CEILING");
@@ -94,6 +99,8 @@ public class BudgetGuardService {
     /**
      * Called by CircuitBreakerScheduler every 5 min.
      * Checks all non-triggered guards across all tenants.
+     * M-10/D-3: when a guard has a meta_adset_id, fetch the real-time spend from Meta API
+     * instead of relying on manually entered values.
      */
     @Transactional
     public void checkAllGuards() {
@@ -111,10 +118,41 @@ public class BudgetGuardService {
                 }
             }
 
+            // M-10/D-3: when a meta_adset_id is configured, pull real spend from Meta API
+            if (guard.getMetaAdsetId() != null && !guard.getMetaAdsetId().isBlank()) {
+                refreshSpendFromMeta(guard);
+            }
+
             if (guard.getCurrentSpend() >= guard.getThreshold()) {
                 triggerGuard(guard);
                 guardRepo.save(guard);
             }
+        }
+    }
+
+    /**
+     * Fetch today's spend for the guard's Meta ad set and update current_spend.
+     * Falls back silently on API failure so existing manual spend is preserved.
+     */
+    private void refreshSpendFromMeta(BudgetGuard guard) {
+        try {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT meta_access_token_enc FROM tenants WHERE id = ?", guard.getTenantId());
+            if (rows.isEmpty() || rows.get(0).get("meta_access_token_enc") == null) return;
+            String accessToken = vault.openOrNull((byte[]) rows.get(0).get("meta_access_token_enc"));
+            if (accessToken == null) return;
+
+            Map<String, String> insights = metaApiService.getInsights(accessToken, guard.getMetaAdsetId());
+            String spendStr = insights.getOrDefault("spend", null);
+            if (spendStr == null) return;
+            float metaSpend = Float.parseFloat(spendStr);
+            if (metaSpend != guard.getCurrentSpend()) {
+                guard.setCurrentSpend(metaSpend);
+                guardRepo.save(guard);
+                log.debug("BudgetGuard {}: spend updated from Meta API to ${}", guard.getId(), metaSpend);
+            }
+        } catch (Exception e) {
+            log.warn("BudgetGuard {}: Meta API spend refresh failed — using stored value. Error: {}", guard.getId(), e.getMessage());
         }
     }
 

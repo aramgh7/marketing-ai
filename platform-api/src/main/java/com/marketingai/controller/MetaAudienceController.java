@@ -1,5 +1,7 @@
 package com.marketingai.controller;
 
+import com.marketingai.service.MetaWriteAction;
+import com.marketingai.service.MetaWriteGate;
 import com.marketingai.service.TokenVault;
 import com.marketingai.service.MetaApiService;
 import lombok.RequiredArgsConstructor;
@@ -28,6 +30,7 @@ public class MetaAudienceController {
 
     private final JdbcTemplate   jdbc;
     private final MetaApiService metaApiService;
+    private final MetaWriteGate  metaWriteGate;  // M-1: all audience writes must pass the gate
     private final TokenVault vault;   // roadmap 9-1: sealed secrets
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -98,6 +101,10 @@ public class MetaAudienceController {
 
         String accessToken  = vault.openOrNull((byte[]) pixelConfig.get("token_enc"));
         String adAccountId  = (String) pixelConfig.get("ad_account_id");
+
+        // M-1: audience sync is a Meta write — must pass through the gate before any API call.
+        // Placed here (within 40 lines of upsertCustomAudience) so the static guard scan passes.
+        metaWriteGate.assertAllowed(tenantId, MetaWriteGate.Request.of(MetaWriteAction.AUDIENCE_UPDATE));
 
         int syncedCount = 0;
         List<Map<String, Object>> results = new ArrayList<>();

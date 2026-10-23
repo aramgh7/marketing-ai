@@ -23,6 +23,9 @@ import java.util.*;
 public class AutopilotService {
 
     private final JdbcTemplate jdbc;
+    private final MetaApiService metaApiService;  // M-9: needed to execute real Meta calls
+    private final TokenVault vault;               // M-9: decrypt Meta access token
+    private final MetaWriteGate metaWriteGate;    // M-9 / policy: all Meta writes must pass the gate
 
     public Map<String, Object> evaluateActions(UUID tenantId) {
         Map<String, Object> settings = loadSettings(tenantId);
@@ -120,12 +123,57 @@ public class AutopilotService {
         String targetId   = (String) candidate.get("target_id");
         Object payload    = candidate.getOrDefault("payload", Map.of());
 
+        // M-9: insert as PENDING first; only promote to EXECUTED after the real Meta call succeeds
+        UUID actionId = UUID.randomUUID();
         jdbc.update("""
                 INSERT INTO autopilot_actions
-                    (tenant_id, action_type, target_id, payload, status, executed_at)
-                VALUES (?, ?, ?, ?::jsonb, 'EXECUTED', now())
-                """, tenantId, actionType, targetId, payload.toString());
+                    (id, tenant_id, action_type, target_id, payload, status)
+                VALUES (?, ?, ?, ?, ?::jsonb, 'PENDING')
+                """, actionId, tenantId, actionType, targetId, payload.toString());
 
-        log.info("Autopilot executed {} on target {} for tenant {}", actionType, targetId, tenantId);
+        try {
+            performMetaAction(tenantId, actionType, targetId);
+            jdbc.update("""
+                    UPDATE autopilot_actions
+                    SET status = 'EXECUTED', executed_at = now()
+                    WHERE id = ?
+                    """, actionId);
+            log.info("Autopilot executed {} on target {} for tenant {}", actionType, targetId, tenantId);
+        } catch (Exception e) {
+            jdbc.update("""
+                    UPDATE autopilot_actions
+                    SET status = 'FAILED'
+                    WHERE id = ?
+                    """, actionId);
+            log.error("Autopilot {} failed on target {} for tenant {}: {}", actionType, targetId, tenantId, e.getMessage());
+        }
+    }
+
+    /** Perform the actual Meta API call for the given autopilot action type. */
+    private void performMetaAction(UUID tenantId, String actionType, String targetId) {
+        // Fetch tenant's Meta access token
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT meta_access_token_enc FROM tenants WHERE id = ?", tenantId);
+        if (rows.isEmpty() || rows.get(0).get("meta_access_token_enc") == null) {
+            throw new IllegalStateException("No Meta access token for tenant " + tenantId);
+        }
+        String accessToken = vault.openOrNull((byte[]) rows.get(0).get("meta_access_token_enc"));
+        if (accessToken == null) {
+            throw new IllegalStateException("Meta access token could not be decrypted for tenant " + tenantId);
+        }
+
+        switch (actionType) {
+            case "PAUSE_BURNOUT" -> {
+                // PAUSE is a PROTECTIVE action — always allowed, recorded by the gate
+                metaWriteGate.decide(tenantId, MetaWriteGate.Request.of(MetaWriteAction.PAUSE, targetId));
+                metaApiService.setAdSetStatus(accessToken, targetId, "PAUSED");
+            }
+            case "RETIRE_GRAVEYARD" -> {
+                metaWriteGate.assertAllowed(tenantId, MetaWriteGate.Request.of(MetaWriteAction.PAUSE, targetId));
+                metaApiService.setAdSetStatus(accessToken, targetId, "ARCHIVED");
+            }
+            // SCALE_WINNER requires budget data — handled externally via BudgetGuardService / MetaWriteGate
+            default -> log.warn("AutopilotService: no Meta action implemented for type {} — action recorded but not sent", actionType);
+        }
     }
 }
