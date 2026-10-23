@@ -41,7 +41,8 @@ public class SecurityConfig {
                 // Tenant settings / credentials / agency accounts: ADMIN only. Any other write: not VIEWER.
                 .requestMatchers(HttpMethod.PATCH,  "/tenants/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.PUT,    "/tenants/**").hasRole("ADMIN")
-                .requestMatchers(HttpMethod.POST,   "/tenants/**", "/agency/**", "/erasure/**").hasRole("ADMIN")
+                // S-11: ErasureController maps to /privacy/erasure (not /erasure/**) — fixed matcher
+                .requestMatchers(HttpMethod.POST,   "/tenants/**", "/agency/**", "/privacy/erasure").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.DELETE, "/tenants/**", "/agency/**").hasRole("ADMIN")
                 .requestMatchers(HttpMethod.POST,   "/**").hasAnyRole(WRITE_ROLES)
                 .requestMatchers(HttpMethod.PUT,    "/**").hasAnyRole(WRITE_ROLES)

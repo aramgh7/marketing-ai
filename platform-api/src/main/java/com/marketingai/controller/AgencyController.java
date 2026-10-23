@@ -95,7 +95,9 @@ public class AgencyController {
                 Map.of("tenant_snapshots", snapshots), Map.class);
             return ResponseEntity.ok(result != null ? result : Map.of("snapshots", snapshots));
         } catch (Exception e) {
-            return ResponseEntity.ok(Map.of("snapshots", snapshots, "error", e.getMessage()));
+            // S-19: do not expose internal exception details to the client
+            log.warn("ML service call failed for agency dashboard (tenant={}): {}", tenantId, e.getMessage());
+            return ResponseEntity.ok(Map.of("snapshots", snapshots));
         }
     }
 
@@ -130,7 +132,9 @@ public class AgencyController {
                 Map.of("source_rows", sources), Map.class);
             return ResponseEntity.ok(result != null ? result : Map.of("sources", sources));
         } catch (Exception e) {
-            return ResponseEntity.ok(Map.of("sources", sources, "error", e.getMessage()));
+            // S-19: do not expose internal exception details to the client
+            log.warn("ML service call failed for agency source-report (tenant={}): {}", tenantId, e.getMessage());
+            return ResponseEntity.ok(Map.of("sources", sources));
         }
     }
 
