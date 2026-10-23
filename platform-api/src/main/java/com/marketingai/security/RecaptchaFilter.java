@@ -48,7 +48,8 @@ public class RecaptchaFilter extends OncePerRequestFilter {
             return;
         }
 
-        // Token present — verify asynchronously; on error, allow through with warning
+        // X-6/S-9: fail-closed — on verification error OR low score, reject the request.
+        // Allowing through on API error would let an attacker time attacks to when reCAPTCHA is unavailable.
         try {
             boolean valid = verifyToken(token);
             if (!valid) {
@@ -57,7 +58,9 @@ public class RecaptchaFilter extends OncePerRequestFilter {
                 return;
             }
         } catch (Exception e) {
-            log.warn("reCAPTCHA verification error (allowing through): {}", e.getMessage());
+            log.warn("reCAPTCHA API error (fail closed) for {} {}: {}", method, request.getRequestURI(), e.getMessage());
+            response.sendError(HttpServletResponse.SC_FORBIDDEN, "reCAPTCHA service unavailable");
+            return;
         }
 
         chain.doFilter(request, response);

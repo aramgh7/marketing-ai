@@ -27,9 +27,22 @@ public class EncryptionService {
     private final SecretKey dataKey;
     private final boolean configured;
 
-    public EncryptionService(@Value("${app.encryption.key:}") String rawKey) {
+    /**
+     * @param rawKey     Base64-encoded 32-byte AES key (env: ENCRYPTION_KEY / app.encryption.key).
+     *                   Blank = ephemeral dev key (data lost on restart, tokens stored as plaintext).
+     * @param requireKey If {@code true} (production profile), startup fails when {@code rawKey} is blank.
+     *                   Set {@code app.encryption.require-key=true} in production (audit S-2/X-4).
+     */
+    public EncryptionService(
+            @Value("${app.encryption.key:}") String rawKey,
+            @Value("${app.encryption.require-key:false}") boolean requireKey) {
         configured = !rawKey.isEmpty();
         if (rawKey.isEmpty()) {
+            if (requireKey) {
+                throw new IllegalStateException(
+                        "ENCRYPTION_KEY is required (app.encryption.require-key=true) but not configured. " +
+                        "Set the ENCRYPTION_KEY environment variable before starting the application.");
+            }
             log.warn("EncryptionService: ENCRYPTION_KEY not set — using ephemeral dev key (data not persistent across restarts)");
             try {
                 KeyGenerator kg = KeyGenerator.getInstance("AES");

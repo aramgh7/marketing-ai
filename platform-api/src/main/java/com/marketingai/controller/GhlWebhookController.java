@@ -77,7 +77,11 @@ public class GhlWebhookController {
         }
     }
 
-    /** Per-tenant secret (tenants.settings.ghl_webhook_secret) with the global one as fallback. */
+    /**
+     * Per-tenant secret from {@code tenants.settings.ghl_webhook_secret} (audit S-4).
+     * Global fallback removed: if the tenant has no secret configured, returns {@code null}
+     * and {@link #secretMatches} will reject the request (fail closed).
+     */
     private String expectedSecret(UUID tenantId) {
         try {
             List<String> rows = jdbc.queryForList(
@@ -86,7 +90,8 @@ public class GhlWebhookController {
         } catch (Exception e) {
             log.debug("tenant secret lookup failed: {}", e.getMessage());
         }
-        return appProperties.getGhlWebhookSecret();
+        // S-4: no global fallback — a tenant without a configured secret cannot receive webhooks.
+        return null;
     }
 
     /** Constant-time comparison; an empty/missing configured secret fails closed. */

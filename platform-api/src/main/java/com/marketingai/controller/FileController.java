@@ -4,6 +4,7 @@ import com.marketingai.config.AppProperties;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.http.HttpStatus;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
@@ -24,6 +25,7 @@ import java.util.UUID;
  * Only active when app.storage.type=local (default for dev).
  * In production (R2), file URLs are direct R2 links — this controller is unused.
  */
+@Slf4j
 @RestController
 @RequestMapping("/files")
 @ConditionalOnProperty(name = "app.storage.type", havingValue = "local", matchIfMissing = true)
@@ -68,7 +70,10 @@ public class FileController {
                     "SELECT settings->>'creative_download_mode' FROM tenants WHERE id = ?", String.class, tenantId);
             return !rows.isEmpty() && "PREVIEW_ONLY".equalsIgnoreCase(rows.get(0));
         } catch (Exception e) {
-            return false;
+            // S-1: fail-safe — if we cannot determine the download mode, assume PREVIEW_ONLY
+            // so that final renders are never inadvertently served under an empty/unresolvable tenant context.
+            log.warn("previewOnly check failed for tenant {} — defaulting to PREVIEW_ONLY: {}", tenantId, e.getMessage());
+            return true;
         }
     }
 

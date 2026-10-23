@@ -24,6 +24,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Low-level wrapper over Meta Graph API v20.0.
@@ -122,12 +123,11 @@ public class MetaApiService {
                 .path("/{id}/insights")
                 .queryParam("fields", "spend,impressions,clicks,actions")
                 .queryParam("date_preset", "today")
-                .queryParam("access_token", accessToken)
                 .buildAndExpand(objectId)
                 .toUriString();
 
         try {
-            JsonNode resp = rest.getForObject(url, JsonNode.class);
+            JsonNode resp = getWithAuth(accessToken, url);
             JsonNode data = resp != null ? resp.path("data") : null;
             if (data != null && data.isArray() && !data.isEmpty()) {
                 JsonNode row = data.get(0);
@@ -140,8 +140,10 @@ public class MetaApiService {
                 );
             }
             return Map.of("spend", "0", "impressions", "0", "clicks", "0", "conversions", "0");
-        } catch (HttpClientErrorException e) {
-            log.error("Meta insights error {}: {}", e.getStatusCode(), e.getResponseBodyAsString());
+        } catch (ResponseStatusException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("Meta insights error: {}", e.getMessage());
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Meta API error: " + e.getMessage());
         }
     }
@@ -196,13 +198,26 @@ public class MetaApiService {
         return audienceId;
     }
 
-    /** Sums purchase + lead conversion action types from Meta insights actions array */
+    /**
+     * Exact set of Meta action_type values that count as conversions (audit M-18).
+     * Using {@code contains("purchase")} caused double-counting because both
+     * "offsite_conversion.fb_pixel_purchase" and parent roll-up types like "purchase"
+     * appear in the same actions array — the same event was summed twice.
+     */
+    private static final Set<String> CONVERSION_ACTION_TYPES = Set.of(
+            "offsite_conversion.fb_pixel_purchase",
+            "offsite_conversion.fb_pixel_lead",
+            "onsite_conversion.lead_grouped",
+            "complete_registration"
+    );
+
+    /** Sums known conversion action types from Meta insights actions array (audit M-18). */
     private String extractConversions(JsonNode actions) {
         if (actions == null || !actions.isArray()) return "0";
         long total = 0;
         for (JsonNode action : actions) {
             String type = action.path("action_type").asText("");
-            if (type.contains("purchase") || type.contains("lead") || type.equals("complete_registration")) {
+            if (CONVERSION_ACTION_TYPES.contains(type)) {
                 total += action.path("value").asLong(0);
             }
         }
@@ -219,11 +234,10 @@ public class MetaApiService {
         String url = UriComponentsBuilder.fromUri(URI.create(BASE_URL))
                 .path("/" + metaAdSetId)
                 .queryParam("fields", "effective_status,learning_phase")
-                .queryParam("access_token", accessToken)
                 .build()
                 .toUriString();
         try {
-            JsonNode resp = rest.getForObject(url, JsonNode.class);
+            JsonNode resp = getWithAuth(accessToken, url);
             if (resp != null && resp.has("learning_phase")) {
                 return resp.get("learning_phase").asText(null);
             }
@@ -247,11 +261,10 @@ public class MetaApiService {
         String url = UriComponentsBuilder.fromUri(URI.create(BASE_URL))
                 .path("/" + adId)
                 .queryParam("fields", "effective_status,ad_review_feedback")
-                .queryParam("access_token", accessToken)
                 .build()
                 .toUriString();
         try {
-            JsonNode resp = rest.getForObject(url, JsonNode.class);
+            JsonNode resp = getWithAuth(accessToken, url);
             if (resp == null) return Map.of();
             String feedback = resp.has("ad_review_feedback") && !resp.get("ad_review_feedback").isNull()
                     ? resp.get("ad_review_feedback").toString() : "";
@@ -292,7 +305,8 @@ public class MetaApiService {
             transfer.add("upload_session_id", session);
             transfer.add("start_offset", String.valueOf(startOffset));
             transfer.add("video_file_chunk", namedResource(chunk, fileName));
-            JsonNode t = postMultipart(accessToken, path, transfer);
+            // M-23: retry the transfer phase with exponential backoff (max 3 attempts: 1s, 2s, give up)
+            JsonNode t = postMultipartWithRetry(accessToken, path, transfer, 3);
             long nextStart = t.path("start_offset").asLong(endOffset);
             long nextEnd = t.path("end_offset").asLong(Math.min(bytes.length, nextStart + VIDEO_CHUNK));
             if (nextStart <= startOffset) nextStart = endOffset;                     // defensive: always advance
@@ -385,13 +399,14 @@ public class MetaApiService {
                 .path("/" + adAccountId + "/ads")
                 .queryParam("fields", "id,name,adset_id,campaign_id,status,effective_status,creative{id,video_id,image_hash,object_story_spec,url_tags}")
                 .queryParam("limit", 200)
-                .queryParam("access_token", accessToken)
                 .build()
                 .toUriString();
         for (int page = 0; page < 20 && url != null; page++) {
             JsonNode resp;
             try {
-                resp = rest.getForObject(url, JsonNode.class);
+                resp = getWithAuth(accessToken, url);
+            } catch (ResponseStatusException e) {
+                throw e;
             } catch (HttpClientErrorException e) {
                 log.error("Meta API GET ads failed {}: {}", e.getStatusCode(), e.getResponseBodyAsString());
                 throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Meta API error: " + e.getMessage());
@@ -433,14 +448,42 @@ public class MetaApiService {
         };
     }
 
+    /**
+     * Retry wrapper for chunked video upload transfer phase (audit M-23).
+     * Backs off exponentially: delay = 1000 ms × 2^(attempt-1); gives up after {@code maxAttempts}.
+     */
+    private JsonNode postMultipartWithRetry(String accessToken, String path,
+            MultiValueMap<String, Object> form, int maxAttempts) {
+        Exception last = null;
+        for (int attempt = 0; attempt < maxAttempts; attempt++) {
+            try {
+                return postMultipart(accessToken, path, form);
+            } catch (Exception e) {
+                last = e;
+                if (attempt + 1 < maxAttempts) {
+                    long delayMs = 1000L << attempt; // 1 s, 2 s
+                    log.warn("Meta advideos chunk transfer failed (attempt {}/{}), retrying in {} ms: {}",
+                            attempt + 1, maxAttempts, delayMs, e.getMessage());
+                    try { Thread.sleep(delayMs); } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }
+        }
+        if (last instanceof ResponseStatusException rse) throw rse;
+        throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                "Meta advideos chunk transfer failed after " + maxAttempts + " attempts: " + (last != null ? last.getMessage() : "unknown"));
+    }
+
     private JsonNode postMultipart(String accessToken, String path, MultiValueMap<String, Object> form) {
         String url = UriComponentsBuilder.fromUri(URI.create(BASE_URL))
                 .path(path)
-                .queryParam("access_token", accessToken)
                 .build()
                 .toUriString();
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+        headers.setBearerAuth(accessToken);   // S-3: token in Authorization header, never in query string
         try {
             JsonNode resp = rest.postForObject(url, new HttpEntity<>(form, headers), JsonNode.class);
             if (resp == null) throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Meta API returned empty body for " + path);
@@ -453,18 +496,40 @@ public class MetaApiService {
 
     // ─── Internal helpers ───────────────────────────────────────────────────
 
+    /**
+     * Build HttpHeaders with the Meta access token as a Bearer token (audit S-3).
+     * Tokens MUST NOT appear in the query string — they would be logged by every proxy and CDN.
+     */
+    private static HttpHeaders authHeaders(String accessToken, MediaType contentType) {
+        HttpHeaders h = new HttpHeaders();
+        if (contentType != null) h.setContentType(contentType);
+        h.setBearerAuth(accessToken);
+        return h;
+    }
+
+    /**
+     * GET {BASE_URL}/{path} with the access token in the Authorization header (audit S-3).
+     */
+    private JsonNode getWithAuth(String accessToken, String url) {
+        HttpEntity<Void> req = new HttpEntity<>(authHeaders(accessToken, null));
+        try {
+            return rest.exchange(url, org.springframework.http.HttpMethod.GET, req, JsonNode.class).getBody();
+        } catch (HttpClientErrorException e) {
+            log.error("Meta API GET {} failed {}: {}", url, e.getStatusCode(), e.getResponseBodyAsString());
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Meta API error: " + e.getMessage());
+        }
+    }
+
     private String postAndGetId(String accessToken, String path, ObjectNode body) {
         String url = UriComponentsBuilder.fromUri(URI.create(BASE_URL))
                 .path(path)
-                .queryParam("access_token", accessToken)
                 .build()
                 .toUriString();
 
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-
         try {
-            JsonNode resp = rest.postForObject(url, new HttpEntity<>(body.toString(), headers), JsonNode.class);
+            JsonNode resp = rest.postForObject(url,
+                    new HttpEntity<>(body.toString(), authHeaders(accessToken, MediaType.APPLICATION_JSON)),
+                    JsonNode.class);
             if (resp == null || !resp.has("id")) {
                 throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
                         "Meta API returned no ID for path " + path);
@@ -479,15 +544,13 @@ public class MetaApiService {
     private void post(String accessToken, String path, ObjectNode body) {
         String url = UriComponentsBuilder.fromUri(URI.create(BASE_URL))
                 .path(path)
-                .queryParam("access_token", accessToken)
                 .build()
                 .toUriString();
 
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-
         try {
-            rest.postForObject(url, new HttpEntity<>(body.toString(), headers), String.class);
+            rest.postForObject(url,
+                    new HttpEntity<>(body.toString(), authHeaders(accessToken, MediaType.APPLICATION_JSON)),
+                    String.class);
         } catch (HttpClientErrorException e) {
             log.error("Meta API POST {} failed {}: {}", path, e.getStatusCode(), e.getResponseBodyAsString());
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Meta API error: " + e.getMessage());
