@@ -74,3 +74,4 @@ temp.txt
 backups/*
 !backups/.gitkeep
 архив/
+!.ai/*.pdf
