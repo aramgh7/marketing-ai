@@ -8,7 +8,9 @@ import { apiPath, storeAuthResponse } from "@/lib/api";
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
-  const next = params?.get("next") || "/dashboard";
+  // Audit F-12: only a same-origin path is a valid return target ("//evil.com" and "/\\evil.com" are not)
+  const rawNext = params?.get("next") || "";
+  const next = /^\/(?![\/\\])/.test(rawNext) ? rawNext : "/dashboard";
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -35,7 +37,7 @@ function LoginForm() {
       }
       const data = await res.json();
       storeAuthResponse(data);
-      router.replace(next.startsWith("/") ? next : "/dashboard");
+      router.replace(next);
     } catch {
       setError("Cannot reach the API. Check NEXT_PUBLIC_API_URL / the platform-api service.");
     } finally {

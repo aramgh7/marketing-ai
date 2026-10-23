@@ -1,6 +1,7 @@
 "use client";
-import { useEffect, useState } from "react";
-import { apiFetch } from "@/lib/api";
+import { useCallback, useEffect, useState } from "react";
+import { ApiError, apiFetch } from "@/lib/api";
+import LoadError from "@/components/admin/LoadError";
 
 /** Roadmap Phase 11-5: the pair "creative → landing variant" is what the marketer compares. */
 type Pair = {
@@ -12,16 +13,36 @@ type Pair = {
 export default function AbResultsPage() {
   const [arms, setArms]       = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [armsError, setArmsError] = useState<string | null>(null);
+  const [names, setNames]     = useState<Record<string, string>>({});
   const [pairs, setPairs]     = useState<Pair[]>([]);
   const [pairsDays, setPairsDays] = useState(30);
   const [pairsError, setPairsError] = useState("");
+  const [pairsTick, setPairsTick] = useState(0); // bumped by Retry
 
-  useEffect(() => {
-    apiFetch<any[]>("/api/v1/landings/arms")
-      .then(setArms)
-      .catch(() => setArms([]))
+  const loadArms = useCallback(() => {
+    setLoading(true);
+    setArmsError(null);
+    Promise.all([
+      apiFetch<any[]>("/api/v1/landings/arms"),
+      // Audit F-22: /landings/arms returns variant_name = UUID; join the names from /landings here.
+      apiFetch<{ id: string; name?: string | null; slug?: string | null }[]>("/api/v1/landings").catch(() => []),
+    ])
+      .then(([rows, variants]) => {
+        setArms(Array.isArray(rows) ? rows : []);
+        const map: Record<string, string> = {};
+        for (const v of variants ?? []) if (v?.id) map[v.id] = v.name || v.slug || v.id;
+        setNames(map);
+      })
+      .catch((e: unknown) => setArmsError(e instanceof ApiError ? e.message : "Could not load arms"))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => { loadArms(); }, [loadArms]);
+
+  /** A readable variant name: the joined landing name, else the API's value unless it is just the UUID. */
+  const variantLabel = (id: string, apiName: string | null | undefined) =>
+    names[id] ?? (apiName && apiName !== id ? apiName : id);
 
   useEffect(() => {
     let cancelled = false;
@@ -30,7 +51,7 @@ export default function AbResultsPage() {
       .then((r) => { if (!cancelled) setPairs(r?.pairs ?? []); })
       .catch((e: any) => { if (!cancelled) { setPairs([]); setPairsError(e?.message ?? "pairs unavailable"); } });
     return () => { cancelled = true; };
-  }, [pairsDays]);
+  }, [pairsDays, pairsTick]);
 
   return (
     <div className="space-y-6">
@@ -43,6 +64,8 @@ export default function AbResultsPage() {
 
       {loading ? (
         <p className="text-gray-400 text-sm">Loading...</p>
+      ) : armsError ? (
+        <LoadError title="Could not load A/B arms" message={armsError} onRetry={loadArms} />
       ) : arms.length === 0 ? (
         <p className="text-gray-400 text-sm py-8">No active A/B tests yet.</p>
       ) : (
@@ -61,7 +84,7 @@ export default function AbResultsPage() {
                 <div className="flex items-center justify-between mb-4">
                   <div>
                     <h3 className="font-semibold text-gray-800">
-                      {arm.variant_name ?? arm.variant_id}
+                      {variantLabel(arm.variant_id, arm.variant_name)}
                     </h3>
                     <p className="text-xs text-gray-400">
                       α={alpha.toFixed(1)} β={beta.toFixed(1)} · n≈{n}
@@ -137,7 +160,7 @@ export default function AbResultsPage() {
             ))}
           </div>
         </div>
-        {pairsError && <p className="text-xs text-red-600 mb-2">{pairsError}</p>}
+        {pairsError && <LoadError title="Could not load pairs" message={pairsError} onRetry={() => setPairsTick((t) => t + 1)} />}
         <div className="overflow-x-auto">
           <table className="text-xs w-full">
             <thead>
@@ -157,7 +180,7 @@ export default function AbResultsPage() {
                         <span><span className="font-mono text-gray-500">{p.creative_code ?? ""}</span> <span className="text-gray-900">{p.creative_title ?? p.creative_id}</span></span>
                       ) : <span className="text-gray-400">(no creative)</span>}
                     </td>
-                    <td className="pr-2 py-1 text-gray-900">{p.variant_name ?? p.variant_id}</td>
+                    <td className="pr-2 py-1 text-gray-900">{variantLabel(p.variant_id, p.variant_name)}</td>
                     <td className="pr-2 py-1 text-right">{p.decisions}</td>
                     <td className="pr-2 py-1 text-right">{p.rewards}</td>
                     <td className="pr-2 py-1 text-right">{(cvr * 100).toFixed(2)}%</td>

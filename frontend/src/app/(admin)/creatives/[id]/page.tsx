@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import StatusBadge from "@/components/admin/StatusBadge";
-import { apiFetch } from "@/lib/api";
+import { ApiError, apiFetch } from "@/lib/api";
 
 const COMPLIANCE_ITEMS = [
   { id: "ip",       label: "No trademark / IP violations in content" },
@@ -25,7 +25,7 @@ export default function VariantDetailPage() {
   useEffect(() => {
     apiFetch<any>(`/api/v1/landings/${id}`)
       .then(setVariant)
-      .catch(() => setError("Could not load variant"))
+      .catch((e: unknown) => setError(e instanceof ApiError ? e.message : "Could not load variant"))
       .finally(() => setLoading(false));
   }, [id]);
 
@@ -61,9 +61,8 @@ export default function VariantDetailPage() {
           </h1>
           <div className="flex items-center gap-3 mt-2">
             <StatusBadge status={variant.status} />
-            <span className="text-xs text-gray-400">
-              {variant.placement ?? "Unknown placement"}
-            </span>
+            {variant.slug && <span className="text-xs font-mono text-gray-400">/l/{variant.slug}</span>}
+            {variant.styleAngle && <span className="text-xs text-gray-400">{variant.styleAngle}</span>}
           </div>
         </div>
         {variant.id && (
@@ -78,21 +77,27 @@ export default function VariantDetailPage() {
         )}
       </div>
 
-      {variant.atoms && (
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <h2 className="font-semibold text-gray-800 mb-4">Creative Atoms</h2>
-          <dl className="grid grid-cols-2 gap-4">
-            {Object.entries(variant.atoms).map(([k, v]) => (
-              <div key={k}>
-                <dt className="text-xs text-gray-400 uppercase tracking-wide">
-                  {k}
-                </dt>
-                <dd className="mt-1 text-sm text-gray-700">{String(v)}</dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-      )}
+      {/* Audit F-21: VariantResponse has no `atoms`/`placement`; show the fields it does carry. */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <h2 className="font-semibold text-gray-800 mb-4">Variant</h2>
+        <dl className="grid grid-cols-2 gap-4">
+          {([
+            ["Blocks", Array.isArray(variant.blocks) ? `${variant.blocks.length} blocks` : "—"],
+            ["Block order", Array.isArray(variant.blockOrder) ? variant.blockOrder.join(" → ") : "—"],
+            ["Match score", variant.matchScore != null ? Number(variant.matchScore).toFixed(2) : "—"],
+            ["Offer", variant.offer?.name ?? variant.offer?.headline ?? (variant.offer ? "set" : "—")],
+            ["Thompson arm", variant.alpha != null ? `alpha=${variant.alpha} beta=${variant.beta} · n=${variant.totalSamples ?? 0}` : "not yet created"],
+            ["Approved", variant.approvedAt ? new Date(variant.approvedAt).toLocaleString() : "—"],
+            ["Rejected", variant.rejectReason ? `${variant.rejectReason}${variant.rejectNote ? ` — ${variant.rejectNote}` : ""}` : "—"],
+            ["Created", variant.createdAt ? new Date(variant.createdAt).toLocaleString() : "—"],
+          ] as [string, string][]).map(([k, v]) => (
+            <div key={k}>
+              <dt className="text-xs text-gray-400 uppercase tracking-wide">{k}</dt>
+              <dd className="mt-1 text-sm text-gray-700 break-words">{v}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
 
       {/* Compliance checklist — vision §12.1a */}
       <div className="bg-white rounded-xl border border-gray-200 p-6">

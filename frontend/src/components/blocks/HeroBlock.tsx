@@ -1,4 +1,5 @@
 "use client";
+import { safeCtaHref } from "@/lib/urls";
 
 export interface HeroBlockData {
   headline: string;
@@ -42,7 +43,7 @@ export default function HeroBlock({ blockId, data, onCta }: Props) {
       )}
       {data.cta_text && (
         <a
-          href={data.cta_url ?? "#form"}
+          href={safeCtaHref(data.cta_url)}
           onClick={onCta}
           className="inline-block bg-blue-600 text-white text-lg font-semibold px-8 py-4 rounded-xl shadow-lg hover:bg-blue-700 transition-colors"
         >

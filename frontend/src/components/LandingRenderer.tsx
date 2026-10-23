@@ -2,11 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Tracker } from "@/lib/tracker";
+import { getRecaptchaToken } from "@/lib/recaptcha";
 import HeroBlock, { HeroBlockData } from "./blocks/HeroBlock";
 import ProblemBlock, { ProblemBlockData } from "./blocks/ProblemBlock";
 import ProofBlock, { ProofBlockData } from "./blocks/ProofBlock";
 import PricingBlock, { PricingBlockData } from "./blocks/PricingBlock";
-import CTABlock, { CTABlockData, LEAD_FORM_ID } from "./blocks/CTABlock";
+import CTABlock, { CTABlockData, LEAD_FORM_ID, HONEYPOT_FIELD, type SubmitState } from "./blocks/CTABlock";
 import FAQBlock, { FAQBlockData } from "./blocks/FAQBlock";
 import BookingCalendar from "./blocks/BookingCalendar";
 import AccreditationCheckbox from "./blocks/AccreditationCheckbox";
@@ -51,6 +52,7 @@ export default function LandingRenderer({
   const mainRef = useRef<HTMLElement>(null);
   const [formData, setFormData] = useState<Record<string, unknown>>({});
   const [previewNote, setPreviewNote] = useState(false);
+  const [submitState, setSubmitState] = useState<SubmitState>({ status: "idle" });
 
   useEffect(() => {
     if (preview || trackerInit.current) return;
@@ -89,12 +91,26 @@ export default function LandingRenderer({
     if (!preview) Tracker.track("FORM_START", {}, { variantId });
   };
 
-  const trackFormSubmit = async (values: Record<string, string>) => {
+  /**
+   * Audit F-17: the lead form reports sending / sent / error, clears itself after success (no
+   * duplicate on a second click), drops honeypot submissions silently and attaches the reCAPTCHA
+   * token (body `recaptchaToken` + `X-Recaptcha-Token` header, which RecaptchaFilter verifies).
+   */
+  const trackFormSubmit = async (values: Record<string, string>): Promise<boolean> => {
     if (preview) {
       setPreviewNote(true);
-      return;
+      return false;
     }
-    Tracker.track("FORM_SUBMIT", { fields: Object.keys(values) }, { variantId });
+    if (submitState.status === "sending") return false;
+    // Honeypot: a hidden field no human fills in. Pretend success, send nothing.
+    if ((values[HONEYPOT_FIELD] ?? "").trim() !== "") {
+      setSubmitState({ status: "done" });
+      return true;
+    }
+    setSubmitState({ status: "sending" });
+    Tracker.track("FORM_SUBMIT", { fields: Object.keys(values).filter((k) => k !== HONEYPOT_FIELD) }, { variantId });
+
+    const recaptchaToken = await getRecaptchaToken("lead_form");
 
     // Audit 4.9: the lead data itself was never sent anywhere. Qualifier controls
     // (accreditation, ticket) are bound to the form via the `form` attribute, so they are in
@@ -114,17 +130,30 @@ export default function LandingRenderer({
       ticket_bucket: values.ticket_bucket || (formData.ticket_bucket as string | undefined) || null,
       consent_level: Tracker.consent(),
       ...Tracker.utms(),
+      ...(recaptchaToken ? { recaptchaToken } : {}),
     };
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    // The header is what RecaptchaFilter reads. Cross-origin (tenant domain / runner) the platform's
+    // CORS allow-list must include X-Recaptcha-Token, otherwise the preflight — and the lead — fails;
+    // until it does, send the header on the same origin only (the token still travels in the body).
+    if (recaptchaToken && sameOrigin(API_BASE)) headers["X-Recaptcha-Token"] = recaptchaToken;
+    let ok = false;
     try {
-      await fetch(`${API_BASE}/public/form/submit`, {
+      const res = await fetch(`${API_BASE}/public/form/submit`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify(submission),
         keepalive: true,
       });
+      ok = res.ok;
+      if (!ok) {
+        setSubmitState({ status: "error", message: await errorText(res) });
+      }
     } catch {
-      // Submission failure is logged server-side via CRM; never crash the landing page
+      setSubmitState({ status: "error", message: "Network error — please try again." });
     }
+    if (!ok) return false;
+    setSubmitState({ status: "done" });
     if (decisionId) {
       try {
         await fetch(`${API_BASE}/public/reward`, {
@@ -137,6 +166,7 @@ export default function LandingRenderer({
         // Reward failure must never crash the landing page
       }
     }
+    return true;
   };
 
   return (
@@ -193,6 +223,7 @@ export default function LandingRenderer({
                 data={block.data as unknown as CTABlockData}
                 onFormStart={trackFormStart}
                 onFormSubmit={trackFormSubmit}
+                submitState={submitState}
               />
             );
           case "FAQ":
@@ -289,4 +320,26 @@ export default function LandingRenderer({
       })}
     </main>
   );
+}
+
+function sameOrigin(apiBase: string): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return new URL(apiBase, window.location.href).origin === window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
+/** Human-readable reason from an error response (`detail` → `message` → `error` → status). */
+async function errorText(res: Response): Promise<string> {
+  try {
+    const body = await res.json();
+    for (const k of ["detail", "message", "error"]) {
+      if (typeof body?.[k] === "string" && body[k].trim()) return body[k];
+    }
+  } catch {
+    // not JSON
+  }
+  return res.status === 429 ? "Too many requests — please try again in a minute." : `Submission failed (${res.status}).`;
 }

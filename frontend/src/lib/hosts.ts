@@ -9,6 +9,7 @@
  *                   an entry without a port matches any port on that host.
  *   LANDING_RUNNER  "1" → this Next.js instance serves landings only (runs on the client's server).
  *   RUNNER_KEY      per-tenant key issued in Settings → Landing domains; sent as X-Runner-Key.
+ *   TRUST_PROXY     "1" → honour X-Forwarded-Host (only behind our own reverse proxy / ingress).
  */
 
 export const PLATFORM_HOSTS: string[] = (process.env.PLATFORM_HOSTS ?? "localhost:3000")
@@ -19,9 +20,15 @@ export const PLATFORM_HOSTS: string[] = (process.env.PLATFORM_HOSTS ?? "localhos
 export const RUNNER = process.env.LANDING_RUNNER === "1";
 export const RUNNER_KEY = process.env.RUNNER_KEY ?? "";
 
-/** Lower-cased host from `x-forwarded-host` (first value) or `host`; "" when neither is present. */
+/**
+ * Audit F-18: `X-Forwarded-Host` is honoured only behind a trusted reverse proxy (TRUST_PROXY=1);
+ * otherwise any client could pick the tenant by sending the header.
+ */
+export const TRUST_PROXY = process.env.TRUST_PROXY === "1";
+
+/** Lower-cased host from `x-forwarded-host` (first value, trusted proxy only) or `host`; "" when neither is present. */
 export function requestHost(headers: { get(name: string): string | null }): string {
-  const fwd = headers.get("x-forwarded-host");
+  const fwd = TRUST_PROXY ? headers.get("x-forwarded-host") : null;
   const raw = (fwd ? fwd.split(",")[0] : headers.get("host")) ?? "";
   return raw.trim().toLowerCase();
 }

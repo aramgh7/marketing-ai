@@ -1,21 +1,25 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import StatCard from "@/components/admin/StatCard";
-import { apiFetch } from "@/lib/api";
+import LoadError from "@/components/admin/LoadError";
+import { ApiError, apiFetch } from "@/lib/api";
 
 // Audit 7.6: was a server component with no Authorization header -> every widget empty.
-async function fetchJson(path: string): Promise<any> {
+// Audit F-19: each widget's failure is reported (with Retry) instead of rendering as "no data".
+type Loaded = { data: any; error: string | null };
+async function fetchJson(path: string): Promise<Loaded> {
   try {
-    return await apiFetch<any>(path);
-  } catch {
-    return null;
+    return { data: await apiFetch<any>(path), error: null };
+  } catch (e) {
+    return { data: null, error: e instanceof ApiError ? e.message : "request failed" };
   }
 }
 
 export default function Month1Page() {
-  const [data, setData] = useState<any[] | null>(null);
+  const [data, setData] = useState<Loaded[] | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setData(null);
     Promise.all([
       fetchJson("/month1/pixel-protection"),
       fetchJson("/month1/cost-per-held-call"),
@@ -24,8 +28,14 @@ export default function Month1Page() {
     ]).then(setData);
   }, []);
 
+  useEffect(() => { load(); }, [load]);
+
   if (!data) return <div className="p-8 text-gray-400">Loading Month-1 deliverables…</div>;
-  const [pixelData, costData, noshowData, openItems] = data;
+  const [pixelData, costData, noshowData, openItems] = data.map((d) => d.data);
+  const errors = [
+    ["Pixel protection", data[0].error], ["Cost per held call", data[1].error],
+    ["No-show rate", data[2].error], ["Open items", data[3].error],
+  ].filter(([, e]) => e) as [string, string][];
 
   const pp      = pixelData  ?? {};
   const cost    = costData   ?? {};
@@ -39,15 +49,23 @@ export default function Month1Page() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-bold text-white">Month-1 Deliverables</h1>
-        <p className="text-gray-400 text-sm mt-1">
+        <h1 className="text-2xl font-bold text-gray-900">Month-1 Deliverables</h1>
+        <p className="text-gray-500 text-sm mt-1">
           Client #1 — InteliGel investor funnel (Reg D 506(c))
         </p>
       </div>
 
+      {errors.length > 0 && (
+        <LoadError
+          title="Some widgets could not be loaded"
+          message={errors.map(([w, e]) => `${w}: ${e}`).join(" · ")}
+          onRetry={load}
+        />
+      )}
+
       {/* ── Widget 1: Pixel Protection ──────────────────────────────────────── */}
       <section>
-        <h2 className="text-lg font-semibold text-white mb-3">Pixel Protection</h2>
+        <h2 className="text-lg font-semibold text-gray-900 mb-3">Pixel Protection</h2>
         <p className="text-xs text-gray-500 mb-4">
           Leads NOT sent to the investor pixel this week (last 7 days).
         </p>
@@ -74,7 +92,7 @@ export default function Month1Page() {
 
       {/* ── Widget 2: Cost per CALL_HELD ────────────────────────────────────── */}
       <section>
-        <h2 className="text-lg font-semibold text-white mb-3">
+        <h2 className="text-lg font-semibold text-gray-900 mb-3">
           Cost per CALL_HELD by Creative
         </h2>
         <p className="text-xs text-gray-500 mb-4">
@@ -84,8 +102,8 @@ export default function Month1Page() {
           <p className="text-gray-500 text-sm">No held-call data yet.</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left text-gray-300">
-              <thead className="text-xs uppercase text-gray-500 border-b border-gray-700">
+            <table className="w-full text-sm text-left text-gray-700">
+              <thead className="text-xs uppercase text-gray-500 border-b border-gray-200">
                 <tr>
                   <th className="py-2 pr-4">Creative</th>
                   <th className="py-2 pr-4 text-right">Held Calls</th>
@@ -95,7 +113,7 @@ export default function Month1Page() {
               </thead>
               <tbody>
                 {creatives.map((c: any) => (
-                  <tr key={c.creative_id} className="border-b border-gray-800">
+                  <tr key={c.creative_id} className="border-b border-gray-100">
                     <td className="py-2 pr-4 truncate max-w-xs">
                       {c.creative_name ?? c.creative_id?.slice(0, 8)}
                     </td>
@@ -104,9 +122,9 @@ export default function Month1Page() {
                       {c.cost_per_held_call != null ? `$${c.cost_per_held_call}` : "—"}
                     </td>
                     <td className={`py-2 text-right font-medium ${
-                      c.vs_anchor_pct > 20  ? "text-red-400"
-                    : c.vs_anchor_pct === 0 ? "text-green-400"
-                    : "text-yellow-400"
+                      c.vs_anchor_pct > 20  ? "text-red-600"
+                    : c.vs_anchor_pct === 0 ? "text-green-600"
+                    : "text-yellow-600"
                     }`}>
                       {c.vs_anchor_pct != null
                         ? (c.vs_anchor_pct === 0 ? "anchor" : `+${c.vs_anchor_pct}%`)
@@ -122,7 +140,7 @@ export default function Month1Page() {
 
       {/* ── Widget 3: No-show rate per follow-up variant ─────────────────────── */}
       <section>
-        <h2 className="text-lg font-semibold text-white mb-3">
+        <h2 className="text-lg font-semibold text-gray-900 mb-3">
           No-Show Rate by Follow-up Variant
         </h2>
         <p className="text-xs text-gray-500 mb-4">Last 30 days.</p>
@@ -130,8 +148,8 @@ export default function Month1Page() {
           <p className="text-gray-500 text-sm">No follow-up assignment data yet.</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left text-gray-300">
-              <thead className="text-xs uppercase text-gray-500 border-b border-gray-700">
+            <table className="w-full text-sm text-left text-gray-700">
+              <thead className="text-xs uppercase text-gray-500 border-b border-gray-200">
                 <tr>
                   <th className="py-2 pr-4">Variant</th>
                   <th className="py-2 pr-4 text-right">Assigned</th>
@@ -141,11 +159,11 @@ export default function Month1Page() {
               </thead>
               <tbody>
                 {variants.map((v: any) => (
-                  <tr key={v.variant_id} className="border-b border-gray-800">
+                  <tr key={v.variant_id} className="border-b border-gray-100">
                     <td className="py-2 pr-4">
                       {v.variant_name}
                       {v.is_control && (
-                        <span className="ml-2 text-xs bg-blue-900 text-blue-300 px-1 rounded">
+                        <span className="ml-2 text-xs bg-blue-50 text-blue-700 px-1 rounded">
                           control
                         </span>
                       )}
@@ -158,7 +176,7 @@ export default function Month1Page() {
                       {v.is_control
                         ? "—"
                         : v.days_to_significance_est === "already_sig"
-                        ? <span className="text-green-400">significant</span>
+                        ? <span className="text-green-600">significant</span>
                         : v.days_to_significance_est != null
                         ? `~${v.days_to_significance_est}d`
                         : "—"}
@@ -173,11 +191,11 @@ export default function Month1Page() {
 
       {/* ── Open Items ───────────────────────────────────────────────────────── */}
       <section>
-        <h2 className="text-lg font-semibold text-white mb-1">Open Items</h2>
+        <h2 className="text-lg font-semibold text-gray-900 mb-1">Open Items</h2>
         <p className="text-xs text-gray-500 mb-4">
           {oi.total} items · {oi.high_impact_open} high-impact open
           {oi.legal_blocked > 0 && (
-            <span className="ml-2 text-yellow-400">
+            <span className="ml-2 text-yellow-600">
               · {oi.legal_blocked} legal-blocked
             </span>
           )}
@@ -186,7 +204,7 @@ export default function Month1Page() {
           {items.map((item: any) => (
             <div
               key={item.id}
-              className="bg-gray-900 rounded-lg p-4 border border-gray-800"
+              className="bg-white rounded-lg p-4 border border-gray-200"
             >
               <div className="flex items-start justify-between gap-4">
                 <div>
@@ -196,15 +214,15 @@ export default function Month1Page() {
                   <span
                     className={`text-xs px-1.5 py-0.5 rounded mr-2 ${
                       item.impact === "HIGH"
-                        ? "bg-red-900 text-red-300"
+                        ? "bg-red-50 text-red-700"
                         : item.impact === "MEDIUM"
-                        ? "bg-yellow-900 text-yellow-300"
-                        : "bg-gray-700 text-gray-400"
+                        ? "bg-yellow-50 text-yellow-700"
+                        : "bg-gray-100 text-gray-600"
                     }`}
                   >
                     {item.impact}
                   </span>
-                  <span className="text-white font-medium">{item.title}</span>
+                  <span className="text-gray-900 font-medium">{item.title}</span>
                 </div>
                 <span className="text-xs text-gray-500 shrink-0">
                   {item.owner}
@@ -212,7 +230,7 @@ export default function Month1Page() {
               </div>
               <p className="text-gray-400 text-xs mt-2">{item.description}</p>
               {item.note && (
-                <p className="text-yellow-400 text-xs mt-1 font-medium">
+                <p className="text-yellow-600 text-xs mt-1 font-medium">
                   ⚠ {item.note}
                 </p>
               )}

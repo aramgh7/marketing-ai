@@ -24,6 +24,7 @@ async function fetchVariant(slug: string): Promise<VariantData | null> {
   try {
     const res = await fetch(`${API_BASE}/public/l/${slug}${q}`, {
       next: { revalidate: 60 }, // ISR: revalidate every 60s
+      signal: AbortSignal.timeout(5_000), // audit F-8: a hung API must not hang the landing
     });
     if (!res.ok) return null;
     return res.json();

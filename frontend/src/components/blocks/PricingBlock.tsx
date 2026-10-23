@@ -1,4 +1,5 @@
 "use client";
+import { safeCtaHref } from "@/lib/urls";
 
 export interface PricingTier {
   name: string;
@@ -70,7 +71,7 @@ export default function PricingBlock({ blockId, data, onCta }: Props) {
               </ul>
               {tier.cta_text && (
                 <a
-                  href={tier.cta_url ?? "#form"}
+                  href={safeCtaHref(tier.cta_url)}
                   onClick={onCta}
                   className={`block text-center py-3 px-4 rounded-xl font-semibold transition-colors ${
                     tier.highlighted

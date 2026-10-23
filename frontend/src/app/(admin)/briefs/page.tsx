@@ -1,30 +1,38 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import StatusBadge from "@/components/admin/StatusBadge";
-import { apiFetch } from "@/lib/api";
+import LoadError from "@/components/admin/LoadError";
+import { ApiError, apiFetch } from "@/lib/api";
 
 export default function BriefsPage() {
   const [briefs, setBriefs]   = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setLoading(true);
+    setLoadError(null);
     apiFetch<any[]>("/api/v1/briefs")
-      .then(setBriefs)
-      .catch(() => setBriefs([]))
+      .then((rows) => setBriefs(Array.isArray(rows) ? rows : []))
+      .catch((e: unknown) => setLoadError(e instanceof ApiError ? e.message : "Could not load briefs"))
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => { load(); }, [load]);
+
   async function approve(id: string) {
+    setActionError(null);
     try {
-      await apiFetch(`/api/v1/briefs/${id}/approve`, { method: "PUT" });
+      const updated = await apiFetch<any>(`/api/v1/briefs/${id}/approve`, { method: "PUT" });
       setBriefs((prev) =>
         prev.map((b) =>
-          b.id === id ? { ...b, status: "APPROVED" } : b
+          b.id === id ? { ...b, status: updated?.status ?? "APPROVED" } : b
         )
       );
-    } catch {
-      alert("Approval failed");
+    } catch (e: unknown) {
+      setActionError(e instanceof ApiError ? e.message : "Approval failed");
     }
   }
 
@@ -45,8 +53,12 @@ export default function BriefsPage() {
         </Link>
       </div>
 
+      {actionError && <p className="text-sm text-red-700 rounded bg-red-50 border border-red-200 p-3">{actionError}</p>}
+
       {loading ? (
         <p className="text-gray-400 text-sm">Loading...</p>
+      ) : loadError ? (
+        <LoadError title="Could not load briefs" message={loadError} onRetry={load} />
       ) : briefs.length === 0 ? (
         <p className="text-gray-400 text-sm py-8">No briefs yet.</p>
       ) : (
@@ -57,7 +69,7 @@ export default function BriefsPage() {
                 <th className="px-6 py-3 text-left">Brief</th>
                 <th className="px-6 py-3 text-left">Type</th>
                 <th className="px-6 py-3 text-left">Status</th>
-                <th className="px-6 py-3 text-left">Cluster</th>
+                <th className="px-6 py-3 text-left">Creative type</th>
                 <th className="px-6 py-3 text-left">Created</th>
                 <th className="px-6 py-3 text-left">Actions</th>
               </tr>
@@ -67,11 +79,11 @@ export default function BriefsPage() {
                 <tr key={b.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4">
                     <div className="font-medium text-gray-900 max-w-xs truncate">
-                      {b.title ?? b.goal ?? b.id}
+                      {b.title ?? b.id}
                     </div>
                   </td>
                   <td className="px-6 py-4 text-gray-500">
-                    {b.briefType ?? b.brief_type ?? "VIDEO"}
+                    {b.briefType ?? "—"}
                   </td>
                   <td className="px-6 py-4">
                     <StatusBadge
@@ -81,10 +93,10 @@ export default function BriefsPage() {
                     />
                   </td>
                   <td className="px-6 py-4 text-gray-400 text-xs">
-                    {b.clusterLabel ?? b.cluster_label ?? "—"}
+                    {b.creativeType ?? "—"}
                   </td>
                   <td className="px-6 py-4 text-gray-400">
-                    {(b.createdAt ?? b.created_at) ? new Date(b.createdAt ?? b.created_at).toLocaleDateString() : "—"}
+                    {b.createdAt ? new Date(b.createdAt).toLocaleDateString() : "—"}
                   </td>
                   <td className="px-6 py-4 flex gap-3">
                     {(b.status ?? "DRAFT") === "DRAFT" && (

@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { ApiError, apiFetch } from "@/lib/api";
+import { ApiError, FORBIDDEN_MESSAGE, apiFetch, isForbidden } from "@/lib/api";
 
 /** GET /tenants/me/autonomy contract (roadmap 9-3 / 9-5). */
 interface AutonomyState {
@@ -88,7 +88,9 @@ export default function AutonomyPage() {
       setInfo(`Autonomy level is now ${res?.level ?? target}.`);
       load();
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
+      if (isForbidden(err)) {
+        setError(`${FORBIDDEN_MESSAGE}: changing the autonomy level needs the ADMIN role.`);
+      } else if (err instanceof ApiError && err.status === 409) {
         setError(err.message || "Upgrade blocked by the OPE gate.");
       } else {
         setError(err instanceof ApiError ? err.message : "Update failed");
@@ -108,7 +110,7 @@ export default function AutonomyPage() {
       setInfo(`OPE finished: ${res?.verdict ?? "?"}${res?.message ? ` — ${res.message}` : ""}`);
       load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "OPE run failed");
+      setError(isForbidden(err) ? `${FORBIDDEN_MESSAGE}: running OPE needs the ADMIN role.` : err instanceof ApiError ? err.message : "OPE run failed");
     } finally {
       setRunning(false);
     }

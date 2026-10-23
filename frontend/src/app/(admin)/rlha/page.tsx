@@ -35,12 +35,16 @@ export default function RlhaPage() {
   useEffect(() => { load(); }, []);
 
   async function toggle(c: Correction) {
-    await apiFetch(`/api/v1/rlha/corrections/${c.id}`, { method: "PATCH", body: JSON.stringify({ use_as_few_shot: !c.use_as_few_shot }) });
-    load();
+    try {
+      await apiFetch(`/api/v1/rlha/corrections/${c.id}`, { method: "PATCH", body: JSON.stringify({ use_as_few_shot: !c.use_as_few_shot }) });
+      load();
+    } catch (e: any) { setError(e?.message ?? "update failed"); }
   }
   async function setReason(c: Correction, reason: string) {
-    await apiFetch(`/api/v1/rlha/corrections/${c.id}`, { method: "PATCH", body: JSON.stringify({ edit_reason: reason }) });
-    load();
+    try {
+      await apiFetch(`/api/v1/rlha/corrections/${c.id}`, { method: "PATCH", body: JSON.stringify({ edit_reason: reason }) });
+      load();
+    } catch (e: any) { setError(e?.message ?? "update failed"); }
   }
   async function addPair() {
     try {

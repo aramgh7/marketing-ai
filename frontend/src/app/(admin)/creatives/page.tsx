@@ -1,22 +1,29 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import StatusBadge from "@/components/admin/StatusBadge";
-import { apiFetch } from "@/lib/api";
+import LoadError from "@/components/admin/LoadError";
+import { ApiError, apiFetch } from "@/lib/api";
 
-const STATUSES = ["ALL", "PENDING_REVIEW", "REVIEW", "ACTIVE", "DRAFT", "PAUSED"];
+/** LandingVariant statuses (entity: DRAFT -> REVIEW -> ACTIVE, also PAUSED, ARCHIVED). */
+const STATUSES = ["ALL", "DRAFT", "REVIEW", "ACTIVE", "PAUSED", "ARCHIVED"];
 
 export default function CreativesPage() {
   const [variants, setVariants] = useState<any[]>([]);
   const [loading, setLoading]   = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [filter, setFilter]     = useState("ALL");
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setLoading(true);
+    setLoadError(null);
     apiFetch<any[]>("/api/v1/landings")
-      .then(setVariants)
-      .catch(() => setVariants([]))
+      .then((rows) => setVariants(Array.isArray(rows) ? rows : []))
+      .catch((e: unknown) => setLoadError(e instanceof ApiError ? e.message : "Could not load variants"))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => { load(); }, [load]);
 
   const filtered =
     filter === "ALL"
@@ -26,7 +33,7 @@ export default function CreativesPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Creatives & Variants</h1>
+        <h1 className="text-2xl font-bold text-gray-900">Landing variants</h1>
         <p className="text-sm text-gray-500 mt-1">
           Review and approve variants before launch
         </p>
@@ -50,6 +57,8 @@ export default function CreativesPage() {
 
       {loading ? (
         <p className="text-gray-400 text-sm">Loading...</p>
+      ) : loadError ? (
+        <LoadError title="Could not load variants" message={loadError} onRetry={load} />
       ) : filtered.length === 0 ? (
         <p className="text-gray-400 text-sm py-8">No variants found.</p>
       ) : (
@@ -59,7 +68,7 @@ export default function CreativesPage() {
               <tr>
                 <th className="px-6 py-3 text-left">Variant</th>
                 <th className="px-6 py-3 text-left">Status</th>
-                <th className="px-6 py-3 text-left">Placement</th>
+                <th className="px-6 py-3 text-left">Slug / style</th>
                 <th className="px-6 py-3 text-left">Actions</th>
               </tr>
             </thead>
@@ -76,7 +85,8 @@ export default function CreativesPage() {
                     <StatusBadge status={v.status} />
                   </td>
                   <td className="px-6 py-4 text-gray-500">
-                    {v.placement ?? "—"}
+                    {v.slug ? <span className="font-mono text-xs">/l/{v.slug}</span> : "—"}
+                    {v.styleAngle && <span className="ml-2 text-xs text-gray-400">{v.styleAngle}</span>}
                   </td>
                   <td className="px-6 py-4">
                     <Link

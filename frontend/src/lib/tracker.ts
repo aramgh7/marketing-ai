@@ -18,12 +18,24 @@ const API_BASE =
 
 const BATCH_INTERVAL_MS = 5_000;
 const MAX_BATCH_SIZE = 100;
+/** Audit F-9: undelivered batches go back to the queue; the queue itself is bounded (oldest dropped). */
+const MAX_QUEUE_SIZE = 500;
 
 // Require consent="full" for behavioral signals (vision §7.2 — all signals in §7.2 table)
 const BEHAVIORAL = new Set([
   "SCROLL", "HOVER", "BLOCK_VIEW", "CLICK",
   "VIDEO_PROGRESS", "FIRST_CLICK", "QUIZ_ANSWER", "CALC_INTERACT",
   "RETURN_VISIT",  // vision §7.2 "повторные визиты" = behavioral
+]);
+
+/**
+ * Audit F-26: these are behavioural in nature but are deliberately sent with consent="analytics_only"
+ * as well — they describe what the visitor opened (a material, the data room, a calendar slot), which
+ * the funnel reports need as conversion-adjacent steps. PAGE_VIEW is the impression denominator.
+ * Kept as the current behaviour on purpose; move an entry into BEHAVIORAL to gate it behind "full".
+ */
+export const ANALYTICS_ONLY_ALLOWED = new Set([
+  "PAGE_VIEW", "DATAROOM_OPEN", "MATERIAL_VIEW", "CALENDAR_OPEN", "SLOT_SELECTED",
 ]);
 
 // Always allowed (sent even when consent="none")
@@ -63,6 +75,13 @@ class EventTracker {
   private scrollAttached = false;
   private utms_: Record<string, string> = {};
   private pageViewSent = false;
+  /**
+   * Audit F-16: capture the `_creative` cookie once at init, then clear it so the edge
+   * middleware can re-assign the creative on the next page request (e.g. a return visit
+   * through a different ad).  Every event on this page load still carries the correct
+   * creativeId via this in-memory field instead of re-reading the (now-cleared) cookie.
+   */
+  private creativeId: string | null = null;
 
   /** Call once on landing page mount. */
   init(tenantId: string, sessionId: string): void {
@@ -70,6 +89,10 @@ class EventTracker {
     this.sessionId = sessionId;
     this.consentLevel = getConsentLevel();
     this.utms_ = extractUtms();
+
+    // Audit F-16: read and consume the _creative cookie set by the edge middleware
+    this.creativeId = readCookie("_creative");
+    if (this.creativeId) clearCookie("_creative");
 
     // React immediately when consent changes
     onConsentChange((level) => {
@@ -97,8 +120,9 @@ class EventTracker {
   ): boolean {
     if (!this.isAllowed(eventType)) return false;
 
-    // Roadmap Phase 11: the creative that brought this visitor (set by the edge middleware after /decide)
-    const creativeId = opts?.creativeId ?? readCookie("_creative");
+    // Roadmap Phase 11: the creative that brought this visitor (set by the edge middleware after /decide).
+    // Audit F-16: use the in-memory value captured at init (cookie was cleared there).
+    const creativeId = opts?.creativeId ?? this.creativeId;
 
     const ev: RawEvent = {
       sessionId: this.sessionId,
@@ -116,6 +140,7 @@ class EventTracker {
     };
 
     this.queue.push(ev);
+    if (this.queue.length > MAX_QUEUE_SIZE) this.queue.shift(); // audit F-9: bounded queue
     if (this.queue.length >= MAX_BATCH_SIZE) void this.flush();
     return true;
   }
@@ -134,33 +159,65 @@ class EventTracker {
     return out;
   }
 
-  async flush(): Promise<void> {
+  /**
+   * Send the queued events. On a network error or a 5xx the batch is put back at the head of the
+   * queue for the next flush (audit F-9); 4xx answers are not retried (the batch is malformed or
+   * rejected). `unload` = page is leaving: `navigator.sendBeacon` with a JSON Blob (survives the
+   * unload; same-origin needs no preflight), falling back to `fetch keepalive`.
+   */
+  async flush(unload = false): Promise<void> {
     if (this.queue.length === 0) return;
-    const batch = this.queue.splice(0);
+    if (this.flushing && !unload) return; // one in-flight batch at a time; unload always drains
+    const batch = this.queue.splice(0, MAX_BATCH_SIZE);
+    const body = JSON.stringify({ events: batch });
 
+    if (unload && typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+      // EventController accepts JSON only (`@RequestBody`, no text/plain), so the Blob must be
+      // application/json; cross-origin that means a preflight the browser runs on its own.
+      try {
+        if (navigator.sendBeacon(`${API_BASE}/events`, new Blob([body], { type: "application/json" }))) return;
+      } catch {
+        // fall through to fetch keepalive
+      }
+    }
+
+    this.flushing = true;
     try {
-      await fetch(`${API_BASE}/events`, {
+      const res = await fetch(`${API_BASE}/events`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ events: batch }),
+        body,
         keepalive: true, // delivers even during page unload
       });
+      if (res.status >= 500) this.requeue(batch);
     } catch {
-      // Silent — analytics failure must never crash the landing page
+      // Silent — analytics failure must never crash the landing page; keep the batch for a retry
+      this.requeue(batch);
+    } finally {
+      this.flushing = false;
     }
   }
 
   destroy(): void {
     if (this.timer) clearInterval(this.timer);
-    void this.flush();
+    void this.flush(true);
   }
 
   // ─── Private ────────────────────────────────────────────────────────────────
+
+  private flushing = false;
+
+  /** Put an undelivered batch back in front of newer events, bounded by MAX_QUEUE_SIZE (oldest dropped). */
+  private requeue(batch: RawEvent[]): void {
+    this.queue.unshift(...batch);
+    if (this.queue.length > MAX_QUEUE_SIZE) this.queue.splice(0, this.queue.length - MAX_QUEUE_SIZE);
+  }
 
   private isAllowed(eventType: string): boolean {
     if (ALWAYS_ALLOWED.has(eventType)) return true;
     if (BEHAVIORAL.has(eventType) && this.consentLevel !== "full") return false;
     if (this.consentLevel === "none") return false;
+    // "analytics_only" (or "full"): PAGE_VIEW & co. from ANALYTICS_ONLY_ALLOWED, plus any other non-behavioural type
     return true;
   }
 
@@ -207,9 +264,10 @@ class EventTracker {
 
   private attachLeaveListeners(): void {
     if (typeof window === "undefined") return;
-    window.addEventListener("beforeunload", () => void this.flush());
+    window.addEventListener("beforeunload", () => void this.flush(true));
+    window.addEventListener("pagehide", () => void this.flush(true));
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "hidden") void this.flush();
+      if (document.visibilityState === "hidden") void this.flush(true);
     });
   }
 
@@ -231,6 +289,17 @@ function readCookie(name: string): string | null {
     // cookie access can throw in sandboxed frames
   }
   return null;
+}
+
+/** Audit F-16: expire a cookie by setting max-age=0 so the browser removes it immediately. */
+function clearCookie(name: string): void {
+  if (typeof document === "undefined") return;
+  try {
+    const secure = window.location.protocol === "https:" ? "; secure" : "";
+    document.cookie = `${name}=; max-age=0; path=/${secure}; samesite=lax`;
+  } catch {
+    // sandboxed frames — best effort
+  }
 }
 
 function extractUtms(): Record<string, string> {

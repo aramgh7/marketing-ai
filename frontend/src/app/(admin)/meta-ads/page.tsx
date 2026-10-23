@@ -1,6 +1,7 @@
 "use client";
 import { Fragment, useCallback, useEffect, useState } from "react";
-import { API_BASE, apiFetch } from "@/lib/api";
+import { API_BASE, ApiError, apiFetch } from "@/lib/api";
+import LoadError from "@/components/admin/LoadError";
 
 /**
  * Roadmap Phase 11 (`.ai/creative-publishing.md`): the only road into Meta goes through the platform.
@@ -22,10 +23,13 @@ type AdMapRow = {
   destination_url: string | null; url_tags: string | null; source: string; status: string;
   drift: Record<string, { expected?: unknown; actual?: unknown }> | null; last_seen_at: string | null; created_at: string;
 };
+/** GET /meta/linkage-health (MetaAdMapController): snake_case keys — audit F-10. */
 type Health = {
-  healthy?: boolean; activeAds?: number; unmanaged?: number; missingTags?: number; drift?: number;
-  unmanaged_count?: number; drift_count?: number;
+  healthy?: boolean; active_ads?: number; unmanaged_count?: number; missing_tags_count?: number; drift_count?: number;
+  summary?: string | null;
 };
+/** GET /tenants/me/settings — only the key this page needs (audit F-13). */
+type TenantSettings = { creative_download_mode?: "FINAL" | "PREVIEW_ONLY" | string | null };
 type Campaign = { id: string; name: string; metaCampaignId: string | null; status: string };
 type AdSet = { id: string; campaignId: string; metaAdSetId: string | null; status: string; creativeId: string | null };
 type Variant = { id: string; slug: string; name: string; status: string };
@@ -70,34 +74,47 @@ export default function MetaAdsPage() {
   const [domains, setDomains] = useState<Domain[]>([]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [loadErrors, setLoadErrors] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [downloadMode, setDownloadMode] = useState<string>("FINAL");
   const [publishing, setPublishing] = useState<string | null>(null); // creative id with the panel open
   const [busy, setBusy] = useState<string | null>(null);
   const [expandedDrift, setExpandedDrift] = useState<string | null>(null);
   const [linkChoice, setLinkChoice] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
-    const safe = async <T,>(p: Promise<T>, fallback: T): Promise<T> => { try { return await p; } catch { return fallback; } };
-    const [c, m, h, camps, vars, doms] = await Promise.all([
-      safe(apiFetch<Creative[]>("/api/v1/creatives"), []),
-      safe(apiFetch<AdMapRow[]>("/api/v1/meta/ad-map"), []),
-      safe(apiFetch<Health>("/api/v1/meta/linkage-health"), null as unknown as Health),
-      safe(apiFetch<Campaign[]>("/api/v1/campaigns"), []),
-      safe(apiFetch<Variant[]>("/api/v1/landings?status=ACTIVE"), []),
-      safe(apiFetch<Domain[]>("/api/v1/domains"), []),
+    // Audit F-19: a failed load is reported per source instead of silently showing an empty page.
+    const failed: string[] = [];
+    const safe = async <T,>(label: string, p: Promise<T>, fallback: T): Promise<T> => {
+      try { return await p; }
+      catch (e) { failed.push(`${label}: ${e instanceof ApiError ? e.message : "request failed"}`); return fallback; }
+    };
+    setLoading(true);
+    const [c, m, h, camps, vars, doms, settings] = await Promise.all([
+      safe("creatives", apiFetch<Creative[]>("/api/v1/creatives"), []),
+      safe("ad map", apiFetch<AdMapRow[]>("/api/v1/meta/ad-map"), []),
+      safe("linkage health", apiFetch<Health>("/api/v1/meta/linkage-health"), null as unknown as Health),
+      safe("campaigns", apiFetch<Campaign[]>("/api/v1/campaigns"), []),
+      safe("landings", apiFetch<Variant[]>("/api/v1/landings?status=ACTIVE"), []),
+      safe("domains", apiFetch<Domain[]>("/api/v1/domains"), []),
+      safe("settings", apiFetch<TenantSettings>("/api/v1/tenants/me/settings"), null as unknown as TenantSettings),
     ]);
-    setCreatives(c.filter((x) => x.status !== "ARCHIVED"));
-    setAdMap(m);
+    setCreatives((c ?? []).filter((x) => x.status !== "ARCHIVED"));
+    setAdMap(m ?? []);
     setHealth(h);
-    setCampaigns(camps);
-    setVariants(vars);
-    setDomains(doms.filter((d) => d.status === "VERIFIED" && d.kind === "LANDING"));
+    setCampaigns(camps ?? []);
+    setVariants(vars ?? []);
+    setDomains((doms ?? []).filter((d) => d.status === "VERIFIED" && d.kind === "LANDING"));
+    setDownloadMode(String(settings?.creative_download_mode ?? "FINAL").toUpperCase());
     // ad sets of every campaign (small lists)
     const sets: AdSet[] = [];
-    for (const cp of camps) {
-      const s = await safe(apiFetch<AdSet[]>(`/api/v1/ad-sets?campaignId=${cp.id}`), []);
+    for (const cp of camps ?? []) {
+      const s = await safe(`ad sets of ${cp.name}`, apiFetch<AdSet[]>(`/api/v1/ad-sets?campaignId=${cp.id}`), []);
       sets.push(...s);
     }
     setAdSets(sets);
+    setLoadErrors(failed);
+    setLoading(false);
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -130,9 +147,41 @@ export default function MetaAdsPage() {
   }
 
   const healthy = health?.healthy ?? true;
-  const unmanagedCount = health?.unmanaged_count ?? health?.unmanaged ?? adMap.filter((r) => r.status === "UNMANAGED").length;
-  const driftCount = health?.drift_count ?? health?.drift ?? adMap.filter((r) => r.status === "DRIFT").length;
-  const missingTags = health?.missingTags ?? 0;
+  const unmanagedCount = health?.unmanaged_count ?? adMap.filter((r) => r.status === "UNMANAGED").length;
+  const driftCount = health?.drift_count ?? adMap.filter((r) => r.status === "DRIFT").length;
+  const missingTags = health?.missing_tags_count ?? 0;
+  const previewOnly = downloadMode === "PREVIEW_ONLY";
+
+  /**
+   * Audit F-13: `/files/...` answers 403 + `X-Error` with PREVIEW_ONLY; a plain link would open an
+   * empty tab. Fetch with the token, surface the reason, and open the blob only on success.
+   */
+  async function download(href: string, title: string | null) {
+    setError("");
+    try {
+      const token = typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
+      const res = await fetch(href, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      if (!res.ok) {
+        let detail = res.headers.get("X-Error") ?? "";
+        if (!detail) {
+          try { const b = await res.json(); detail = b?.detail ?? b?.message ?? b?.error ?? ""; } catch { /* no body */ }
+        }
+        setError(detail || (res.status === 403 ? "Download refused for this tenant." : `Download failed (${res.status}).`));
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = (title ?? "creative").replace(/[^\w.-]+/g, "_") || "creative";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch {
+      setError("Download failed: network error.");
+    }
+  }
 
   return (
     <div className="max-w-6xl space-y-6">
@@ -148,10 +197,15 @@ export default function MetaAdsPage() {
         <div className={`rounded-lg border p-4 text-sm ${healthy ? "bg-green-50 border-green-200 text-green-800" : "bg-red-50 border-red-200 text-red-800"}`}>
           <div className="font-semibold">{healthy ? "Linkage healthy" : "Linkage red — test launches are blocked while red"}</div>
           <div className="text-xs mt-1">
-            active ads {health.activeAds ?? "—"} · unmanaged {unmanagedCount} · missing url_tags {missingTags} · drift {driftCount}
+            active ads {health.active_ads ?? "—"} · unmanaged {unmanagedCount} · missing url_tags {missingTags} · drift {driftCount}
+            {health.summary && <span className="ml-2 opacity-80">{health.summary}</span>}
           </div>
         </div>
       )}
+      {loadErrors.length > 0 && (
+        <LoadError title="Some data could not be loaded" message={loadErrors.join(" · ")} onRetry={() => { void load(); }} />
+      )}
+      {loading && <p className="text-sm text-gray-400">Loading…</p>}
       {error && <div className="rounded bg-red-50 border border-red-200 p-3 text-sm text-red-700">{error}</div>}
       {notice && <div className="rounded bg-green-50 border border-green-200 p-3 text-sm text-green-700">{notice}</div>}
 
@@ -195,11 +249,17 @@ export default function MetaAdsPage() {
                             <button disabled={busy === c.id} onClick={() => act(c.id, "pause")} className="px-2 py-1 rounded bg-orange-500 text-white disabled:opacity-50">Pause</button>
                           )}
                           {ps === "PENDING_REVIEW" && <span className="text-gray-400">waiting for Meta&apos;s review verdict</span>}
-                          {href && (
-                            <a href={href} target="_blank" rel="noopener noreferrer" className="text-gray-500 underline"
-                               title="A creative that reaches Meta by hand is unmanaged and excluded from learning.">
+                          {href && !previewOnly && (
+                            <button type="button" onClick={() => download(href, c.title)} className="text-gray-500 underline"
+                                    title="A creative that reaches Meta by hand is unmanaged and excluded from learning.">
                               download (not a publishing path)
-                            </a>
+                            </button>
+                          )}
+                          {href && previewOnly && (
+                            <span className="text-gray-400 cursor-not-allowed"
+                                  title="creative_download_mode = PREVIEW_ONLY: final renders are published to Meta from this page only (Settings → Creative downloads).">
+                              download disabled (preview-only)
+                            </span>
                           )}
                         </div>
                       </td>

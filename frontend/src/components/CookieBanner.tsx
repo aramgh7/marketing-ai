@@ -13,14 +13,18 @@
  */
 
 import { useState, useEffect } from "react";
-import { hasConsentDecision, setConsentLevel } from "@/lib/consent";
+import { hasConsentDecision, setConsentLevel, syncCookiebotConsentCookie } from "@/lib/consent";
 
 export default function CookieBanner() {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    // Cookiebot is configured — its own banner handles consent
-    if (process.env.NEXT_PUBLIC_COOKIEBOT_DOMAIN_ID) return;
+    // Cookiebot is configured — its own banner handles consent; we only mirror its decision into
+    // the `_consent` cookie the edge middleware reads (audit F-6).
+    if (process.env.NEXT_PUBLIC_COOKIEBOT_DOMAIN_ID) {
+      syncCookiebotConsentCookie();
+      return;
+    }
     if (!hasConsentDecision()) setVisible(true);
   }, []);
 

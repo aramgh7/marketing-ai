@@ -1,7 +1,8 @@
 "use client";
-import { useEffect, useState } from "react";
-import { apiFetch } from "@/lib/api";
+import { useCallback, useEffect, useState } from "react";
+import { ApiError, apiFetch } from "@/lib/api";
 import DomainsCard from "@/components/admin/DomainsCard";
+import LoadError from "@/components/admin/LoadError";
 
 export default function SettingsPage() {
   const [email, setEmail]               = useState("");
@@ -14,17 +15,23 @@ export default function SettingsPage() {
   const [metaMsg, setMetaMsg] = useState("");
   const [saving, setSaving]             = useState(false);
   const [saved, setSaved]               = useState(false);
+  const [saveError, setSaveError]       = useState("");
   const [loading, setLoading]           = useState(true);
+  const [loadError, setLoadError]       = useState<string | null>(null);
+  const [metaLoadError, setMetaLoadError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setLoading(true);
+    setLoadError(null);
+    setMetaLoadError(null);
     apiFetch<any>("/api/v1/tenants/me/settings")
       .then((data) => {
-        setEmail(data.report_email ?? "");
-        setAlertChannel(data.alert_channel ?? "TELEGRAM");
-        setSlackWebhook(data.slack_webhook_url ?? "");
-        setDownloadMode(data.creative_download_mode ?? "FINAL");
+        setEmail(data?.report_email ?? "");
+        setAlertChannel(data?.alert_channel ?? "TELEGRAM");
+        setSlackWebhook(data?.slack_webhook_url ?? "");
+        setDownloadMode(data?.creative_download_mode ?? "FINAL");
       })
-      .catch(() => {})
+      .catch((e: unknown) => setLoadError(e instanceof ApiError ? e.message : "Could not load settings"))
       .finally(() => setLoading(false));
     // Phase 11: Meta page / Instagram actor used when the platform creates ads
     apiFetch<any>("/api/v1/tenants/me/meta-credentials")
@@ -32,8 +39,10 @@ export default function SettingsPage() {
         setMetaPageId(d?.meta_page_id ?? d?.metaPageId ?? "");
         setIgActorId(d?.meta_instagram_actor_id ?? d?.metaInstagramActorId ?? "");
       })
-      .catch(() => {});
+      .catch((e: unknown) => setMetaLoadError(e instanceof ApiError ? e.message : "Could not load Meta credentials"));
   }, []);
+
+  useEffect(() => { load(); }, [load]);
 
   async function saveMetaPage() {
     setMetaSaving(true); setMetaMsg("");
@@ -51,6 +60,7 @@ export default function SettingsPage() {
   async function handleSave() {
     setSaving(true);
     setSaved(false);
+    setSaveError("");
     try {
       await apiFetch("/api/v1/tenants/me/settings", {
         method: "PATCH",
@@ -63,14 +73,21 @@ export default function SettingsPage() {
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
-    } catch {
-      alert("Save failed");
+    } catch (e: unknown) {
+      setSaveError(e instanceof ApiError ? e.message : "Save failed");
     } finally {
       setSaving(false);
     }
   }
 
   if (loading) return <p className="text-gray-400 text-sm p-8">Loading...</p>;
+  if (loadError) {
+    return (
+      <div className="max-w-3xl p-8">
+        <LoadError title="Could not load settings" message={loadError} onRetry={load} />
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-3xl space-y-6">
@@ -153,6 +170,7 @@ export default function SettingsPage() {
           {saved && (
             <span className="text-green-600 text-sm">Saved!</span>
           )}
+          {saveError && <span className="text-red-600 text-sm">{saveError}</span>}
         </div>
       </div>
 
@@ -162,6 +180,7 @@ export default function SettingsPage() {
           <h2 className="font-semibold text-gray-800">Meta page</h2>
           <p className="text-xs text-gray-400">Used when a creative is published from the Meta ads page (ad creative = page post).</p>
         </div>
+        {metaLoadError && <LoadError title="Could not load Meta credentials" message={metaLoadError} onRetry={load} />}
         <div className="grid md:grid-cols-2 gap-3">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Facebook Page ID</label>

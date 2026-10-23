@@ -63,13 +63,37 @@ export function getConsentLevel(): ConsentLevel {
 const CONSENT_COOKIE = "_consent";
 const CONSENT_COOKIE_MAX_AGE = 60 * 60 * 24 * 365; // 1 year
 
+/** Write the `_consent` cookie the edge middleware reads (same format for the custom banner and Cookiebot). */
+export function writeConsentCookie(level: ConsentLevel): void {
+  if (typeof document === "undefined") return;
+  const secure = window.location.protocol === "https:" ? "; secure" : "";
+  document.cookie = `${CONSENT_COOKIE}=${level}; max-age=${CONSENT_COOKIE_MAX_AGE}; path=/; samesite=lax${secure}`;
+}
+
 /** Persist consent choice from our custom banner. */
 export function setConsentLevel(level: ConsentLevel): void {
   if (typeof window === "undefined") return;
   localStorage.setItem(STORAGE_KEY, level);
-  const secure = window.location.protocol === "https:" ? "; secure" : "";
-  document.cookie = `${CONSENT_COOKIE}=${level}; max-age=${CONSENT_COOKIE_MAX_AGE}; path=/; samesite=lax${secure}`;
+  writeConsentCookie(level);
   window.dispatchEvent(new CustomEvent("mai:consent", { detail: level }));
+}
+
+/**
+ * Audit F-6: with Cookiebot the custom banner never runs, so `_consent` was never written and the
+ * middleware always sent `session_id: null` to /decide. Mirror Cookiebot's decision into the same
+ * cookie on load / accept / decline. Idempotent — safe to call from several components.
+ */
+let cookiebotSyncAttached = false;
+export function syncCookiebotConsentCookie(): void {
+  if (typeof window === "undefined" || cookiebotSyncAttached) return;
+  cookiebotSyncAttached = true;
+  const sync = () => {
+    if (window.Cookiebot?.hasResponse) writeConsentCookie(getConsentLevel());
+  };
+  for (const ev of ["CookiebotOnLoad", "CookiebotOnAccept", "CookiebotOnDecline"]) {
+    window.addEventListener(ev, sync);
+  }
+  sync(); // the script may already have fired its events before we attached
 }
 
 /** True if the user has already made a consent decision (banner answered). */

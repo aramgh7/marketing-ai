@@ -1,8 +1,11 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import StatCard from "@/components/admin/StatCard";
 import StatusBadge from "@/components/admin/StatusBadge";
-import { apiFetch } from "@/lib/api";
+import LoadError from "@/components/admin/LoadError";
+import { ApiError, apiFetch } from "@/lib/api";
+
+const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 
 // Audit 7.6: this was a server component fetching NEXT_PUBLIC_API_URL from inside the container
 // with no Authorization header, so it always rendered empty. Campaigns are tenant data — load
@@ -10,13 +13,18 @@ import { apiFetch } from "@/lib/api";
 export default function DashboardPage() {
   const [campaigns, setCampaigns] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setLoading(true);
+    setLoadError(null);
     apiFetch<any[]>("/campaigns")
       .then((rows) => setCampaigns(Array.isArray(rows) ? rows : []))
-      .catch(() => setCampaigns([]))
+      .catch((e: unknown) => setLoadError(e instanceof ApiError ? e.message : "Could not load campaigns"))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => { load(); }, [load]);
 
   const budgetOf = (c: any) => Number(c.dailyBudget ?? c.daily_budget ?? 0);
   const createdOf = (c: any) => c.createdAt ?? c.created_at;
@@ -38,7 +46,7 @@ export default function DashboardPage() {
         <StatCard label="Paused"          value={paused}           color="yellow" />
         <StatCard
           label="Daily Budget"
-          value={`$${totalBudget.toFixed(0)}`}
+          value={money.format(totalBudget)}
           color="gray"
         />
       </div>
@@ -49,6 +57,8 @@ export default function DashboardPage() {
         </div>
         {loading ? (
           <p className="px-6 py-8 text-gray-400 text-sm">Loading…</p>
+        ) : loadError ? (
+          <div className="p-6"><LoadError title="Could not load campaigns" message={loadError} onRetry={load} /></div>
         ) : campaigns.length === 0 ? (
           <p className="px-6 py-8 text-gray-400 text-sm">
             No campaigns yet. Connect Meta account to get started.
@@ -74,7 +84,7 @@ export default function DashboardPage() {
                     <StatusBadge status={c.status} />
                   </td>
                   <td className="px-6 py-4 text-gray-600">
-                    ${budgetOf(c)}
+                    {money.format(budgetOf(c))}
                   </td>
                   <td className="px-6 py-4 text-gray-500">{c.objective}</td>
                   <td className="px-6 py-4 text-gray-400">
