@@ -1,5 +1,5 @@
 import random
-from typing import Optional
+from typing import Literal, Optional
 
 import numpy as np
 from fastapi import APIRouter, Header, HTTPException, Query
@@ -81,7 +81,7 @@ class DecideRequest(BaseModel):
     cluster_id: Optional[int] = None
     # Phase 7: channel branch — Thompson arms are partitioned per channel
     # so META and GOOGLE posteriors don't interfere with each other.
-    channel: str = "META"
+    channel: Literal["META", "GOOGLE"] = "META"  # ML-24: was unvalidated str
 
 
 class PersonaliseRequest(BaseModel):
@@ -118,6 +118,7 @@ class RewardRequest(BaseModel):
     decision_id: str
     reward_type: str
     tenant_configured: bool = False   # resolved via tenants.settings.reward_levels (8-3)
+    session_id: Optional[str] = None  # ML-5: when provided, validated against decision_log
 
 
 class RewardResponse(BaseModel):
@@ -278,7 +279,7 @@ async def creative_landing_pairs(
             list(CONVERSION_REWARD_TYPES),
         )
     pairs = summarise_pairs([dict(r) for r in rows], min_decisions=min_decisions)
-    win_probabilities(pairs, draws=200)
+    win_probabilities(pairs, draws=2000)  # ML-21: was 200 — too coarse (0.5% resolution)
     return {"tenant_id": tenant_id, "days": days, "min_decisions": min_decisions, "pairs": pairs}
 
 
@@ -286,7 +287,10 @@ async def creative_landing_pairs(
 async def submit_reward(req: RewardRequest):
     """Submit a reward signal — updates the chosen arm's α or β posterior."""
     try:
-        result = await apply_reward(req.decision_id, req.reward_type, req.tenant_configured)
+        result = await apply_reward(
+            req.decision_id, req.reward_type, req.tenant_configured,
+            session_id=req.session_id,  # ML-5: pass session for validation
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return RewardResponse(
@@ -296,6 +300,28 @@ async def submit_reward(req: RewardRequest):
         skipped=bool(result.get("skipped", False)),
         reason=result.get("reason"),
     )
+
+
+class EnsureArmsRequest(BaseModel):
+    """ML-7: Spring Boot calls this when a new landing_variant is activated.
+
+    Without this hook `ensure_arms` only fires when the tenant has NO arms at all.
+    A variant activated after the first /decide call is never inserted into
+    thompson_arms and therefore never shown.
+    """
+    tenant_id: str
+    context_key: str = "global"
+
+
+@router.post("/arms/ensure")
+async def arms_ensure(req: EnsureArmsRequest):
+    """Idempotent: insert missing Beta(1,1) arms for every ACTIVE variant.
+
+    Call from Spring VariantService.activateVariant() whenever a variant status
+    changes to ACTIVE — idempotent so safe to call unconditionally.  ML-7 fix.
+    """
+    created = await ensure_arms(req.tenant_id, req.context_key)
+    return {"created": created, "context_key": req.context_key}
 
 
 class SweepRequest(BaseModel):
@@ -392,7 +418,7 @@ async def power_calculator(
     tenant_id: str,
     context_key: str = "global",
     min_samples: int = 100,
-    n_simulations: int = 10_000,
+    n_simulations: int = Query(default=10_000, ge=100, le=50_000),  # ML-9: cap at 50k
 ):
     """
     Monte Carlo P(best) for each arm.
@@ -687,7 +713,7 @@ class PathMetricsRequest(BaseModel):
     reward_events: list[dict]
     page_views: dict
 
-@router.post("/decide/funnel-path")
+@router.post("/funnel-path")  # ML-8: was "/decide/funnel-path" — double prefix with router include
 def decide_funnel_path(req: FunnelPathRequest):
     from app.services.funnel_path_service import select_path, check_path_b_engagement_gate
     selected = select_path(req.paths, req.ticket_bucket)

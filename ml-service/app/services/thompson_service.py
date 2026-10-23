@@ -31,7 +31,7 @@ from typing import Optional
 import numpy as np
 
 from app.config import settings
-from app.services.db_client import get_pool, system_pool, tenant_pool
+from app.services.db_client import system_pool, tenant_pool  # ML-26: removed unused get_pool
 from app.services.glm_prior_service import prior_for_variant
 from app.services.expert_prior_service import prior_for_arm
 from app.services.job_store import get_redis
@@ -265,8 +265,11 @@ async def load_arms(tenant_id: str, context_key: str = "global") -> list[dict]:
               AND  ta.context_key = $2
               AND  lv.status      = 'ACTIVE'
               -- roadmap 9-9 / arch §15.6: margin floor — variants without an offer row stay eligible
+              -- ML-25: safe-cast min_margin; non-numeric value → NULL → COALESCE fallback avoids 500
               AND  COALESCE((SELECT MIN(vo.estimated_margin) FROM variant_offers vo WHERE vo.variant_id = lv.id), 1e9)
-                   >= COALESCE((SELECT (t.settings->>'min_margin')::float8 FROM tenants t WHERE t.id = $1::uuid), -1e9)
+                   >= COALESCE((SELECT CASE WHEN t.settings->>'min_margin' ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                                            THEN (t.settings->>'min_margin')::float8 END
+                                FROM tenants t WHERE t.id = $1::uuid), -1e9)
             """,
             tenant_id,
             context_key,
@@ -483,7 +486,7 @@ async def _load_decision(decision_id: str) -> Optional[dict]:
         row = await conn.fetchrow(
             """
             SELECT tenant_id::text AS tenant_id, chosen_variant_id::text AS variant_id,
-                   candidates, context
+                   session_id::text AS session_id, candidates, context
             FROM   decision_log
             WHERE  id = $1::uuid
             """,
@@ -494,12 +497,18 @@ async def _load_decision(decision_id: str) -> Optional[dict]:
     return {
         "tenant_id":   row["tenant_id"],
         "variant_id":  row["variant_id"],
+        "session_id":  row["session_id"],  # ML-5: include session_id for reward validation
         "arm_id":      arm_for_decision(row["variant_id"], row["candidates"]),
         "context_key": _as_dict(row["context"]).get("context_key", "global"),
     }
 
 
-async def apply_reward(decision_id: str, reward_type: str, tenant_configured: bool = False) -> dict:
+async def apply_reward(
+    decision_id: str,
+    reward_type: str,
+    tenant_configured: bool = False,
+    session_id: Optional[str] = None,  # ML-5: optional caller-supplied session for validation
+) -> dict:
     """Update the alpha or beta of the arm that was chosen in the given decision.
 
     - Idempotent per (decision_id, reward_type) via thompson_reward_log (audit 2.8).
@@ -528,6 +537,11 @@ async def apply_reward(decision_id: str, reward_type: str, tenant_configured: bo
     if not dec.get("arm_id"):
         raise ValueError(f"Decision {decision_id} has no resolvable arm")
 
+    # ML-5: when caller supplies session_id, verify it matches the decision —
+    # prevents a browser script from replaying any decision_id it finds.
+    if session_id is not None and dec.get("session_id") and dec["session_id"] != session_id:
+        raise ValueError(f"session_id mismatch for decision {decision_id}")
+
     pool = await system_pool()
     now = datetime.now(timezone.utc)
     async with pool.acquire() as conn:
@@ -549,6 +563,27 @@ async def apply_reward(decision_id: str, reward_type: str, tenant_configured: bo
                         "reason": f"{reward_type} already applied for this decision"}
 
             if field == "alpha":
+                # ML-3: ONE alpha per decision (arch §4.4 "one Bernoulli observation").
+                # If a prior alpha reward already exists for this decision, skip — don't
+                # let CTA_CLICK + FORM_SUBMIT + CONVERSION each increment α.
+                prior_alpha = await conn.fetchval(
+                    "SELECT 1 FROM thompson_reward_log "
+                    "WHERE decision_id = $1::uuid AND field_updated = 'alpha' "
+                    "AND reward_type != $2 LIMIT 1",
+                    decision_id, reward_type,
+                )
+                if prior_alpha:
+                    # Roll back the just-inserted row and skip the arm update
+                    await conn.execute(
+                        "DELETE FROM thompson_reward_log "
+                        "WHERE decision_id = $1::uuid AND reward_type = $2",
+                        decision_id, reward_type,
+                    )
+                    return {"arm_id": dec["arm_id"], "tenant_id": dec["tenant_id"],
+                            "variant_id": dec["variant_id"], "field_updated": None,
+                            "delta": 0.0, "skipped": True,
+                            "reason": "one alpha per decision (arch §4.4 Bernoulli model)"}
+
                 reversed_sweep = await conn.fetchval(
                     "DELETE FROM thompson_reward_log WHERE decision_id = $1::uuid "
                     "AND reward_type = 'NO_RESPONSE_7D' AND field_updated = 'beta' RETURNING 1",

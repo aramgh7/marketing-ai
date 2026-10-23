@@ -16,6 +16,7 @@ Endpoints:
 Security: all endpoints require X-Internal-API-Key header.
 Marketer approval happens in Spring Boot before any creative is launched.
 """
+import asyncio
 import json
 import logging
 import os
@@ -31,6 +32,7 @@ from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
 from pydantic import BaseModel
 
 from app.config import settings
+from app.security import assert_public_http_url  # ML-4: SSRF guard for URL downloads
 from app.services import job_store
 from app.services import subtitle_service, tts_service
 from app.services.music_service import DEFAULT_GAIN_DB as _MUSIC_GAIN_DB
@@ -51,8 +53,9 @@ router = APIRouter(tags=["Video"])
 # Auth
 # --------------------------------------------------------------------------- #
 def _require_key(key: str) -> None:
-    if key != settings.internal_api_key:
-        raise HTTPException(status_code=401, detail="Invalid or missing X-Internal-API-Key")
+    # ML-22: use security module (compare_digest, fail-closed on empty key) instead of bare !=
+    from app.security import check_internal_key
+    check_internal_key(key)
 
 
 # --------------------------------------------------------------------------- #
@@ -86,6 +89,8 @@ async def transcribe_video(
             segments=[{"start": 0.0, "end": 30.0, "text": _STUB_TRANSCRIPT}],
         )
 
+    assert_public_http_url(req.storage_url, resolve=False)  # ML-4: SSRF guard
+
     # Download the video file
     async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.get(req.storage_url)
@@ -98,22 +103,21 @@ async def transcribe_video(
 
     try:
         import openai  # lazy import (Phase 4 only)
-        oa = openai.OpenAI(api_key=settings.openai_api_key)
-        with open(tmp_path, "rb") as f:
-            result = oa.audio.transcriptions.create(
-                model=settings.whisper_model,
-                file=f,
-                response_format="verbose_json",
-            )
-        segments = [
-            {"start": s.start, "end": s.end, "text": s.text}
-            for s in (result.segments or [])
-        ]
-        return TranscribeResponse(
-            footage_id=req.footage_id,
-            transcript=result.text,
-            segments=segments,
-        )
+
+        def _whisper_transcribe(path: str) -> tuple[str, list[dict]]:
+            """Sync Whisper call — runs in thread (ML-1: sync I/O off event loop)."""
+            oa = openai.OpenAI(api_key=settings.openai_api_key)
+            with open(path, "rb") as f:
+                result = oa.audio.transcriptions.create(
+                    model=settings.whisper_model,
+                    file=f,
+                    response_format="verbose_json",
+                )
+            segs = [{"start": s.start, "end": s.end, "text": s.text} for s in (result.segments or [])]
+            return result.text, segs
+
+        text, segments = await asyncio.to_thread(_whisper_transcribe, tmp_path)
+        return TranscribeResponse(footage_id=req.footage_id, transcript=text, segments=segments)
     finally:
         os.unlink(tmp_path)
 
@@ -163,12 +167,16 @@ For each scene return JSON with keys:
 Return ONLY a JSON array. No explanation."""
 
     try:
-        msg = client.messages.create(
-            model="claude-sonnet-5-5",
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = msg.content[0].text.strip()
+        # ML-1: sync anthropic.Anthropic wrapped in thread so event loop stays free
+        def _call_llm() -> str:
+            msg = client.messages.create(
+                model=settings.llm_model_default,  # ML-14: use settings not literal
+                max_tokens=1024,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return msg.content[0].text.strip()
+
+        raw = await asyncio.to_thread(_call_llm)
         scenes = _parse_json_list(raw)
         return TagScenesResponse(footage_id=req.footage_id, scenes=scenes)
     except Exception:
@@ -239,12 +247,16 @@ Rules:
 - Return ONLY a JSON array. No explanation."""
 
     try:
-        msg = client.messages.create(
-            model="claude-sonnet-5-5",
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = msg.content[0].text.strip()
+        # ML-1: sync anthropic.Anthropic wrapped in thread so event loop stays free
+        def _call_llm() -> str:
+            msg = client.messages.create(
+                model=settings.llm_model_default,  # ML-14: use settings not literal
+                max_tokens=1024,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return msg.content[0].text.strip()
+
+        raw = await asyncio.to_thread(_call_llm)
         plan = _parse_json_list(raw)
         return MontagePlanResponse(footage_id=req.footage_id, plan=plan, formats=req.formats)
     except Exception:
@@ -335,7 +347,8 @@ async def _run_render(job_id: str, req: RenderRequest) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        # Download footage
+        # Download footage — ML-4: SSRF guard before every external download
+        assert_public_http_url(req.footage_url, resolve=False)
         async with httpx.AsyncClient(timeout=300) as client:
             resp = await client.get(req.footage_url)
             resp.raise_for_status()
@@ -352,9 +365,11 @@ async def _run_render(job_id: str, req: RenderRequest) -> None:
         subtitles_path = _prepare_subtitles(req, scale, output_dir, job_id)
         voiceover = music = None
         if req.voiceover:
+            assert_public_http_url(req.voiceover.audio_url, resolve=False)  # ML-4
             extra_paths.append(await _download_to_temp(req.voiceover.audio_url, ".audio"))
             voiceover = {"path": extra_paths[-1], "mode": req.voiceover.mode, "gain_db": req.voiceover.gain_db}
         if req.music:
+            assert_public_http_url(req.music.track_url, resolve=False)  # ML-4
             extra_paths.append(await _download_to_temp(req.music.track_url, ".audio"))
             music = {"path": extra_paths[-1], "gain_db": req.music.gain_db, "duck": req.music.duck}
 
@@ -362,7 +377,10 @@ async def _run_render(job_id: str, req: RenderRequest) -> None:
         ffmpeg_cmd = _build_ffmpeg_cmd(src_path, output_path, req.plan, scale,
                                        subtitles_path=subtitles_path, voiceover=voiceover, music=music)
 
-        result = subprocess.run(ffmpeg_cmd, capture_output=True, timeout=300)
+        # ML-1: subprocess.run blocks event loop — use to_thread so /decide stays responsive
+        result = await asyncio.to_thread(
+            subprocess.run, ffmpeg_cmd, capture_output=True, timeout=300
+        )
         if result.returncode != 0:
             raise RuntimeError(f"FFmpeg failed: {result.stderr.decode()[:500]}")
 
@@ -562,10 +580,11 @@ async def text_to_speech(
     voice = req.voice or settings.tts_voice
     out_dir = Path(settings.video_output_dir) / "tts"
     try:
-        res = tts_service.synthesize(
-            req.text, voice=voice, speed=req.speed, provider=req.provider or settings.tts_provider,
-            out_dir=str(out_dir), openai_key=settings.openai_api_key or None,
-            elevenlabs_key=settings.elevenlabs_api_key or None,
+        # ML-1: tts_service.synthesize is sync (httpx.post/openai.Audio) — run in thread
+        res = await asyncio.to_thread(
+            tts_service.synthesize,
+            req.text, voice, req.speed, req.provider or settings.tts_provider,
+            str(out_dir), settings.openai_api_key or None, settings.elevenlabs_api_key or None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

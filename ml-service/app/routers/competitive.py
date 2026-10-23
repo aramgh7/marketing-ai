@@ -6,6 +6,7 @@ Endpoint is internal-only (X-Internal-API-Key required).
 LLM model: claude-sonnet-5-5 (latest capable model — fastest for structured extraction).
 If anthropic_api_key is empty, returns a stub so the pipeline stays functional without billing.
 """
+import asyncio
 import json
 import logging
 from typing import Optional
@@ -84,18 +85,23 @@ class ExtractAtomsResponse(BaseModel):
 
 
 async def _call_claude(prompt: str) -> Optional[str]:
-    """Call Claude claude-sonnet-5-5 synchronously. Returns None if API key missing."""
+    """Call Claude. Returns None if API key missing."""
     if not settings.anthropic_api_key:
         return None
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-        msg = client.messages.create(
-            model="claude-sonnet-5-5",
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return msg.content[0].text if msg.content else None
+
+        # ML-1: sync Anthropic call wrapped in thread; ML-14: model from settings
+        def _call() -> Optional[str]:
+            msg = client.messages.create(
+                model=settings.llm_model_default,
+                max_tokens=1024,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return msg.content[0].text if msg.content else None
+
+        return await asyncio.to_thread(_call)
     except Exception as e:
         logger.error("Claude API call failed: %s", e)
         return None
