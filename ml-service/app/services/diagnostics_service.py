@@ -72,6 +72,44 @@ def check_minimum_n(sample_size: int, min_n: int = MIN_N_FOR_SYMPTOM) -> bool:
     return sample_size >= min_n
 
 
+# BH applied separately to CTR and CVR families: anti-correlation between them violates PRDS assumption
+_CTR_FAMILY = {"CTR_DROP", "LPV_CLICK_GAP"}
+_CVR_FAMILY = {"CVR_DROP", "BOUNCE_SPIKE", "SCROLL_DEPTH_LOW", "CREATIVE_FATIGUE", "MARKET_SHIFT"}
+
+
+def _apply_bh_by_family(
+    eligible: list[dict],
+    p_values: list[float],
+    fdr: float,
+) -> list[bool]:
+    """Apply BH separately to CTR and CVR families; Bonferroni for cross-family.
+
+    Returns a boolean mask (len == len(eligible)) where True means significant.
+    """
+    n = len(eligible)
+    # Split indices by family
+    ctr_indices = [i for i, o in enumerate(eligible) if o.get("symptom", "") in _CTR_FAMILY]
+    cvr_indices = [i for i, o in enumerate(eligible) if o.get("symptom", "") in _CVR_FAMILY]
+    other_indices = [i for i in range(n) if i not in ctr_indices and i not in cvr_indices]
+
+    significant = [False] * n
+
+    for group_indices in (ctr_indices, cvr_indices, other_indices):
+        if not group_indices:
+            continue
+        group_p = [p_values[i] for i in group_indices]
+        group_flags = benjamini_hochberg(group_p, fdr)
+        for local_j, global_i in enumerate(group_indices):
+            significant[global_i] = group_flags[local_j]
+
+    # Bonferroni cross-family alert: both CTR and CVR families must flag at least one symptom
+    ctr_flagged = any(significant[i] for i in ctr_indices)
+    cvr_flagged = any(significant[i] for i in cvr_indices)
+    cross_family_alert = ctr_flagged and cvr_flagged
+
+    return significant, cross_family_alert
+
+
 def run_diagnostics(
     observations: list[dict],
     fdr: float = 0.10,
@@ -80,6 +118,9 @@ def run_diagnostics(
     Run full diagnostics pipeline with BH correction.
     Each symptom compared against tenant's own baseline per placement×device
     to avoid Simpson's paradox (vision §3.2).
+
+    BH is applied separately to CTR and CVR families (PRDS assumption violated
+    across families due to anti-correlation). Cross-family alert uses Bonferroni.
     """
     eligible = [o for o in observations if check_minimum_n(o.get("n", 0))]
 
@@ -99,7 +140,7 @@ def run_diagnostics(
         )
         p_values.append(symptom_p_value(obs.get("symptom", ""), z))
 
-    significant_flags = benjamini_hochberg(p_values, fdr)
+    significant_flags, cross_family_alert = _apply_bh_by_family(eligible, p_values, fdr)
 
     symptoms_out = []
     for i, obs in enumerate(eligible):
@@ -121,11 +162,13 @@ def run_diagnostics(
             })
 
     return {
-        "symptoms":         symptoms_out,
-        "total_checked":    len(eligible),
-        "suppressed_count": len(observations) - len(eligible),
-        "fdr_threshold":    fdr,
-        "bh_applied":       True,
+        "symptoms":            symptoms_out,
+        "total_checked":       len(eligible),
+        "suppressed_count":    len(observations) - len(eligible),
+        "fdr_threshold":       fdr,
+        "bh_applied":          True,
+        "bh_family_separated": True,
+        "cross_family_alert":  cross_family_alert,
     }
 
 

@@ -41,7 +41,7 @@ CACHE_TTL = 900  # 15 min
 DECISION_TTL = 3600  # 1 h
 DECAY_FACTOR = 0.99
 DECAY_INTERVAL_SECS = 86_400  # 24 h
-N_PROPENSITY = 200  # Monte Carlo draws for propensity estimation
+N_PROPENSITY = 2_000  # Monte Carlo draws for propensity estimation
 
 _UPDATE_ALPHA = ("UPDATE thompson_arms SET alpha=alpha+$1, total_samples=total_samples+1, updated_at=$2 "
                  "WHERE id=$3::uuid AND tenant_id=$4::uuid")

@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Random;
 import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Bayesian Staged Gate evaluation per vision §12.3.
@@ -307,7 +308,9 @@ public class GateEvaluationService {
      * Estimated via Monte Carlo (Marsaglia-Tsang Gamma sampler).
      */
     static double probBetter(double a1, double b1, double a2, double b2) {
-        Random rng = new Random();
+        // Replace: Random rng = new Random();
+        // With: ThreadLocalRandom (thread-safe, no shared state)
+        Random rng = ThreadLocalRandom.current();
         int wins = 0;
         for (int i = 0; i < MC_SAMPLES; i++) {
             if (sampleBeta(a1, b1, rng) > sampleBeta(a2, b2, rng)) wins++;

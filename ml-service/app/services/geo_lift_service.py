@@ -14,6 +14,17 @@ _MC_SAMPLES = 5_000
 _CI_LEVEL = 0.80  # 80% credible interval
 
 
+def _block_bootstrap_sample(arr: np.ndarray, block_size: int = None) -> np.ndarray:
+    """Block bootstrap preserving temporal autocorrelation."""
+    n = len(arr)
+    if block_size is None:
+        block_size = max(7, int(np.sqrt(n)))  # weekly blocks by default
+    n_blocks = int(np.ceil(n / block_size))
+    starts = _RNG.integers(0, n, size=n_blocks)
+    indices = np.concatenate([np.arange(s, min(s + block_size, n)) for s in starts])[:n]
+    return arr[indices]
+
+
 def validate_geo_split(
     control_geos: list[str],
     test_geos: list[str],
@@ -95,10 +106,10 @@ def compute_synthetic_control_simple(
 
     bootstrap_lifts = []
     for _ in range(_MC_SAMPLES):
-        s_ctrl_pre  = _RNG.choice(control_pre_arr, size=n_ctrl_pre, replace=True)
-        s_test_pre  = _RNG.choice(test_pre_arr, size=n_test_pre, replace=True)
-        s_ctrl_post = _RNG.choice(control_post_arr, size=n_ctrl_post, replace=True)
-        s_test_post = _RNG.choice(test_post_arr, size=n_test_post, replace=True)
+        s_ctrl_pre  = _block_bootstrap_sample(control_pre_arr)
+        s_test_pre  = _block_bootstrap_sample(test_pre_arr)
+        s_ctrl_post = _block_bootstrap_sample(control_post_arr)
+        s_test_post = _block_bootstrap_sample(test_post_arr)
 
         m_ctrl_pre  = s_ctrl_pre.mean()
         if m_ctrl_pre == 0:

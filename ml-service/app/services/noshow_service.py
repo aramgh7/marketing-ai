@@ -7,6 +7,9 @@ Rule-based model until holdout AUC >= 0.70.
 from __future__ import annotations
 
 BOOKING_DISTANCE_COEF = 0.012
+# Seed constants — no empirical basis yet (Phase 12-13).
+# Replace with fitted LogisticRegression coefficients once ≥200 labelled leads available.
+# Source: expert judgment from noshow literature (Gupta et al. 2018, B2B webinar context).
 TZ_UNKNOWN_PENALTY    = 0.10
 INTERNATIONAL_PENALTY = 0.08
 LOW_TICKET_PENALTY    = 0.06
@@ -97,6 +100,9 @@ def compute_slot_fill_probability(
     if not noshow_probs:
         return {"p_no_one_shows": 0.0, "p_at_least_one_shows": 1.0, "booked": booked_count}
 
+    # Independence assumption (Phase 12-14): each booking's no-show probability is treated
+    # as independent. Valid for solo bookings; underestimates P(no_one) for paired/group slots
+    # where correlated no-show behaviour is expected. Track group_booking flag when available.
     p_no_one = 1.0
     for p in noshow_probs:
         p_no_one *= p

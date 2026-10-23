@@ -143,7 +143,8 @@ def compute_shapley_attribution(touchpoint_paths: list[list[str]]) -> dict[str, 
     shapley: dict[str, float] = {ch: 0.0 for ch in channels}
 
     rng = random.Random(42)
-    n_samples = 200
+    # SE ≈ sqrt(p*(1-p)/n_samples). At n=1000, SE≈1.6% for p≈0.5
+    n_samples = 1_000
 
     for _ in range(n_samples):
         perm = channels[:]

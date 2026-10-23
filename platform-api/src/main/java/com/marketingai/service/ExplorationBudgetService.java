@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 
 /**
@@ -139,7 +140,7 @@ public class ExplorationBudgetService {
                                    int limit) {
         if (creatives.isEmpty()) return List.of();
 
-        Random rng = new Random();
+        Random rng = ThreadLocalRandom.current();
         int n = creatives.size();
         int[] topTwoCount = new int[n];
 
