@@ -23,7 +23,7 @@ public class CrmDisciplineScheduler {
     private final JdbcTemplate jdbc;
     private final AlertService alertService;
 
-    @Scheduled(cron = "0 0 8 * * MON")
+    @Scheduled(cron = "0 0 8 * * MON", zone = "UTC")
     public void sendWeeklyDisciplineReport() {
         List<Map<String, Object>> tenants = jdbc.queryForList(
                 "SELECT id, name FROM tenants");

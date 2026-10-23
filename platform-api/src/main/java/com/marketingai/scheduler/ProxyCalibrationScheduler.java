@@ -21,7 +21,7 @@ public class ProxyCalibrationScheduler {
 
     private final JdbcTemplate jdbc;
 
-    @Scheduled(cron = "0 0 3 * * MON")
+    @Scheduled(cron = "0 0 3 * * MON", zone = "UTC")
     public void calibrateProxies() {
         List<Map<String, Object>> tenants = jdbc.queryForList(
                 "SELECT id FROM tenants");

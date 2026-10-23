@@ -26,11 +26,22 @@ public class QualityScoreScheduler {
     private final JdbcTemplate jdbc;
     private final AppProperties appProperties;
 
+    /**
+     * D-2: default look-back window — sessions closed since at most this many days ago.
+     * On first run (no previous cutoff tracking) this ensures we don't leave a backlog
+     * of un-scored sessions.  The "closed" filter (last_event_at < now()-30min) keeps the
+     * two conditions from being contradictory, unlike the previous 16-minute window.
+     */
+    private static final int DEFAULT_LOOKBACK_DAYS = 7;
+
     @Scheduled(fixedDelay = 900_000) // every 15 minutes
     public void computeQualityScores() {
-        Instant cutoff = Instant.now().minus(16, ChronoUnit.MINUTES);
+        // D-2: use last 7 days so the window is never empty on first run or after a restart.
+        // Sessions must still be "closed" (last_event_at < now()-30min) so the two conditions
+        // are always satisfiable.
+        Instant cutoff = Instant.now().minus(DEFAULT_LOOKBACK_DAYS, ChronoUnit.DAYS);
 
-        // Sessions closed in the last 16 min that don't yet have a quality_score
+        // Sessions closed in the last 7 days that don't yet have a quality_score
         List<Map<String, Object>> sessions = jdbc.queryForList("""
                 SELECT s.id, s.tenant_id, s.variant_id, s.creative_id,
                        (SELECT COUNT(*) FROM events e
@@ -122,7 +133,10 @@ public class QualityScoreScheduler {
                   AND s.is_suspicious = false
                   AND s.creative_id IS NOT NULL
                 GROUP BY s.tenant_id, s.creative_id
-                ON CONFLICT DO NOTHING
+                ON CONFLICT (tenant_id, creative_id, window_key) DO UPDATE
+                    SET quality_score  = EXCLUDED.quality_score,
+                        computed_at    = EXCLUDED.computed_at
+                WHERE creative_quality.variant_id IS NULL
                 """);
     }
 }

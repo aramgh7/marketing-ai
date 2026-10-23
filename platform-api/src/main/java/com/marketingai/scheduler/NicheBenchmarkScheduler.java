@@ -28,28 +28,44 @@ public class NicheBenchmarkScheduler {
     public void refreshBenchmarks() {
         log.info("NicheBenchmarkScheduler: refreshing niche benchmarks (first-party only)");
 
+        // D-4: avoid Cartesian product — pre-aggregate each source table independently via CTEs
+        // before joining to tenants; direct multi-table LEFT JOINs without a cross-table predicate
+        // multiply rows (N appointments × M reward_events × K form_submissions per tenant).
         List<Map<String, Object>> tenantData = jdbc.queryForList("""
+            WITH appt_agg AS (
+                SELECT tenant_id,
+                       COUNT(*)                        AS booked,
+                       AVG(booking_distance_h)         AS avg_booking_distance_h
+                FROM   appointments
+                WHERE  created_at >= NOW() - INTERVAL '30 days'
+                GROUP BY tenant_id
+            ),
+            reward_agg AS (
+                SELECT tenant_id,
+                       COUNT(DISTINCT session_id)      AS held
+                FROM   reward_events
+                WHERE  is_quality_stage = TRUE
+                  AND  rewarded_at >= NOW() - INTERVAL '30 days'
+                GROUP BY tenant_id
+            ),
+            form_agg AS (
+                SELECT tenant_id,
+                       COUNT(*)                        AS form_submits
+                FROM   form_submissions
+                WHERE  submitted_at >= NOW() - INTERVAL '30 days'
+                GROUP BY tenant_id
+            )
             SELECT
-                t.id::text                        AS tenant_id,
-                COALESCE(t.niche_key, 'generic')  AS niche_key,
-                COUNT(DISTINCT a.id) FILTER (
-                    WHERE a.created_at >= NOW() - INTERVAL '30 days'
-                )                                 AS booked,
-                COUNT(DISTINCT re.session_id) FILTER (
-                    WHERE re.is_quality_stage = TRUE
-                    AND re.rewarded_at >= NOW() - INTERVAL '30 days'
-                )                                 AS held,
-                COUNT(DISTINCT fs.id) FILTER (
-                    WHERE fs.submitted_at >= NOW() - INTERVAL '30 days'
-                )                                 AS form_submits,
-                AVG(a.booking_distance_h) FILTER (
-                    WHERE a.created_at >= NOW() - INTERVAL '30 days'
-                )                                 AS avg_booking_distance_h
+                t.id::text                              AS tenant_id,
+                COALESCE(t.niche_key, 'generic')        AS niche_key,
+                COALESCE(aa.booked, 0)                  AS booked,
+                COALESCE(ra.held, 0)                    AS held,
+                COALESCE(fa.form_submits, 0)            AS form_submits,
+                aa.avg_booking_distance_h               AS avg_booking_distance_h
             FROM tenants t
-            LEFT JOIN appointments    a  ON a.tenant_id = t.id
-            LEFT JOIN reward_events   re ON re.tenant_id = t.id
-            LEFT JOIN form_submissions fs ON fs.tenant_id = t.id
-            GROUP BY t.id, t.niche_key
+            LEFT JOIN appt_agg   aa ON aa.tenant_id = t.id
+            LEFT JOIN reward_agg ra ON ra.tenant_id = t.id
+            LEFT JOIN form_agg   fa ON fa.tenant_id = t.id
             """);
 
         if (tenantData.isEmpty()) {

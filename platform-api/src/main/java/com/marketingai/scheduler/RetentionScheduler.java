@@ -10,7 +10,14 @@ import java.time.LocalDate;
 
 /**
  * Monthly retention sweep: materialise aggregates then delete expired rows.
- * Retention policy: events 13 months, sessions 13 months, decision_log 25 months.
+ * Retention policy:
+ *   events / sessions        13 months
+ *   decision_log             25 months
+ *   high-frequency log tables (D-20):
+ *     campaign_cpm_history   90 days  (hourly Meta syncs accumulate fast)
+ *     thompson_reward_log    13 months
+ *     anchor_divergence_log  13 months
+ *     daily_brief_log        13 months
  */
 @Slf4j
 @Component
@@ -19,7 +26,7 @@ public class RetentionScheduler {
 
     private final JdbcTemplate jdbc;
 
-    @Scheduled(cron = "0 0 2 1 * *")
+    @Scheduled(cron = "0 0 2 1 * *", zone = "UTC")
     public void runRetentionSweep() {
         log.info("RetentionScheduler: starting retention sweep");
 
@@ -74,5 +81,28 @@ public class RetentionScheduler {
 
         log.info("RetentionScheduler: deleted {} events, {} sessions, {} decision_log rows",
                 deletedEvents, deletedSessions, deletedDecisions);
+
+        // D-20: high-frequency log tables — shorter retention windows
+        LocalDate cutoffCpm      = LocalDate.now().minusDays(90);
+        LocalDate cutoffLogs13mo = LocalDate.now().minusMonths(13);
+
+        int deletedCpm = jdbc.update(
+                "DELETE FROM campaign_cpm_history WHERE recorded_at < ?::timestamptz",
+                cutoffCpm.atStartOfDay());
+
+        int deletedRewardLog = jdbc.update(
+                "DELETE FROM thompson_reward_log WHERE applied_at < ?::timestamptz",
+                cutoffLogs13mo.atStartOfDay());
+
+        int deletedDivergenceLog = jdbc.update(
+                "DELETE FROM anchor_divergence_log WHERE created_at < ?::timestamptz",
+                cutoffLogs13mo.atStartOfDay());
+
+        int deletedBriefLog = jdbc.update(
+                "DELETE FROM daily_brief_log WHERE sent_at < ?::timestamptz",
+                cutoffLogs13mo.atStartOfDay());
+
+        log.info("RetentionScheduler: high-freq logs deleted — cpm_history={}, reward_log={}, divergence_log={}, brief_log={}",
+                deletedCpm, deletedRewardLog, deletedDivergenceLog, deletedBriefLog);
     }
 }

@@ -15,7 +15,7 @@ public class PixelPollutionScheduler {
     private final PixelPollutionService pixelPollutionService;
 
     /** 04:00 UTC daily — after churn scan (03:00) completes. */
-    @Scheduled(cron = "0 0 4 * * *")
+    @Scheduled(cron = "0 0 4 * * *", zone = "UTC")
     public void runDailyScan() {
         log.info("Pixel pollution scan started");
         try {

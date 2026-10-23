@@ -15,7 +15,7 @@ public class ChurnPenaltyScheduler {
     private final ChurnPenaltyService churnPenaltyService;
 
     /** 03:00 UTC daily — off-peak, after GHL sync cycle completes. */
-    @Scheduled(cron = "0 0 3 * * *")
+    @Scheduled(cron = "0 0 3 * * *", zone = "UTC")
     public void runDailyScan() {
         log.info("Churn penalty scan started");
         try {

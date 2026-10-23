@@ -3,8 +3,8 @@ package com.marketingai.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.marketingai.dto.event.EventBatchResponse;
 import com.marketingai.dto.event.EventDto;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -16,14 +16,28 @@ import java.util.*;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class EventIngestionService {
 
     private final JdbcTemplate jdbc;
-    private final StringRedisTemplate redis;
+    /**
+     * D-8: Redis is optional — when unavailable (e.g. cold-start, infra failure) the dedup
+     * step is skipped and ingestion continues. Duplicate events are still prevented by the
+     * partial unique index idx_events_tenant_event_dedup on (tenant_id, event_id).
+     */
+    @Autowired(required = false)
+    private StringRedisTemplate redis;
     private final FraudScoringService fraudService;
     private final RewardService rewardService;
     private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    @Autowired
+    public EventIngestionService(JdbcTemplate jdbc,
+                                  FraudScoringService fraudService,
+                                  RewardService rewardService) {
+        this.jdbc         = jdbc;
+        this.fraudService = fraudService;
+        this.rewardService = rewardService;
+    }
 
     /** Drop these event types when consent = analytics_only or none. */
     private static final Set<String> BEHAVIORAL = Set.of(
@@ -185,15 +199,28 @@ public class EventIngestionService {
     }
 
     // ─── Deduplication (Redis, 24 h TTL) ─────────────────────────────────────
+    // D-8: Redis is optional — fall back gracefully when unavailable.
+    // The DB-level unique index (idx_events_tenant_event_dedup) is the hard guard.
 
     private boolean isDuplicate(EventDto e) {
         if (e.getEventId() == null || e.getTenantId() == null) return false;
-        return Boolean.TRUE.equals(redis.hasKey(dedupKey(e)));
+        if (redis == null) return false; // Redis unavailable — skip in-memory dedup
+        try {
+            return Boolean.TRUE.equals(redis.hasKey(dedupKey(e)));
+        } catch (Exception ex) {
+            log.debug("Redis dedup check failed ({}), treating as non-duplicate", ex.getMessage());
+            return false;
+        }
     }
 
     private void markSeen(EventDto e) {
         if (e.getEventId() == null || e.getTenantId() == null) return;
-        redis.opsForValue().set(dedupKey(e), "1", Duration.ofHours(24));
+        if (redis == null) return; // Redis unavailable — skip
+        try {
+            redis.opsForValue().set(dedupKey(e), "1", Duration.ofHours(24));
+        } catch (Exception ex) {
+            log.debug("Redis markSeen failed ({}), continuing without cache", ex.getMessage());
+        }
     }
 
     private String dedupKey(EventDto e) {
@@ -258,7 +285,36 @@ public class EventIngestionService {
 
     // ─── Batch event write ────────────────────────────────────────────────────
 
+    /**
+     * D-15: validate that each event's event_time falls within an existing partition before
+     * attempting the INSERT.  Events whose timestamp has no covering partition are dropped
+     * (logged as warnings) rather than causing a batch failure for all events.
+     */
     private void writeEvents(List<EventDto> events) {
+        Instant now = Instant.now();
+        List<EventDto> safe = new java.util.ArrayList<>(events.size());
+        for (EventDto e : events) {
+            Instant eventTime = e.getEventTime() != null ? e.getEventTime() : now;
+            try {
+                Boolean exists = jdbc.queryForObject(
+                        "SELECT public.event_partition_exists(?::timestamptz)",
+                        Boolean.class,
+                        java.sql.Timestamp.from(eventTime));
+                if (Boolean.TRUE.equals(exists)) {
+                    safe.add(e);
+                } else {
+                    log.warn("D-15: dropping event {} — no partition for event_time {}",
+                            e.getEventId(), eventTime);
+                }
+            } catch (Exception ex) {
+                // If the function doesn't exist yet (pre-migration), skip the check
+                log.debug("D-15: partition check unavailable ({}), allowing event through", ex.getMessage());
+                safe.add(e);
+            }
+        }
+        if (safe.isEmpty()) return;
+        events = safe;
+
         String sql = """
                 INSERT INTO events (
                     id, tenant_id, session_id, event_type,
@@ -275,7 +331,6 @@ public class EventIngestionService {
                 )
                 """;
 
-        Instant now = Instant.now();
         jdbc.batchUpdate(sql, events, events.size(), (ps, e) -> {
             ps.setObject(1, e.getTenantId());
             ps.setString(2, e.getSessionId());

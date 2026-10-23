@@ -22,7 +22,7 @@ public class AutopilotScheduler {
     private final JdbcTemplate    jdbc;
     private final AutopilotService autopilotService;
 
-    @Scheduled(cron = "0 0 * * * *")
+    @Scheduled(cron = "0 0 * * * *", zone = "UTC")
     public void runHourlyEvaluation() {
         List<UUID> enabledTenants = jdbc.queryForList("""
                 SELECT tenant_id FROM autopilot_settings WHERE enabled = TRUE

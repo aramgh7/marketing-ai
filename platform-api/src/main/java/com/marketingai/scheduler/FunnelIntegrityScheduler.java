@@ -27,7 +27,7 @@ public class FunnelIntegrityScheduler {
     private final JdbcTemplate jdbc;
     private final AlertService alertService;
 
-    @Scheduled(cron = "0 15 7 * * *")
+    @Scheduled(cron = "0 15 7 * * *", zone = "UTC")
     public void dailyCheck() {
         List<Map<String, Object>> tenants = jdbc.queryForList("SELECT id, name, settings FROM tenants");
         for (Map<String, Object> t : tenants) {
