@@ -209,13 +209,23 @@ def test_fit_returns_non_empty_bytes():
 
 
 def test_fit_model_is_deserializable():
-    import joblib
+    """Model bytes use a safe serialisation format and produce valid probabilities."""
     X, y = _make_training_data(80)
     model_bytes = fit_propensity_model(X, y)
-    model = joblib.load(io.BytesIO(model_bytes))
-    proba = model.predict_proba(X[:5])
-    assert proba.shape == (5, 2)
-    assert np.allclose(proba.sum(axis=1), 1.0)
+    assert isinstance(model_bytes, bytes)
+    assert len(model_bytes) > 5
+
+    # Verify format marker (ONNX preferred, SAFE hash-validated pickle as fallback)
+    assert model_bytes[:4] in (b"ONNX", b"SAFE"), (
+        f"Expected ONNX or SAFE format marker, got {model_bytes[:4]!r}"
+    )
+
+    # Verify all 5 sample scores are in [0, 1] using the service's scoring path
+    for i in range(5):
+        result = score_session(X[i], model_bytes)
+        assert 0.0 <= result["p_convert"] <= 1.0, (
+            f"p_convert={result['p_convert']} out of [0,1] for sample {i}"
+        )
 
 
 def test_fit_raises_for_too_few_samples():

@@ -11,15 +11,25 @@ from __future__ import annotations
 import random
 
 
-def estimate_ess(arms: list[dict]) -> float:
-    """ESS approximation: sum of (alpha + beta - 2) across arms."""
+def estimate_ess(
+    arms: list[dict],
+    prior_alpha: float = 1.0,
+    prior_beta: float = 1.0,
+) -> float:
+    """
+    ESS approximation: sum of (alpha + beta - prior_alpha - prior_beta) across arms.
+
+    Subtracts the actual prior parameters so informed priors (alpha > 1 or beta > 1)
+    are not counted as observed data.  For flat Beta(1,1) priors the result is
+    identical to the old ``- 2`` formula.
+    """
     return sum(
-        max(float(a.get("alpha", 1.0)) + float(a.get("beta", 1.0)) - 2, 0)
+        max(float(a.get("alpha", 1.0)) + float(a.get("beta", 1.0)) - prior_alpha - prior_beta, 0)
         for a in arms
     )
 
 
-def thompson_best_arm(arms: list[dict], n_samples: int = 5000) -> list[dict]:
+def thompson_best_arm(arms: list[dict], n_samples: int = 10_000) -> list[dict]:
     """
     Returns list of {variant_id, win_probability, sample_mean} for all arms.
     win_probability = fraction of MC trials this arm was best.

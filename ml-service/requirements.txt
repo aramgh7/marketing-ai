@@ -23,6 +23,9 @@ boto3==1.35.0
 # Phase 5: clustering + propensity model
 scikit-learn==1.5.2
 joblib==1.4.2
+# Phase 12-1: ONNX serialisation for propensity model (no arbitrary code execution on load)
+skl2onnx>=1.16
+onnxruntime>=1.18
 # optional — MLflow experiment tracking (vision §15.10); omit if not configured
 # mlflow>=2.15.0
 # optional — face detection on frames (roadmap 9-17); Dockerfile ARG INSTALL_CV=1

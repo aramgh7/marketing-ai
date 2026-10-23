@@ -76,16 +76,18 @@ def should_auto_pause(
     variant_beta: float,
     control_alpha: float,
     control_beta: float,
+    prior_alpha: float = 1.0,
+    prior_beta: float = 1.0,
     min_ess: int = 100,
 ) -> tuple[bool, float]:
     """
     Monte Carlo estimate of P(variant is WORSE than control).
     Auto-pause if P(worse) > 0.95 AND ESS >= min_ess.
 
-    ESS approximation: α + β - 2  (flat prior removed).
+    ESS approximation: α + β - prior_alpha - prior_beta (informed priors supported).
     Returns (should_pause, p_worse).
     """
-    ess = (variant_alpha + variant_beta - 2.0)
+    ess = (variant_alpha + variant_beta - prior_alpha - prior_beta)
     if ess < min_ess:
         return False, 0.0
 

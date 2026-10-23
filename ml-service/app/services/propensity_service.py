@@ -7,10 +7,20 @@ No FastAPI imports — safe to unit-test without Pydantic.
 Model:
   - GradientBoostingClassifier — P(conversion)
   - Threshold-based objection: price | trust | urgency | understanding
+
+Model serialisation (Phase 12-1):
+  - Preferred: ONNX bytes (no arbitrary code execution on load)
+    Format: b"ONNX\\x00" + onnx_protobuf_bytes
+  - Fallback: SHA-256 hash-validated joblib pickle
+    Format: b"SAFE\\x00" + 64-byte hex hash + b"\\x00" + pickle_bytes
+  - Legacy (read-only, WARN on load): raw pickle starting with b"\\x80"
 """
+import logging
 from typing import Any
 
 import numpy as np
+
+_log = logging.getLogger(__name__)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -154,6 +164,67 @@ def determine_objection(features: np.ndarray) -> str | None:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Internal: safe model loading (Phase 12-1)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _load_and_score(model_bytes: bytes, features: np.ndarray) -> float:
+    """
+    Deserialise model bytes and return P(convert) for a single feature vector.
+
+    Supported formats:
+      b"ONNX\\x00"  — ONNX protobuf; loaded with onnxruntime (no pickle exec).
+      b"SAFE\\x00"  — SHA-256-validated joblib pickle.
+      b"\\x80..."   — Legacy raw pickle; WARN logged; rotate after next fit.
+    """
+    import io
+
+    if model_bytes[:5] == b"ONNX\x00":
+        import onnxruntime as rt
+        sess = rt.InferenceSession(model_bytes[5:])
+        input_name = sess.get_inputs()[0].name
+        X_input = features.reshape(1, -1).astype(np.float32)
+        outputs = sess.run(None, {input_name: X_input})
+        prob_output = outputs[1]  # list[dict] or 2-D array
+        if isinstance(prob_output, list):
+            # list of {class: prob} dicts
+            p = float(prob_output[0][1])
+        else:
+            p = float(prob_output[0][1])
+        return p
+
+    elif model_bytes[:5] == b"SAFE\x00":
+        import hashlib
+        import joblib
+        # Format: b"SAFE\x00" + 64 ASCII hex chars + b"\x00" + pickle_bytes
+        sha256_hex = model_bytes[5:69].decode("ascii")
+        pickle_bytes = model_bytes[70:]
+        actual_hex = hashlib.sha256(pickle_bytes).hexdigest()
+        if actual_hex != sha256_hex:
+            raise ValueError(
+                f"Propensity model hash mismatch — possible tampering "
+                f"(stored={sha256_hex[:8]}…, actual={actual_hex[:8]}…)"
+            )
+        model = joblib.load(io.BytesIO(pickle_bytes))
+        X = features.reshape(1, -1)
+        return float(model.predict_proba(X)[0][1])
+
+    elif model_bytes[:1] == b"\x80":
+        import joblib
+        _log.warning(
+            "Propensity model: legacy pickle model detected — "
+            "arbitrary code execution risk; rotate after next fit"
+        )
+        model = joblib.load(io.BytesIO(model_bytes))
+        X = features.reshape(1, -1)
+        return float(model.predict_proba(X)[0][1])
+
+    else:
+        raise ValueError(
+            f"Unknown propensity model format (magic={model_bytes[:5]!r})"
+        )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Gradient Boosting scoring (uses trained model bytes from caller)
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -174,10 +245,7 @@ def score_session(
 
     if model_bytes is not None:
         import io
-        import joblib
-        model = joblib.load(io.BytesIO(model_bytes))
-        X = features.reshape(1, -1)
-        p_convert = float(model.predict_proba(X)[0][1])
+        p_convert = _load_and_score(model_bytes, features)
     else:
         p_convert = rule_based_score(features)
 
@@ -236,9 +304,26 @@ def fit_propensity_model(
     ])
     pipe.fit(X, y)
 
+    # ── Phase 12-1: prefer ONNX (no pickle exec on load) ──────────────────────
+    try:
+        from skl2onnx import convert_sklearn
+        from skl2onnx.common.data_types import FloatTensorType
+        initial_type = [("float_input", FloatTensorType([None, N_PROPENSITY_FEATURES]))]
+        onnx_proto = convert_sklearn(pipe, initial_types=initial_type)
+        return b"ONNX\x00" + onnx_proto.SerializeToString()
+    except Exception as exc:
+        _log.warning(
+            "ONNX conversion failed (%s) — falling back to SHA-256-validated joblib pickle",
+            exc,
+        )
+
+    # ── Fallback: SHA-256 hash-validated joblib pickle ─────────────────────────
+    import hashlib
     buf = io.BytesIO()
     joblib.dump(pipe, buf)
-    return buf.getvalue()
+    pickle_bytes = buf.getvalue()
+    sha256_hex = hashlib.sha256(pickle_bytes).hexdigest().encode("ascii")  # 64 bytes
+    return b"SAFE\x00" + sha256_hex + b"\x00" + pickle_bytes
 
 
 # ──────────────────────────────────────────────────────────────────────────────

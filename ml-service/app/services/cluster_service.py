@@ -181,14 +181,23 @@ def fit_clusters(
     km = KMeans(n_clusters=n_clusters, random_state=random_state, n_init=10)
     labels = km.fit_predict(X_scaled)
 
-    # Unscale centroids back to interpretable values
+    # Unscale centroids back to interpretable values (for human inspection)
     centroids_raw = scaler.inverse_transform(km.cluster_centers_)
+
+    # Phase 12-5: store both scaled centroids and scaler params so assign_cluster
+    # can compute distances in the same (scaled) space used during fit.
+    scaler_mean = scaler.mean_.tolist()
+    scaler_std  = scaler.scale_.tolist()
 
     centroid_dicts = []
     for i, centroid in enumerate(centroids_raw):
         c = {name: float(val) for name, val in zip(FEATURE_NAMES, centroid)}
-        c["_cluster_idx"] = i
-        c["_session_count"] = int(np.sum(labels == i))
+        c["_cluster_idx"]     = i
+        c["_session_count"]   = int(np.sum(labels == i))
+        # Store scaled centroid (in the fitted StandardScaler space)
+        c["_centroid_scaled"] = km.cluster_centers_[i].tolist()
+        c["_scaler_mean"]     = scaler_mean
+        c["_scaler_std"]      = scaler_std
         centroid_dicts.append(c)
 
     return centroid_dicts
@@ -214,17 +223,34 @@ def assign_cluster(centroid_dicts: list[dict], features: np.ndarray) -> int:
 
     best_idx = 0
     best_dist = float("inf")
-    for cd in centroid_dicts:
-        centroid_vec = np.array(
-            [cd.get(name, 0.0) for name in FEATURE_NAMES], dtype=np.float32
-        )
-        # Normalise by feature std to avoid scale dominance
-        diff  = features - centroid_vec
-        scale = np.maximum(np.abs(centroid_vec), 1.0)
-        dist  = float(np.sum((diff / scale) ** 2))
-        if dist < best_dist:
-            best_dist = dist
-            best_idx = cd.get("_cluster_idx", 0)
+
+    # Phase 12-5: use StandardScaler params from fit_clusters so distances are
+    # computed in scaled space — the same space K-means was fitted in.
+    first = centroid_dicts[0]
+    if "_scaler_mean" in first and "_scaler_std" in first:
+        scaler_mean = np.array(first["_scaler_mean"], dtype=np.float32)
+        scaler_std  = np.array(first["_scaler_std"],  dtype=np.float32)
+        # Guard against zero std (constant feature)
+        scaler_std  = np.where(scaler_std == 0.0, 1.0, scaler_std)
+        features_scaled = (features - scaler_mean) / scaler_std
+
+        for cd in centroid_dicts:
+            centroid_scaled = np.array(cd["_centroid_scaled"], dtype=np.float32)
+            dist = float(np.sum((features_scaled - centroid_scaled) ** 2))
+            if dist < best_dist:
+                best_dist = dist
+                best_idx  = cd.get("_cluster_idx", 0)
+    else:
+        # Legacy / manually constructed centroid dicts without scaler info:
+        # fall back to plain Euclidean distance in raw feature space.
+        for cd in centroid_dicts:
+            centroid_vec = np.array(
+                [cd.get(name, 0.0) for name in FEATURE_NAMES], dtype=np.float32
+            )
+            dist = float(np.sum((features - centroid_vec) ** 2))
+            if dist < best_dist:
+                best_dist = dist
+                best_idx  = cd.get("_cluster_idx", 0)
 
     return int(best_idx)
 

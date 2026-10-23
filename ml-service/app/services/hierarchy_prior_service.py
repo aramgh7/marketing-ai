@@ -15,6 +15,24 @@ UNIVERSAL_PRIORS = {
 }
 
 
+def studentt_to_normal_moments(mu: float, sigma: float, nu: float = 4.0) -> tuple[float, float]:
+    """
+    Moment-match StudentT(nu, mu, sigma) to Normal for conjugate update approximation.
+
+    Mean  = mu       (defined for nu > 1; we accept nu=4 default)
+    Var   = sigma^2 * nu/(nu-2)  (defined for nu > 2)
+
+    Returns (matched_mu, matched_sigma) suitable for Normal-Normal conjugate update.
+    """
+    # Approximation: StudentT moments matched to Normal (Phase 12-3).
+    # Replace with PyMC sampling in Phase 7 MMM.
+    if nu <= 2:
+        # Undefined variance — inflate sigma as conservative fallback
+        return mu, sigma * 3.0
+    variance = sigma ** 2 * nu / (nu - 2)
+    return mu, math.sqrt(variance)
+
+
 def student_t_params(nu: float, mu: float, sigma: float) -> dict:
     """StudentT(ν, μ, σ) — robust prior for niche level."""
     return {"distribution": "StudentT", "nu": nu, "mu": mu, "sigma": sigma}
@@ -72,6 +90,13 @@ def build_client_prior(
 
     niche_mu    = niche_prior["prior"]["mu"]
     niche_sigma = niche_prior["prior"]["sigma"]
+
+    # Approximation: StudentT moments matched to Normal (Phase 12-3).
+    # Replace with PyMC sampling in Phase 7 MMM.
+    if niche_prior["prior"].get("distribution") == "StudentT":
+        nu = float(niche_prior["prior"].get("nu", 4.0))
+        niche_mu, niche_sigma = studentt_to_normal_moments(niche_mu, niche_sigma, nu=nu)
+
     obs_sigma   = client_std if client_std and client_std > 0 else niche_sigma
 
     precision_prior = 1.0 / (niche_sigma ** 2)

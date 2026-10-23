@@ -6,7 +6,16 @@ Formula: p_show × p_verified|show × p_invest|verified × E[ticket|bucket]
 Acceptance: calibration slope 0.8–1.2 on >=200 realised leads.
 """
 from __future__ import annotations
+import logging
 from collections import defaultdict
+
+_logger = logging.getLogger(__name__)
+
+# ── Phase 12-4: PLV slope auto-recalibration state ───────────────────────────
+# Counts consecutive out-of-range OLS slope results; resets on an in-range slope.
+_ols_out_of_range_streak: int = 0
+# Dynamically adjusted seed coefficient (soft correction when slope drifts).
+_seed_p_invest_adjusted: float | None = None  # None = use SEED_P_INVEST_GIVEN_VERIFIED
 
 E_TICKET = {
     "LT25K":    12_500,
@@ -92,11 +101,38 @@ def calibrate_value_model(
         for bk, d in by_bucket.items()
     }
 
+    calibrated = 0.8 <= slope <= 1.2
+
+    # ── Phase 12-4: auto-recalibration ────────────────────────────────────────
+    global _ols_out_of_range_streak, _seed_p_invest_adjusted
+
+    if not calibrated:
+        _ols_out_of_range_streak += 1
+        _logger.warning(
+            "PLV calibration slope=%.3f outside [0.8,1.2] — adjusting seed coefficients",
+            slope,
+        )
+        base = SEED_P_INVEST_GIVEN_VERIFIED
+        if slope > 1.2:
+            _seed_p_invest_adjusted = base * min(slope / 1.0, 1.3)
+        else:  # slope < 0.8
+            _seed_p_invest_adjusted = base * max(slope / 1.0, 0.7)
+
+        if _ols_out_of_range_streak >= 3:
+            _logger.error(
+                "ALERT PLV calibration slope out of range %d consecutive times",
+                _ols_out_of_range_streak,
+            )
+    else:
+        _ols_out_of_range_streak = 0
+
     return {
-        "calibrated": 0.8 <= slope <= 1.2,
-        "n":          n,
-        "slope":      round(slope, 4),
-        "intercept":  round(intercept, 2),
-        "by_bucket":  bucket_stats,
-        "acceptance": "slope ∈ [0.8, 1.2]",
+        "calibrated":              calibrated,
+        "n":                       n,
+        "slope":                   round(slope, 4),
+        "intercept":               round(intercept, 2),
+        "by_bucket":               bucket_stats,
+        "acceptance":              "slope ∈ [0.8, 1.2]",
+        "adjusted_p_invest":       round(_seed_p_invest_adjusted or SEED_P_INVEST_GIVEN_VERIFIED, 6),
+        "ols_out_of_range_streak": _ols_out_of_range_streak,
     }
