@@ -56,7 +56,9 @@ async def align_atom(
     _check_key(x_internal_api_key)
     pool = await system_pool()
     api_key = os.getenv("OPENAI_API_KEY")
-    embedding = get_embedding(req.atom_value, api_key=api_key)
+    import asyncio as _asyncio
+    # ML-1: get_embedding calls openai.OpenAI (sync) — run in thread so event loop stays free
+    embedding = await _asyncio.to_thread(get_embedding, req.atom_value, api_key)
 
     async with pool.acquire() as conn:
         rows = await conn.fetch(

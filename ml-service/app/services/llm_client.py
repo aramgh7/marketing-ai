@@ -5,6 +5,7 @@ import re
 import httpx
 import anthropic
 from app.config import settings
+from app.services.security_service import validate_public_http_url  # ML-4: SSRF guard
 
 
 class LLMClient:
@@ -118,6 +119,7 @@ async def analyze_transcript(transcript: str) -> dict[str, str]:
 async def _fetch_image(url: str) -> tuple[str, str]:
     """Download image and return (base64_data, media_type). Returns ('', '') on failure."""
     try:
+        validate_public_http_url(url, resolve=False)  # ML-4: SSRF guard before image download
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             resp = await client.get(url)
             resp.raise_for_status()

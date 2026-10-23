@@ -19,8 +19,10 @@ from app.services import media_atoms_service, transcription_service
 from app.services import browser_form_check_service
 from app.security import assert_public_http_url
 from app.security import check_internal_key
+from app.config import settings
 
 _ML_BASE = os.getenv("ML_SERVICE_URL", "http://localhost:8000")
+_INTERNAL_KEY = settings.internal_api_key  # ML-2: was NameError — _INTERNAL_KEY undefined
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Analysis"])
@@ -143,6 +145,8 @@ class JobStatusResponse(BaseModel):
 
 @router.post("/creative", response_model=AnalyzeCreativeResponse)
 async def analyze_creative(req: AnalyzeCreativeRequest, background_tasks: BackgroundTasks):
+    if req.file_url:
+        assert_public_http_url(req.file_url, resolve=False)  # ML-4: SSRF guard
     job_id = str(uuid.uuid4())
     await job_store.set_job(job_id, {"status": "queued", "creative_id": req.creative_id})
     background_tasks.add_task(_run_analysis, job_id, req)

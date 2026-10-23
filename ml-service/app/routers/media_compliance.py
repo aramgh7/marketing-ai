@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from app.services.media_compliance_service import run_media_compliance_checks
 from app.services.face_detection_service import detect_faces_in_video
 from app.config import settings
+from app.security import assert_public_http_url  # ML-4: SSRF guard
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -21,8 +22,9 @@ _MAX_DOWNLOAD = 200 * 1024 * 1024
 
 
 def _auth(key: str | None) -> None:
-    if _INTERNAL_KEY and key != _INTERNAL_KEY:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    # ML-22: use security module (compare_digest, fail-closed on empty key) instead of bare !=
+    from app.security import check_internal_key
+    check_internal_key(key)
 
 
 class MediaCheckRequest(BaseModel):
@@ -36,6 +38,7 @@ class MediaCheckRequest(BaseModel):
 
 
 async def _detect_from_url(url: str, every_sec: float, max_frames: int) -> dict:
+    assert_public_http_url(url, resolve=False)  # ML-4: SSRF guard before download
     async with httpx.AsyncClient(timeout=300, follow_redirects=True) as client:
         resp = await client.get(url)
         resp.raise_for_status()

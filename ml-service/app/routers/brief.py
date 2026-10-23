@@ -8,6 +8,7 @@ Endpoints:
   POST /brief/generate             — Phase 1 template brief (descriptive stats)
   POST /brief/generate-data-driven — Phase 4 full brief (posteriors + graveyard + references)
 """
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -398,12 +399,17 @@ Write a 200-300 word brief covering:
 Use practical, actionable language. No fluff."""
 
     try:
-        msg = client.messages.create(
-            model="claude-sonnet-5-5",
-            max_tokens=600,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return msg.content[0].text.strip()
+        # ML-1: sync anthropic.Anthropic wrapped in thread so event loop stays free
+        # ML-14: model from settings not hardcoded literal
+        def _call() -> str:
+            msg = client.messages.create(
+                model=settings.llm_model_default,
+                max_tokens=600,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return msg.content[0].text.strip()
+
+        return await asyncio.to_thread(_call)
     except Exception:
         logger.exception("LLM brief synthesis failed")
         return None

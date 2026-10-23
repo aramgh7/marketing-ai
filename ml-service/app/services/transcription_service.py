@@ -13,6 +13,7 @@ import tempfile
 import httpx
 
 from app.config import settings
+from app.services.security_service import validate_public_http_url  # ML-4: SSRF guard
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,7 @@ MAX_BYTES = 200 * 1024 * 1024
 
 
 async def download_media(url: str, timeout: float = 180.0) -> bytes:
+    validate_public_http_url(url, resolve=False)  # ML-4: SSRF guard before every download
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
         resp = await client.get(url)
         resp.raise_for_status()
