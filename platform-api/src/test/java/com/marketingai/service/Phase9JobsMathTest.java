@@ -99,19 +99,46 @@ class Phase9JobsMathTest {
     }
 
     // ─── ModerationProbeMath ───
+    private static final java.time.Duration MIN_AGE = java.time.Duration.ofHours(6);
+    private static final java.time.Duration FRESH = java.time.Duration.ofMinutes(20);
+    private static final java.time.Duration OLD = java.time.Duration.ofHours(7);
+
     @Test
     void moderation_verdicts() {
-        assertThat(ModerationProbeMath.verdict("PAUSED", false)).isEqualTo("APPROVED");
-        assertThat(ModerationProbeMath.verdict("ACTIVE", false)).isEqualTo("APPROVED");
-        assertThat(ModerationProbeMath.verdict("PENDING_REVIEW", false)).isEqualTo("PENDING");
-        assertThat(ModerationProbeMath.verdict("PENDING_REVIEW", true)).isEqualTo("PENDING");
-        assertThat(ModerationProbeMath.verdict("DISAPPROVED", false)).isEqualTo("REJECTED");
-        assertThat(ModerationProbeMath.verdict("WITH_ISSUES", false)).isEqualTo("REJECTED");
-        assertThat(ModerationProbeMath.verdict("PAUSED", true)).isEqualTo("REJECTED");
-        assertThat(ModerationProbeMath.verdict(null, false)).isEqualTo("PENDING");
+        // Audit M-3: the ad is created PAUSED, so a quiet status is approval only after the minimum age.
+        assertThat(ModerationProbeMath.verdict("PAUSED", false, OLD, MIN_AGE)).isEqualTo("APPROVED");
+        assertThat(ModerationProbeMath.verdict("ACTIVE", false, OLD, MIN_AGE)).isEqualTo("APPROVED");
+        assertThat(ModerationProbeMath.verdict("PENDING_REVIEW", false, OLD, MIN_AGE)).isEqualTo("PENDING");
+        assertThat(ModerationProbeMath.verdict("PENDING_REVIEW", true, OLD, MIN_AGE)).isEqualTo("PENDING");
+        assertThat(ModerationProbeMath.verdict("DISAPPROVED", false, OLD, MIN_AGE)).isEqualTo("REJECTED");
+        assertThat(ModerationProbeMath.verdict("WITH_ISSUES", false, OLD, MIN_AGE)).isEqualTo("REJECTED");
+        assertThat(ModerationProbeMath.verdict("PAUSED", true, OLD, MIN_AGE)).isEqualTo("REJECTED");
+        assertThat(ModerationProbeMath.verdict(null, false, OLD, MIN_AGE)).isEqualTo("PENDING");
         assertThat(ModerationProbeMath.rejectionCode("DISAPPROVED", "{\"personal_attributes\": \"...\"}"))
                 .isEqualTo("personal_attributes");
         assertThat(ModerationProbeMath.rejectionCode("DISAPPROVED", "{}")).isEqualTo("DISAPPROVED");
+    }
+
+    @Test
+    void moderation_quiet_status_is_pending_until_min_age() {
+        assertThat(ModerationProbeMath.verdict("PAUSED", false, FRESH, MIN_AGE)).isEqualTo("PENDING");
+        assertThat(ModerationProbeMath.verdict("ACTIVE", false, FRESH, MIN_AGE)).isEqualTo("PENDING");
+        assertThat(ModerationProbeMath.verdict("ADSET_PAUSED", false, FRESH, MIN_AGE)).isEqualTo("PENDING");
+        assertThat(ModerationProbeMath.verdict("PAUSED", false, MIN_AGE, MIN_AGE)).isEqualTo("APPROVED");   // exactly min age
+        assertThat(ModerationProbeMath.verdict("PAUSED", false, null, MIN_AGE)).isEqualTo("PENDING");      // unknown age
+        // Rejections do not wait for the age; in-review states stay PENDING however old.
+        assertThat(ModerationProbeMath.verdict("DISAPPROVED", false, FRESH, MIN_AGE)).isEqualTo("REJECTED");
+        assertThat(ModerationProbeMath.verdict("ACTIVE", true, FRESH, MIN_AGE)).isEqualTo("REJECTED");
+        assertThat(ModerationProbeMath.verdict("IN_PROCESS", false, OLD, MIN_AGE)).isEqualTo("PENDING");
+    }
+
+    @Test
+    void moderation_age_from_jdbc_timestamp() {
+        Instant now = Instant.parse("2026-10-22T12:00:00Z");
+        assertThat(ModerationProbeMath.ageOf(java.sql.Timestamp.from(now.minus(OLD)), now)).isEqualTo(OLD);
+        assertThat(ModerationProbeMath.ageOf(now.minus(FRESH).atOffset(java.time.ZoneOffset.UTC), now)).isEqualTo(FRESH);
+        assertThat(ModerationProbeMath.ageOf(now.plusSeconds(60), now)).isEqualTo(java.time.Duration.ZERO);
+        assertThat(ModerationProbeMath.ageOf(null, now)).isNull();
     }
 
     // ─── RegCfWaitlistMath ───

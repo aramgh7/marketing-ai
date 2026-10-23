@@ -1,5 +1,7 @@
 package com.marketingai.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.marketingai.config.AppProperties;
 import com.marketingai.entity.ComplianceCheck;
 import com.marketingai.entity.Creative;
@@ -12,17 +14,21 @@ import com.marketingai.repository.MetaAdMapRepository;
 import com.marketingai.repository.TenantDomainRepository;
 import com.marketingai.repository.TenantRepository;
 import com.marketingai.security.TenantContext;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -35,6 +41,11 @@ import java.util.UUID;
  * Upload the creative, create the ad creative and the ad PAUSED with the platform's destination URL and
  * url_tags, remember every id in {@code meta_ad_map}, and open a moderation probe row so the verdict is read
  * before anyone activates the ad. Activation (RESUME) and pausing are separate, gated writes.
+ * <p>
+ * Audit M-5: {@link #publish} is three steps — a short transaction that records the <i>intent</i> (a PUBLISHING
+ * row under an advisory lock on the creative; a second click gets 409), the Meta calls with no transaction open,
+ * and a short transaction that records the result. A failure after Meta created something deletes the orphan ad
+ * and leaves a PUBLISH_FAILED row with the orphan ids for the reconcile job and the cabinet.
  */
 @Slf4j
 @Service
@@ -44,6 +55,8 @@ public class CreativePublishService {
     public static final List<String> PUBLISH_STATUSES = List.of(
             "NOT_IN_META", "PENDING_REVIEW", "APPROVED_PAUSED", "ACTIVE_IN_META", "PAUSED_IN_META", "REJECTED", "UNMANAGED", "DRIFT");
 
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
     private final CreativeRepository creativeRepo;
     private final TenantRepository tenantRepo;
     private final TenantDomainRepository domainRepo;
@@ -52,12 +65,21 @@ public class CreativePublishService {
     private final ComplianceService complianceService;
     private final MetaWriteGate metaWriteGate;
     private final MetaApiService metaApi;
+    private final MetaVideoStatusService videoStatus;
     private final MetaApiAuditService audit;
     private final TokenVault vault;
     private final AppProperties props;
     private final JdbcTemplate jdbc;
+    private final TransactionTemplate tx;
+    private final RestTemplateBuilder restTemplateBuilder;
 
-    private final RestTemplate rest = new RestTemplate();
+    /** Downloads of remote creative files (audit M-5в): bounded timeouts, read long enough for a video. */
+    private RestTemplate rest;
+
+    @PostConstruct
+    void initRest() {
+        rest = restTemplateBuilder.connectTimeout(Duration.ofSeconds(10)).readTimeout(Duration.ofSeconds(300)).build();
+    }
 
     // ─── preview ──────────────────────────────────────────────────────────────
 
@@ -97,6 +119,10 @@ public class CreativePublishService {
         items.add(item("page_id", "Facebook Page id (object_story_spec)", page, page ? t.getMetaPageId() : "missing — Settings → Meta credentials"));
         boolean file = fileReadable(c);
         items.add(item("file", "Creative file readable", file, c.getFileUrl() == null ? "no file" : c.getFileUrl()));
+        // Roadmap 11-3c: a creative rendered by the platform needs a marketer-approved render (video_renders.approved_at).
+        long[] renders = renderCounts(c);
+        items.add(item("render", "Approved render (platform renders only)", CreativePublishMath.renderReady(renders[0], renders[1]),
+                CreativePublishMath.renderDetail(renders[0], renders[1])));
         boolean compliant = complianceService.isCompliant(c.getId());
         items.add(item("compliance", "Compliance check PASS (or override)", compliant, compliant ? "PASS" : "run /compliance/check for this creative"));
         boolean notArchived = !"ARCHIVED".equals(c.getStatus());
@@ -110,7 +136,21 @@ public class CreativePublishService {
 
     // ─── publish ──────────────────────────────────────────────────────────────
 
-    @Transactional
+    /** Ids Meta handed back during one attempt; filled in order so a failure knows what to compensate. */
+    static final class Created {
+        String videoId, imageHash, metaCreativeId, metaAdId;
+        boolean any() { return videoId != null || metaCreativeId != null || metaAdId != null; }
+    }
+
+    /** Audit M-4: the upload succeeded but Meta has not rendered a thumbnail yet — the intent row keeps the video id. */
+    static final class VideoProcessing extends ResponseStatusException {
+        final String videoId;
+        VideoProcessing(String videoId) {
+            super(HttpStatus.CONFLICT, "video " + videoId + " is still processing in Meta, retry in a minute");
+            this.videoId = videoId;
+        }
+    }
+
     public Map<String, Object> publish(UUID creativeId, Map<String, Object> body, UUID userId) {
         UUID tenantId = tenantId();
         Creative c = findCreative(creativeId, tenantId);
@@ -144,47 +184,129 @@ public class CreativePublishService {
         String token = vault.open(t.getMetaAccessTokenEnc());
         String account = t.getMetaAdAccountId();
 
-        // Single choke point for Meta writes (roadmap 9-19): CREATE_AD_PAUSED is allowed from GUARDED_WRITES.
-        metaWriteGate.assertAllowed(tenantId, MetaWriteGate.Request.of(MetaWriteAction.CREATE_AD_PAUSED, adSetId));
+        // 1. Intent (short transaction, advisory lock): a second click / retry sees the PUBLISHING row.
+        MetaAdMap intent = tx.execute(s -> recordIntent(tenantId, creativeId, adSetId, slug, destinationUrl, adName));
+        String resumedVideoId = intent.getMetaVideoId();
 
-        long started = System.currentTimeMillis();
-        String videoId = null, imageHash = null;
-        byte[] bytes = readFile(c);
-        String fileName = fileName(c);
-        if ("VIDEO".equalsIgnoreCase(c.getType())) {
-            videoId = metaApi.uploadVideo(token, account, bytes, fileName);
-            auditLog(tenantId, userId, "AD_VIDEO_UPLOAD", "video", videoId, started);
-        } else {
-            imageHash = metaApi.uploadImage(token, account, bytes, fileName);
-            auditLog(tenantId, userId, "AD_IMAGE_UPLOAD", "image", imageHash, started);
+        // 2. Meta calls — no transaction open (a video upload can take minutes).
+        Created out = new Created();
+        try {
+            createInMeta(tenantId, userId, token, account, t, c, adSetId, adName, primaryText, headline, destinationUrl, cta,
+                    resumedVideoId, out);
+            // 3. Result (short transaction).
+            tx.executeWithoutResult(s -> recordResult(tenantId, creativeId, intent.getId(), adSetId, out));
+        } catch (VideoProcessing e) {
+            checkpointVideo(intent.getId(), e.videoId);
+            throw e;
+        } catch (RuntimeException e) {
+            finishFailed(tenantId, userId, token, creativeId, intent.getId(), out, e);
+            throw e;
         }
-        String metaCreativeId = metaApi.createAdCreative(token, account, adName, t.getMetaPageId(), t.getMetaInstagramActorId(),
-                videoId, imageHash, c.getThumbnailUrl(), primaryText, headline, destinationUrl, CreativePublishMath.URL_TAGS, cta);
-        auditLog(tenantId, userId, "AD_CREATIVE_CREATE", "adcreative", metaCreativeId, started);
-        String metaAdId = metaApi.createAd(token, account, adSetId, adName, metaCreativeId);
-        auditLog(tenantId, userId, "AD_CREATE_PAUSED", "ad", metaAdId, started);
 
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("meta_ad_id", out.metaAdId);
+        result.put("meta_creative_id", out.metaCreativeId);
+        result.put("meta_video_id", out.videoId);
+        result.put("meta_image_hash", out.imageHash);
+        result.put("status", "PENDING_REVIEW");
+        result.put("ad_name", adName);
+        result.put("destination_url", destinationUrl);
+        result.put("url_tags", CreativePublishMath.URL_TAGS);
+        return result;
+    }
+
+    /** Runs inside the intent transaction. Returns the PUBLISHING row (new, or the resumed one). */
+    private MetaAdMap recordIntent(UUID tenantId, UUID creativeId, String adSetId, String slug, String destinationUrl, String adName) {
+        // Serialises concurrent publishes of the same creative for the length of this (short) transaction.
+        jdbc.queryForList("SELECT pg_advisory_xact_lock(hashtext(?))", creativeId.toString());
+        Instant now = Instant.now();
+        CreativePublishMath.Existing ex = CreativePublishMath.existing(
+                mapRepo.findAllByTenantIdAndCreativeId(tenantId, creativeId), adSetId, now);
+        switch (ex.state()) {
+            case CONFLICT -> throw new ResponseStatusException(HttpStatus.CONFLICT, "creative is already published to ad set "
+                    + adSetId + " as Meta ad " + ex.row().getMetaAdId() + " (" + ex.row().getStatus()
+                    + ") — pause or archive that ad before publishing again");
+            case IN_PROGRESS -> throw new ResponseStatusException(HttpStatus.CONFLICT, "a publish of this creative to ad set "
+                    + adSetId + " is already in progress (started " + ex.row().getUpdatedAt() + ")");
+            case RESUME -> {
+                MetaAdMap m = ex.row();
+                m.setDrift(note(CreativePublishMath.STAGE_IN_PROGRESS, null, null));
+                return mapRepo.saveAndFlush(m);
+            }
+            case STALE -> {
+                MetaAdMap m = ex.row();
+                m.setStatus("PUBLISH_FAILED");
+                m.setMetaAdId(CreativePublishMath.failedMarker(creativeId, now));
+                m.setDrift(note("PUBLISH_FAILED", "abandoned: no progress for " + CreativePublishMath.PUBLISHING_STALE_AFTER.toMinutes()
+                        + " min", orphans(m.getMetaVideoId(), m.getMetaCreativeId(), null, false)));
+                mapRepo.saveAndFlush(m);
+            }
+            case FREE -> { }
+        }
         MetaAdMap m = new MetaAdMap();
         m.setTenantId(tenantId);
-        m.setMetaAdId(metaAdId);
+        m.setMetaAdId(CreativePublishMath.pendingMarker(creativeId));
         m.setMetaAdsetId(adSetId);
         m.setMetaCampaignId(campaignOf(tenantId, adSetId));
-        m.setMetaCreativeId(metaCreativeId);
-        m.setMetaVideoId(videoId);
-        m.setMetaImageHash(imageHash);
         m.setCreativeId(creativeId);
         m.setEntrySlug(slug);
         m.setDestinationUrl(destinationUrl);
         m.setUrlTags(CreativePublishMath.URL_TAGS);
         m.setAdName(adName);
         m.setSource("MANAGED");
+        m.setStatus("PUBLISHING");
+        m.setDrift(note(CreativePublishMath.STAGE_IN_PROGRESS, null, null));
+        return mapRepo.saveAndFlush(m);   // flush: the unique (tenant_id, meta_ad_id) surfaces here, inside the lock
+    }
+
+    /** The Meta sequence. No transaction is open here. Every id is written to {@code out} as soon as Meta returns it. */
+    private void createInMeta(UUID tenantId, UUID userId, String token, String account, Tenant t, Creative c, String adSetId,
+                              String adName, String primaryText, String headline, String destinationUrl, String cta,
+                              String resumedVideoId, Created out) {
+        // Single choke point for Meta writes (roadmap 9-19): CREATE_AD_PAUSED is allowed from GUARDED_WRITES.
+        metaWriteGate.assertAllowed(tenantId, MetaWriteGate.Request.of(MetaWriteAction.CREATE_AD_PAUSED, adSetId));
+        long started = System.currentTimeMillis();
+        String imageUrl = null;
+        if ("VIDEO".equalsIgnoreCase(c.getType())) {
+            if (resumedVideoId != null) {
+                out.videoId = resumedVideoId;   // uploaded by the previous attempt; Meta was still processing it
+            } else {
+                out.videoId = metaApi.uploadVideo(token, account, readFile(c), fileName(c));
+                auditLog(tenantId, userId, "AD_VIDEO_UPLOAD", "video", out.videoId, started);
+            }
+            // Audit M-4: video_data needs image_url / image_hash. Meta renders thumbnails asynchronously after the
+            // upload; a public https thumbnail of our own is the fallback. Never create a creative without an image.
+            imageUrl = videoStatus.awaitThumbnail(token, out.videoId);
+            if (imageUrl == null && CreativePublishMath.usableAsImageUrl(c.getThumbnailUrl())) imageUrl = c.getThumbnailUrl();
+            if (imageUrl == null) throw new VideoProcessing(out.videoId);
+        } else {
+            out.imageHash = metaApi.uploadImage(token, account, readFile(c), fileName(c));
+            auditLog(tenantId, userId, "AD_IMAGE_UPLOAD", "image", out.imageHash, started);
+        }
+        out.metaCreativeId = metaApi.createAdCreative(token, account, adName, t.getMetaPageId(), t.getMetaInstagramActorId(),
+                out.videoId, out.imageHash, imageUrl, primaryText, headline, destinationUrl, CreativePublishMath.URL_TAGS, cta);
+        auditLog(tenantId, userId, "AD_CREATIVE_CREATE", "adcreative", out.metaCreativeId, started);
+        out.metaAdId = metaApi.createAd(token, account, adSetId, adName, out.metaCreativeId);
+        auditLog(tenantId, userId, "AD_CREATE_PAUSED", "ad", out.metaAdId, started);
+    }
+
+    /** Runs inside the result transaction: the intent row becomes the ad row, the creative and the probe row follow. */
+    private void recordResult(UUID tenantId, UUID creativeId, UUID intentId, String adSetId, Created out) {
+        MetaAdMap m = mapRepo.findById(intentId)
+                .orElseThrow(() -> new IllegalStateException("publish intent " + intentId + " vanished"));
+        m.setMetaAdId(out.metaAdId);
+        m.setMetaCreativeId(out.metaCreativeId);
+        m.setMetaVideoId(out.videoId);
+        m.setMetaImageHash(out.imageHash);
         m.setStatus("PENDING_REVIEW");
+        m.setDrift(null);
         m.setLastSeenAt(Instant.now());
         mapRepo.save(m);
 
+        Creative c = findCreative(creativeId, tenantId);
         c.setPublishStatus("PENDING_REVIEW");
-        c.setMetaVideoId(videoId);
-        c.setMetaCreativeId(metaCreativeId);
+        c.setMetaVideoId(out.videoId);
+        c.setMetaCreativeId(out.metaCreativeId);
         c.setPublishedAt(Instant.now());
         creativeRepo.save(c);
 
@@ -193,18 +315,78 @@ public class CreativePublishService {
         jdbc.update("""
                 INSERT INTO moderation_results (tenant_id, creative_id, ad_set_id, probe_type, result, meta_ad_id)
                 VALUES (?, ?, ?, 'meta_review', 'PENDING', ?)
-                """, tenantId, creativeId, ourAdSet, metaAdId);
+                """, tenantId, creativeId, ourAdSet, out.metaAdId);
+    }
 
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("meta_ad_id", metaAdId);
-        out.put("meta_creative_id", metaCreativeId);
-        out.put("meta_video_id", videoId);
-        out.put("meta_image_hash", imageHash);
-        out.put("status", "PENDING_REVIEW");
-        out.put("ad_name", adName);
-        out.put("destination_url", destinationUrl);
-        out.put("url_tags", CreativePublishMath.URL_TAGS);
-        return out;
+    /** Video uploaded, thumbnail not ready: keep the PUBLISHING row with the video id so the retry skips the upload. */
+    private void checkpointVideo(UUID intentId, String videoId) {
+        try {
+            tx.executeWithoutResult(s -> mapRepo.findById(intentId).ifPresent(m -> {
+                m.setMetaVideoId(videoId);
+                m.setDrift(note(CreativePublishMath.STAGE_VIDEO_PROCESSING, "retry in a minute", null));
+                mapRepo.save(m);
+            }));
+        } catch (Exception e) {
+            log.warn("publish checkpoint for intent {} failed: {}", intentId, e.getMessage());
+        }
+    }
+
+    /**
+     * Compensation. The PAUSED ad (if created) is deleted in Meta; the video and the ad creative cannot be deleted
+     * through MetaApiService, so they are recorded as orphans on a PUBLISH_FAILED row. Nothing created → the intent
+     * row is removed.
+     */
+    private void finishFailed(UUID tenantId, UUID userId, String token, UUID creativeId, UUID intentId, Created out, Exception cause) {
+        boolean adDeleted = false;
+        if (out.metaAdId != null) {
+            try {
+                deleteOrphanAd(tenantId, userId, token, out.metaAdId);
+                adDeleted = true;
+            } catch (Exception e) {
+                log.warn("could not delete orphan Meta ad {} after a failed publish: {}", out.metaAdId, e.getMessage());
+            }
+        }
+        final boolean deleted = adDeleted;
+        try {
+            tx.executeWithoutResult(s -> mapRepo.findById(intentId).ifPresent(m -> {
+                if (!out.any()) { mapRepo.delete(m); return; }
+                m.setStatus("PUBLISH_FAILED");
+                m.setMetaAdId(out.metaAdId != null && !deleted ? out.metaAdId : CreativePublishMath.failedMarker(creativeId, Instant.now()));
+                m.setMetaVideoId(out.videoId);
+                m.setMetaCreativeId(out.metaCreativeId);
+                m.setMetaImageHash(out.imageHash);
+                m.setDrift(note("PUBLISH_FAILED", cause.getMessage(), orphans(out.videoId, out.metaCreativeId, out.metaAdId, deleted)));
+                mapRepo.save(m);
+            }));
+        } catch (Exception e) {
+            log.error("publish failure bookkeeping for intent {} failed: {}", intentId, e.getMessage());
+        }
+        log.warn("publish of creative {} failed after video={} creative={} ad={} (ad deleted: {}): {}",
+                creativeId, out.videoId, out.metaCreativeId, out.metaAdId, adDeleted, cause.getMessage());
+    }
+
+    private void deleteOrphanAd(UUID tenantId, UUID userId, String token, String metaAdId) {
+        // Removing a PAUSED ad that never delivered is protective (the PAUSE class is never refused by the policy).
+        metaWriteGate.assertAllowed(tenantId, MetaWriteGate.Request.of(MetaWriteAction.PAUSE, metaAdId));
+        long started = System.currentTimeMillis();
+        metaApi.setAdStatus(token, metaAdId, "DELETED");
+        auditLog(tenantId, userId, "AD_DELETE_ORPHAN", "ad", metaAdId, started);
+    }
+
+    /** drift JSON of a PUBLISHING / PUBLISH_FAILED row: {stage, error?, orphans?} — a publish note, not a reconciliation drift. */
+    private static String note(String stage, String error, ObjectNode orphans) {
+        ObjectNode n = MAPPER.createObjectNode().put("stage", stage);
+        if (error != null) n.put("error", error.length() > 500 ? error.substring(0, 500) : error);
+        if (orphans != null) n.set("orphans", orphans);
+        return n.toString();
+    }
+
+    private static ObjectNode orphans(String videoId, String metaCreativeId, String metaAdId, boolean adDeleted) {
+        ObjectNode o = MAPPER.createObjectNode();
+        if (videoId != null) o.put("video_id", videoId);
+        if (metaCreativeId != null) o.put("creative_id", metaCreativeId);
+        if (metaAdId != null) { o.put("ad_id", metaAdId); o.put("ad_deleted", adDeleted); }
+        return o;
     }
 
     // ─── activate / pause ─────────────────────────────────────────────────────
@@ -220,15 +402,25 @@ public class CreativePublishService {
         }
         Tenant t = tenant(tenantId);
         String token = vault.open(t.getMetaAccessTokenEnc());
+        // Audit M-20: the platform creates ad sets PAUSED — an ACTIVE ad inside a paused ad set does not deliver.
+        MetaVideoStatusService.DeliveryStatus delivery = videoStatus.adSetDelivery(token, m.getMetaAdsetId());
+        String warning = CreativePublishMath.deliveryWarning(delivery.adSetEffectiveStatus(), delivery.campaignEffectiveStatus());
         metaWriteGate.assertAllowed(tenantId, MetaWriteGate.Request.of(MetaWriteAction.RESUME, m.getMetaAdId()));
         long started = System.currentTimeMillis();
         metaApi.setAdStatus(token, m.getMetaAdId(), "ACTIVE");
         auditLog(tenantId, userId, "AD_ACTIVATE", "ad", m.getMetaAdId(), started);
         m.setStatus("ACTIVE");
         mapRepo.save(m);
-        c.setPublishStatus("ACTIVE_IN_META");
+        c.setPublishStatus(CreativePublishMath.publishStatusAfterActivate(warning));
         creativeRepo.save(c);
-        return Map.of("meta_ad_id", m.getMetaAdId(), "status", "ACTIVE", "publish_status", c.getPublishStatus());
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("meta_ad_id", m.getMetaAdId());
+        out.put("status", "ACTIVE");
+        out.put("publish_status", c.getPublishStatus());
+        out.put("warning", warning);
+        out.put("adset_effective_status", delivery.adSetEffectiveStatus());
+        out.put("campaign_effective_status", delivery.campaignEffectiveStatus());
+        return out;
     }
 
     @Transactional
@@ -343,9 +535,10 @@ public class CreativePublishService {
 
     // ─── helpers ──────────────────────────────────────────────────────────────
 
+    /** Latest row that owns a real Meta ad: intents (PUBLISHING), failed attempts and archived rows do not count. */
     private MetaAdMap latestManaged(UUID tenantId, UUID creativeId) {
         return mapRepo.findAllByTenantIdAndCreativeId(tenantId, creativeId).stream()
-                .filter(m -> !"ARCHIVED".equals(m.getStatus()))
+                .filter(m -> !List.of("ARCHIVED", "PUBLISHING", "PUBLISH_FAILED").contains(m.getStatus()))
                 .max(java.util.Comparator.comparing(MetaAdMap::getCreatedAt))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "creative has no Meta ad — publish it first"));
     }
@@ -391,21 +584,53 @@ public class CreativePublishService {
         try { return CreativePublishMath.destinationUrl(host, slug); } catch (IllegalArgumentException e) { return null; }
     }
 
+    /** {total, approved} platform renders of the creative (by creative_id or by the render's storage URL). */
+    private long[] renderCounts(Creative c) {
+        try {
+            Map<String, Object> r = jdbc.queryForMap("""
+                    SELECT COUNT(*) AS total,
+                           COUNT(*) FILTER (WHERE approved_at IS NOT NULL AND killed_at IS NULL) AS approved
+                    FROM video_renders
+                    WHERE tenant_id = ? AND (creative_id = ? OR (storage_url IS NOT NULL AND storage_url = ?))
+                    """, c.getTenantId(), c.getId(), c.getFileUrl());
+            return new long[]{((Number) r.get("total")).longValue(), ((Number) r.get("approved")).longValue()};
+        } catch (Exception e) {
+            log.warn("render lookup for creative {} failed: {}", c.getId(), e.getMessage());
+            return new long[]{0, 0};
+        }
+    }
+
+    /** Audit M-31: readiness checks the size, not the content (the file is read once, in publish). */
     private boolean fileReadable(Creative c) {
-        try { return readFile(c).length > 0; } catch (Exception e) { return false; }
+        try { return fileSize(c) > 0; } catch (Exception e) { return false; }
+    }
+
+    private long fileSize(Creative c) throws java.io.IOException {
+        String url = c.getFileUrl();
+        if (url == null || url.isBlank()) return 0;
+        Path local = localPath(url);
+        if (local != null) return Files.size(local);
+        if (url.startsWith("http://") || url.startsWith("https://")) {
+            long len = rest.headForHeaders(url).getContentLength();
+            return len < 0 ? 1 : len;   // reachable without Content-Length: treat as present
+        }
+        return Files.size(Path.of(url));
+    }
+
+    private Path localPath(String url) {
+        if (url.startsWith("/files/")) {
+            String[] parts = url.substring("/files/".length()).split("/", 3);
+            if (parts.length == 3) return Path.of(props.getStorage().getLocalPath(), parts[0], parts[1], parts[2]);
+        }
+        return null;
     }
 
     private byte[] readFile(Creative c) {
         String url = c.getFileUrl();
         if (url == null || url.isBlank()) throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "creative has no file");
         try {
-            if (url.startsWith("/files/")) {
-                String[] parts = url.substring("/files/".length()).split("/", 3);
-                if (parts.length == 3) {
-                    Path p = Path.of(props.getStorage().getLocalPath(), parts[0], parts[1], parts[2]);
-                    return Files.readAllBytes(p);
-                }
-            }
+            Path local = localPath(url);
+            if (local != null) return Files.readAllBytes(local);
             if (url.startsWith("http://") || url.startsWith("https://")) {
                 byte[] b = rest.getForObject(url, byte[].class);
                 return b == null ? new byte[0] : b;
