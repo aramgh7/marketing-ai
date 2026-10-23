@@ -25,7 +25,7 @@ import java.util.*;
  *     - ≥ 14 days in GUARDED_WRITES
  *     - latest OPE verdict PASS ≤ 7 days
  *     - autonomy level ≥ SEMI_AUTOPILOT
- *     - no DENY decisions in the last 7 days (the guarded stage ran clean)
+ *     - no DENY decisions initiated by jobs in the last 7 days (the guarded stage ran clean; user clicks don't count)
  *
  * Downgrades are always allowed; a forward move with unmet conditions needs an override reason (admin).
  */
@@ -37,6 +37,12 @@ public class MetaWriteStageService {
     public static final int CAPI_MIN_EVENTS = 50;
     public static final int CAPI_MIN_DAYS = 14;
     public static final int GUARDED_MIN_DAYS = 14;
+
+    /** FULL condition "clean week": DENY decisions of the last 7 days whose initiator was a job (audit M-24). */
+    static final String CLEAN_WEEK_SQL = """
+            SELECT COUNT(*) FROM meta_write_decisions
+            WHERE tenant_id = ? AND verdict = 'DENY' AND initiator = 'JOB' AND created_at > now() - INTERVAL '7 days'
+            """;
 
     private final JdbcTemplate jdbc;
     private final CAPIEmqCheckService emqCheckService;
@@ -157,11 +163,11 @@ public class MetaWriteStageService {
             String level = autonomyService.getAutonomyLevel(tenantId);
             out.add(new Condition("autonomy", "Autonomy ≥ SEMI_AUTOPILOT", AutonomyGate.rank(level) >= AutonomyGate.rank("SEMI_AUTOPILOT"), level));
 
-            Integer denies = jdbc.queryForObject("""
-                    SELECT COUNT(*) FROM meta_write_decisions
-                    WHERE tenant_id = ? AND verdict = 'DENY' AND created_at > now() - INTERVAL '7 days'
-                    """, Integer.class, tenantId);
-            out.add(new Condition("clean_week", "No refused writes in the last 7 days", denies != null && denies == 0, denies + " DENY decisions"));
+            // Audit M-24: only writes the platform's jobs attempted count — a user clicking into a forbidden action
+            // in the cabinet is a UI refusal, not evidence that the guarded stage ran dirty.
+            Integer denies = jdbc.queryForObject(CLEAN_WEEK_SQL, Integer.class, tenantId);
+            out.add(new Condition("clean_week", "No job writes refused in the last 7 days", denies != null && denies == 0,
+                    denies + " DENY decisions initiated by jobs"));
         }
         return out;
     }
