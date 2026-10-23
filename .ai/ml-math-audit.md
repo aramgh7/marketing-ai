@@ -32,7 +32,6 @@
 
 
 ### Полный код
-
 ```python
 """
 A/B Experiment Lifecycle — Bayesian stopping rules (vision §3; arch §16.9).
@@ -47,15 +46,25 @@ from __future__ import annotations
 import random
 
 
-def estimate_ess(arms: list[dict]) -> float:
-    """ESS approximation: sum of (alpha + beta - 2) across arms."""
+def estimate_ess(
+    arms: list[dict],
+    prior_alpha: float = 1.0,
+    prior_beta: float = 1.0,
+) -> float:
+    """
+    ESS approximation: sum of (alpha + beta - prior_alpha - prior_beta) across arms.
+
+    Subtracts the actual prior parameters so informed priors (alpha > 1 or beta > 1)
+    are not counted as observed data.  For flat Beta(1,1) priors the result is
+    identical to the old ``- 2`` formula.
+    """
     return sum(
-        max(float(a.get("alpha", 1.0)) + float(a.get("beta", 1.0)) - 2, 0)
+        max(float(a.get("alpha", 1.0)) + float(a.get("beta", 1.0)) - prior_alpha - prior_beta, 0)
         for a in arms
     )
 
 
-def thompson_best_arm(arms: list[dict], n_samples: int = 5000) -> list[dict]:
+def thompson_best_arm(arms: list[dict], n_samples: int = 10_000) -> list[dict]:
     """
     Returns list of {variant_id, win_probability, sample_mean} for all arms.
     win_probability = fraction of MC trials this arm was best.
@@ -221,7 +230,6 @@ def check_auto_pause(
 
 
 ### Полный код
-
 ```python
 """Thompson Sampling service — Beta(α,β) arm selection with Redis-cached posteriors.
 
@@ -247,15 +255,18 @@ Propensity (arch v1.1 §4.6):
 Cache: Redis key posterior:{tenant_id}:{context_key}, TTL 15 min.
 """
 
-import asyncio
+import hashlib
 import json
+import math
 from datetime import datetime, timezone
 from typing import Optional
 
 import numpy as np
 
 from app.config import settings
-from app.services.db_client import get_pool
+from app.services.db_client import system_pool, tenant_pool  # ML-26: removed unused get_pool
+from app.services.glm_prior_service import prior_for_variant
+from app.services.expert_prior_service import prior_for_arm
 from app.services.job_store import get_redis
 
 CACHE_PREFIX = "posterior"
@@ -263,10 +274,15 @@ CACHE_TTL = 900  # 15 min
 DECISION_TTL = 3600  # 1 h
 DECAY_FACTOR = 0.99
 DECAY_INTERVAL_SECS = 86_400  # 24 h
-N_PROPENSITY = 200  # Monte Carlo draws for propensity estimation
+N_PROPENSITY = 2_000  # Monte Carlo draws for propensity estimation
 
-_UPDATE_ALPHA = "UPDATE thompson_arms SET alpha=alpha+$1, total_samples=total_samples+1, updated_at=$2 WHERE id=$3"
-_UPDATE_BETA  = "UPDATE thompson_arms SET beta=beta+$1,  total_samples=total_samples+1, updated_at=$2 WHERE id=$3"
+_UPDATE_ALPHA = ("UPDATE thompson_arms SET alpha=alpha+$1, total_samples=total_samples+1, updated_at=$2 "
+                 "WHERE id=$3::uuid AND tenant_id=$4::uuid")
+_UPDATE_BETA  = ("UPDATE thompson_arms SET beta=beta+$1,  total_samples=total_samples+1, updated_at=$2 "
+                 "WHERE id=$3::uuid AND tenant_id=$4::uuid")
+_SET_TENANT   = "SELECT set_config('app.current_tenant', $1, true)"  # SET LOCAL cannot take a bind parameter
+
+NO_RESPONSE_WINDOW_DAYS = 7   # attribution window before a decision counts as a negative (beta += 1)
 
 # arch v1.1 §4.4: all deltas are 1.0 — binary counts only, no fractional increments
 REWARD_MAP: dict[str, tuple[str, float]] = {
@@ -281,34 +297,191 @@ REWARD_MAP: dict[str, tuple[str, float]] = {
 }
 
 
-async def load_arms(tenant_id: str, context_key: str = "global") -> list[dict]:
-    """Return ACTIVE arms from Redis cache or DB. Apply 24 h decay lazily."""
-    redis = get_redis()
-    cache_key = f"{CACHE_PREFIX}:{tenant_id}:{context_key}"
-    cached = await redis.get(cache_key)
-    if cached:
-        return json.loads(cached)
+# ─── Pure helpers (no I/O) ───────────────────────────────────────────────────
 
-    pool = await get_pool()
+def holdout_bucket(session_id: Optional[str]) -> int:
+    """Deterministic 0-9999 bucket. Session ids are cookie strings, not necessarily hex/UUID."""
+    if not session_id:
+        return int(np.random.randint(0, 10_000))
+    return int(hashlib.sha1(session_id.encode("utf-8")).hexdigest()[:8], 16) % 10_000
+
+
+def decay_toward_prior(value: float, days: int) -> float:
+    """arch v1.1 §9: alpha = 1 + 0.99^days * (alpha - 1). Never crosses below the Beta(1,1) prior."""
+    if days <= 0:
+        return value
+    return 1.0 + (DECAY_FACTOR ** days) * (value - 1.0)
+
+
+def churn_penalty_delta(weighted_sum: float, alpha: float, beta: float) -> tuple[int, bool]:
+    """Integer beta penalty for a churn wave (vision §6.7 cap, arch §4.4 binary counts).
+
+    Returns (applied_delta, capped). The cap is 30 % of (alpha+beta); the result is floored
+    because fractional increments are forbidden - a penalty below 1 is skipped.
+    """
+    cap = _CHURN_CAP * (alpha + beta)
+    capped = weighted_sum > cap
+    return int(math.floor(min(weighted_sum, cap))), capped
+
+
+def arm_for_decision(chosen_variant_id: str, candidates) -> Optional[str]:
+    """Recover the chosen arm id from a decision_log row (candidates JSON)."""
+    if isinstance(candidates, str):
+        try:
+            candidates = json.loads(candidates)
+        except ValueError:
+            return None
+    for c in candidates or []:
+        if str(c.get("variant_id")) == str(chosen_variant_id):
+            return c.get("arm_id")
+    return None
+
+
+def _as_dict(value) -> dict:
+    if isinstance(value, str):
+        try:
+            return json.loads(value) or {}
+        except ValueError:
+            return {}
+    return value or {}
+
+
+# ─── Arms ────────────────────────────────────────────────────────────────────
+
+async def ensure_arms(tenant_id: str, context_key: str) -> int:
+    """Create Beta(1,1) arms for every ACTIVE variant under context_key (idempotent).
+
+    Audit 2.9: this used to run inside load_arms for *any* requested key, which created a
+    cold arm set for every cluster/channel and defeated the documented fallback to the
+    channel-global arms. It is now an explicit call made only for the canonical key.
+    """
+    pool = await tenant_pool(tenant_id)
     async with pool.acquire() as conn:
-        # arch v1.1 §12 #12: single writer = FastAPI.
-        # Create arms lazily for ACTIVE variants that have no arm yet (idempotent).
-        await conn.execute(
+        status = await conn.execute(
             """
             INSERT INTO thompson_arms (tenant_id, variant_id, context_key)
-            SELECT $1::uuid, lv.id, $2
+            SELECT $1::uuid, lv.id, $2::varchar
             FROM   landing_variants lv
             WHERE  lv.tenant_id = $1::uuid
               AND  lv.status    = 'ACTIVE'
               AND  NOT EXISTS (
                   SELECT 1 FROM thompson_arms ta
                   WHERE  ta.variant_id  = lv.id
-                    AND  ta.context_key = $2
+                    AND  ta.context_key = $2::varchar
               )
             ON CONFLICT DO NOTHING
             """,
             tenant_id,
             context_key,
+        )
+        try:
+            created = int(status.split()[-1])
+        except (ValueError, IndexError):
+            created = 0
+        if created:
+            await _apply_glm_priors(conn, tenant_id, context_key)   # roadmap 9-10
+    await get_redis().delete(f"{CACHE_PREFIX}:{tenant_id}:{context_key}")
+    return created
+
+
+GLM_PRIOR_BASE_RATE = 0.03   # fallback CVR when the tenant has no closed sessions yet
+GLM_PRIOR_BASE_SD   = 0.02
+
+
+async def _apply_glm_priors(conn, tenant_id: str, context_key: str) -> int:
+    """Roadmap 9-10 (vision §15.6): new arms start from the GLM posterior predictive of their atoms
+    instead of Beta(1,1). Only untouched arms (total_samples = 0, alpha = beta = 1) are changed, so a
+    re-run never overwrites learned counts. Without GLM posteriors nothing happens."""
+    try:
+        posteriors = await conn.fetch(
+            "SELECT atom_type, atom_value, mean, std AS sd FROM glm_posteriors "
+            "WHERE tenant_id = $1::uuid AND model_stage = 'CVR'",
+            tenant_id,
+        )
+        base = await conn.fetchrow(
+            """
+            SELECT COUNT(*) FILTER (WHERE converted) AS conv, COUNT(*) AS n
+            FROM   sessions WHERE tenant_id = $1::uuid AND started_at > now() - INTERVAL '90 days'
+            """,
+            tenant_id,
+        )
+        n = int(base["n"] or 0) if base else 0
+        base_rate = (int(base["conv"] or 0) + 1) / (n + 2) if n >= 50 else GLM_PRIOR_BASE_RATE
+        base_sd = GLM_PRIOR_BASE_SD
+        fresh = await conn.fetch(
+            """
+            SELECT ta.id::text AS id, lv.creative_id::text AS creative_id,
+                   c.exploration_prior_alpha AS exp_alpha, c.exploration_prior_beta AS exp_beta
+            FROM   thompson_arms ta JOIN landing_variants lv ON lv.id = ta.variant_id
+            LEFT JOIN creatives c ON c.id = lv.creative_id
+            WHERE  ta.tenant_id = $1::uuid AND ta.context_key = $2
+              AND  ta.total_samples = 0 AND ta.alpha = 1 AND ta.beta = 1
+            """,
+            tenant_id, context_key,
+        )
+        atom_posts = [dict(r) for r in posteriors]
+        updated = 0
+        for arm in fresh:
+            if not arm["creative_id"]:
+                continue
+            atoms = await conn.fetch(
+                "SELECT atom_type, atom_value FROM creative_atoms WHERE creative_id = $1::uuid AND tenant_id = $2::uuid",
+                arm["creative_id"], tenant_id,
+            )
+            prior = prior_for_variant(atom_posts, [dict(a) for a in atoms], base_rate, base_sd)
+            # roadmap 9-9 / arch §15.13: expert rating prior (creatives.exploration_prior_*) combined with the GLM one
+            stored = (arm["exp_alpha"], arm["exp_beta"]) if arm["exp_alpha"] is not None else None
+            resolved = prior_for_arm(prior, None, stored=stored)
+            if resolved["source"] == "FLAT":
+                continue
+            await conn.execute(
+                "UPDATE thompson_arms SET alpha = $1, beta = $2, updated_at = now() "
+                "WHERE id = $3::uuid AND total_samples = 0",
+                float(resolved["alpha0"]), float(resolved["beta0"]), arm["id"],
+            )
+            updated += 1
+        return updated
+    except Exception as exc:  # priors are an optimisation, never a failure of /decide
+        import logging
+        logging.getLogger(__name__).warning("GLM priors skipped: %s", exc)
+        return 0
+
+
+async def load_arms(tenant_id: str, context_key: str = "global") -> list[dict]:
+    """Return ACTIVE arms from Redis cache or DB (read-only apart from decay).
+
+    Decay (arch v1.1 §9) is applied atomically in SQL for arms idle > 24 h, using
+    0.99^days so a 10-day idle arm decays 10 steps, not one (audit 2.6, 6.22).
+    Concurrent alpha/beta increments are never overwritten because the UPDATE is relative.
+    """
+    redis = get_redis()
+    cache_key = f"{CACHE_PREFIX}:{tenant_id}:{context_key}"
+    cached = await redis.get(cache_key)
+    if cached:
+        return json.loads(cached)
+
+    pool = await tenant_pool(tenant_id)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE thompson_arms ta
+            SET    alpha           = 1 + power($3::float8, d.days) * (ta.alpha - 1),
+                   beta            = 1 + power($3::float8, d.days) * (ta.beta  - 1),
+                   last_decayed_at = now(),
+                   updated_at      = now()
+            FROM (
+                SELECT id,
+                       floor(extract(epoch FROM (now() - last_decayed_at)) / 86400)::int AS days
+                FROM   thompson_arms
+                WHERE  tenant_id   = $1::uuid
+                  AND  context_key = $2
+                  AND  last_decayed_at < now() - INTERVAL '24 hours'
+            ) d
+            WHERE ta.id = d.id
+            """,
+            tenant_id,
+            context_key,
+            DECAY_FACTOR,
         )
         rows = await conn.fetch(
             """
@@ -324,20 +497,33 @@ async def load_arms(tenant_id: str, context_key: str = "global") -> list[dict]:
             WHERE  ta.tenant_id  = $1::uuid
               AND  ta.context_key = $2
               AND  lv.status      = 'ACTIVE'
+              -- roadmap 9-9 / arch §15.6: margin floor — variants without an offer row stay eligible
+              -- ML-25: safe-cast min_margin; non-numeric value → NULL → COALESCE fallback avoids 500
+              AND  COALESCE((SELECT MIN(vo.estimated_margin) FROM variant_offers vo WHERE vo.variant_id = lv.id), 1e9)
+                   >= COALESCE((SELECT CASE WHEN t.settings->>'min_margin' ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                                            THEN (t.settings->>'min_margin')::float8 END
+                                FROM tenants t WHERE t.id = $1::uuid), -1e9)
             """,
             tenant_id,
             context_key,
         )
+        excluded = await conn.fetchval(
+            """
+            SELECT COUNT(*) FROM thompson_arms ta JOIN landing_variants lv ON lv.id = ta.variant_id
+            WHERE ta.tenant_id = $1::uuid AND ta.context_key = $2 AND lv.status = 'ACTIVE'
+            """,
+            tenant_id, context_key,
+        )
+        if excluded is not None and int(excluded) > len(rows):
+            import logging
+            logging.getLogger(__name__).info(
+                "load_arms: %d variant(s) excluded by min_margin for tenant %s", int(excluded) - len(rows), tenant_id)
 
     if not rows:
         return []
 
-    now = datetime.now(timezone.utc)
-    arms: list[dict] = []
-    to_decay: list[dict] = []
-
-    for row in rows:
-        arm = {
+    arms: list[dict] = [
+        {
             "id": row["id"],
             "variant_id": row["variant_id"],
             "alpha": float(row["alpha"]),
@@ -345,42 +531,11 @@ async def load_arms(tenant_id: str, context_key: str = "global") -> list[dict]:
             "total_samples": row["total_samples"],
             "block_order": list(row["block_order"]) if row["block_order"] else [],
         }
-        last = row["last_decayed_at"]
-        if last is not None:
-            # asyncpg returns timezone-aware datetime for TIMESTAMPTZ
-            if last.tzinfo is None:
-                last = last.replace(tzinfo=timezone.utc)
-            if (now - last).total_seconds() > DECAY_INTERVAL_SECS:
-                # arch v1.1 §9: decay toward prior (1,1), not toward zero.
-                # α = 1 + 0.99·(α − 1). Naive α×=0.99 drives α < 1 → Beta(0,0) improper.
-                arm["alpha"] = 1.0 + DECAY_FACTOR * (arm["alpha"] - 1.0)
-                arm["beta"]  = 1.0 + DECAY_FACTOR * (arm["beta"]  - 1.0)
-                to_decay.append(arm)
-        arms.append(arm)
-
-    if to_decay:
-        asyncio.create_task(_persist_decay(to_decay, now))
+        for row in rows
+    ]
 
     await redis.setex(cache_key, CACHE_TTL, json.dumps(arms))
     return arms
-
-
-async def _persist_decay(arms: list[dict], now: datetime) -> None:
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        for arm in arms:
-            await conn.execute(
-                """
-                UPDATE thompson_arms
-                SET alpha = $1, beta = $2, last_decayed_at = $3, updated_at = $4
-                WHERE id = $5
-                """,
-                arm["alpha"],
-                arm["beta"],
-                now,
-                now,
-                arm["id"],
-            )
 
 
 def sample_arms(arms: list[dict]) -> tuple[dict, list[dict]]:
@@ -444,7 +599,7 @@ async def log_decision(
     is_holdout: bool = False,
 ) -> str:
     """Insert into decision_log and cache for reward lookups. Returns decision_id."""
-    pool = await get_pool()
+    pool = await tenant_pool(tenant_id)
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -496,31 +651,36 @@ async def apply_churn_penalty(
     weighted_sum: sum of exp(-0.02 * days_since_decision) over churned sessions.
     Cap: penalty ≤ 30% of current (α+β) so a single churn wave can't kill a good arm.
     """
-    pool = await get_pool()
+    pool = await tenant_pool(tenant_id)
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
             SELECT id::text, variant_id::text, alpha, beta, context_key
             FROM   thompson_arms
-            WHERE  id = $1::uuid
+            WHERE  id = $1::uuid AND tenant_id = $2::uuid
             """,
             arm_id,
+            tenant_id,
         )
         if not row:
             raise ValueError(f"Arm not found: {arm_id}")
 
         current_alpha = float(row["alpha"])
         current_beta  = float(row["beta"])
-        cap           = _CHURN_CAP * (current_alpha + current_beta)
-        applied_delta = min(weighted_sum, cap)
-        capped        = applied_delta < weighted_sum
+        applied_delta, capped = churn_penalty_delta(weighted_sum, current_alpha, current_beta)
+        if applied_delta == 0:
+            return {"arm_id": arm_id, "beta_delta": 0, "capped": capped,
+                    "new_beta": current_beta, "skipped": True,
+                    "reason": "penalty below 1 - fractional increments forbidden (arch §4.4)"}
 
         now = datetime.now(timezone.utc)
         await conn.execute(
-            "UPDATE thompson_arms SET beta = beta + $1, updated_at = $2 WHERE id = $3::uuid",
+            "UPDATE thompson_arms SET beta = beta + $1, total_samples = total_samples + $1, "
+            "updated_at = $2 WHERE id = $3::uuid AND tenant_id = $4::uuid",
             applied_delta,
             now,
             arm_id,
+            tenant_id,
         )
         await conn.execute(
             """
@@ -552,17 +712,50 @@ async def apply_churn_penalty(
     }
 
 
-async def apply_reward(decision_id: str, reward_type: str) -> dict:
-    """Update the α or β of the arm that was chosen in the given decision.
+async def _load_decision(decision_id: str) -> Optional[dict]:
+    """Audit 2.2: the Redis decision key lives 1 h, CRM rewards arrive days later."""
+    pool = await system_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT tenant_id::text AS tenant_id, chosen_variant_id::text AS variant_id,
+                   session_id::text AS session_id, candidates, context
+            FROM   decision_log
+            WHERE  id = $1::uuid
+            """,
+            decision_id,
+        )
+    if not row:
+        return None
+    return {
+        "tenant_id":   row["tenant_id"],
+        "variant_id":  row["variant_id"],
+        "session_id":  row["session_id"],  # ML-5: include session_id for reward validation
+        "arm_id":      arm_for_decision(row["variant_id"], row["candidates"]),
+        "context_key": _as_dict(row["context"]).get("context_key", "global"),
+    }
 
-    vision §16.1: FORM_SUBMIT reward is disabled when reward_on_form_submit=false
-    (B2B clients with GHL integration — reward comes from call_answered/meeting_attended).
+
+async def apply_reward(
+    decision_id: str,
+    reward_type: str,
+    tenant_configured: bool = False,
+    session_id: Optional[str] = None,  # ML-5: optional caller-supplied session for validation
+) -> dict:
+    """Update the alpha or beta of the arm that was chosen in the given decision.
+
+    - Idempotent per (decision_id, reward_type) via thompson_reward_log (audit 2.8).
+    - Falls back to decision_log when the Redis key has expired (audit 2.2).
+    - A positive reward reverses an earlier NO_RESPONSE_7D sweep for the same decision,
+      so every decision stays one Bernoulli observation.
+    - vision §16.1: FORM_SUBMIT reward is disabled when reward_on_form_submit=false — unless the
+      tenant defines tenants.settings.reward_levels (roadmap 8-3, Audit F1): then the caller has
+      already resolved the stage through that config and passes tenant_configured=True.
     """
     if reward_type not in REWARD_MAP:
         raise ValueError(f"Unknown reward_type '{reward_type}'. Valid: {list(REWARD_MAP)}")
 
-    if reward_type == "FORM_SUBMIT" and not settings.reward_on_form_submit:
-        # Return a no-op response — the decision is logged but Thompson is not updated.
+    if reward_type == "FORM_SUBMIT" and not settings.reward_on_form_submit and not tenant_configured:
         return {"arm_id": None, "tenant_id": None, "variant_id": None,
                 "field_updated": None, "delta": 0.0, "skipped": True,
                 "reason": "reward_on_form_submit=false (§16.1 B2B mode)"}
@@ -571,18 +764,75 @@ async def apply_reward(decision_id: str, reward_type: str) -> dict:
 
     redis = get_redis()
     raw = await redis.get(f"decision:{decision_id}")
-    if not raw:
-        raise ValueError(f"Decision not found or expired: {decision_id}")
+    dec = json.loads(raw) if raw else await _load_decision(decision_id)
+    if not dec:
+        raise ValueError(f"Decision not found: {decision_id}")
+    if not dec.get("arm_id"):
+        raise ValueError(f"Decision {decision_id} has no resolvable arm")
 
-    dec = json.loads(raw)
-    pool = await get_pool()
+    # ML-5: when caller supplies session_id, verify it matches the decision —
+    # prevents a browser script from replaying any decision_id it finds.
+    if session_id is not None and dec.get("session_id") and dec["session_id"] != session_id:
+        raise ValueError(f"session_id mismatch for decision {decision_id}")
+
+    pool = await system_pool()
     now = datetime.now(timezone.utc)
-
-    sql = _UPDATE_ALPHA if field == "alpha" else _UPDATE_BETA
     async with pool.acquire() as conn:
-        await conn.execute(sql, delta, now, dec["arm_id"])
+        async with conn.transaction():
+            await conn.execute(_SET_TENANT, dec["tenant_id"])
+            inserted = await conn.fetchval(
+                """
+                INSERT INTO thompson_reward_log (decision_id, reward_type, tenant_id, arm_id, field_updated)
+                VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5)
+                ON CONFLICT DO NOTHING
+                RETURNING 1
+                """,
+                decision_id, reward_type, dec["tenant_id"], dec["arm_id"], field,
+            )
+            if not inserted:
+                return {"arm_id": dec["arm_id"], "tenant_id": dec["tenant_id"],
+                        "variant_id": dec["variant_id"], "field_updated": None,
+                        "delta": 0.0, "skipped": True,
+                        "reason": f"{reward_type} already applied for this decision"}
 
-    # Invalidate cached posteriors so next decide sees fresh values
+            if field == "alpha":
+                # ML-3: ONE alpha per decision (arch §4.4 "one Bernoulli observation").
+                # If a prior alpha reward already exists for this decision, skip — don't
+                # let CTA_CLICK + FORM_SUBMIT + CONVERSION each increment α.
+                prior_alpha = await conn.fetchval(
+                    "SELECT 1 FROM thompson_reward_log "
+                    "WHERE decision_id = $1::uuid AND field_updated = 'alpha' "
+                    "AND reward_type != $2 LIMIT 1",
+                    decision_id, reward_type,
+                )
+                if prior_alpha:
+                    # Roll back the just-inserted row and skip the arm update
+                    await conn.execute(
+                        "DELETE FROM thompson_reward_log "
+                        "WHERE decision_id = $1::uuid AND reward_type = $2",
+                        decision_id, reward_type,
+                    )
+                    return {"arm_id": dec["arm_id"], "tenant_id": dec["tenant_id"],
+                            "variant_id": dec["variant_id"], "field_updated": None,
+                            "delta": 0.0, "skipped": True,
+                            "reason": "one alpha per decision (arch §4.4 Bernoulli model)"}
+
+                reversed_sweep = await conn.fetchval(
+                    "DELETE FROM thompson_reward_log WHERE decision_id = $1::uuid "
+                    "AND reward_type = 'NO_RESPONSE_7D' AND field_updated = 'beta' RETURNING 1",
+                    decision_id,
+                )
+                if reversed_sweep:
+                    await conn.execute(
+                        "UPDATE thompson_arms SET beta = GREATEST(1.0, beta - 1), "
+                        "total_samples = GREATEST(0, total_samples - 1), updated_at = $1 "
+                        "WHERE id = $2::uuid AND tenant_id = $3::uuid",
+                        now, dec["arm_id"], dec["tenant_id"],
+                    )
+
+            sql = _UPDATE_ALPHA if field == "alpha" else _UPDATE_BETA
+            await conn.execute(sql, delta, now, dec["arm_id"], dec["tenant_id"])
+
     context_key = dec.get("context_key", "global")
     await redis.delete(f"{CACHE_PREFIX}:{dec['tenant_id']}:{context_key}")
 
@@ -595,6 +845,101 @@ async def apply_reward(decision_id: str, reward_type: str) -> dict:
     }
 
 
+async def sweep_no_response(
+    window_days: int = NO_RESPONSE_WINDOW_DAYS,
+    max_age_days: int = 30,
+    limit: int = 1000,
+    tenant_id: Optional[str] = None,
+) -> dict:
+    """Audit 2.3: beta += 1 for every decision older than the attribution window with no reward.
+
+    Without this, beta never moves and Beta(alpha,beta) degenerates into a raw success count.
+    Each swept decision is logged as NO_RESPONSE_7D, so the sweep is idempotent and a
+    late positive reward can reverse it (see apply_reward).
+    """
+    pool = await system_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT dl.id::text AS id, dl.tenant_id::text AS tenant_id,
+                   dl.chosen_variant_id::text AS variant_id, dl.candidates, dl.context
+            FROM   decision_log dl
+            WHERE  dl.decided_at < now() - ($1 * INTERVAL '1 day')
+              AND  dl.decided_at > now() - ($2 * INTERVAL '1 day')
+              AND  ($4::uuid IS NULL OR dl.tenant_id = $4::uuid)
+              AND  NOT EXISTS (SELECT 1 FROM thompson_reward_log r WHERE r.decision_id = dl.id)
+            ORDER BY dl.decided_at
+            LIMIT  $3
+            """,
+            window_days, max_age_days, limit, tenant_id,
+        )
+
+        swept = 0
+        unresolved = 0
+        touched: set[tuple[str, str]] = set()
+        now = datetime.now(timezone.utc)
+        for row in rows:
+            arm_id = arm_for_decision(row["variant_id"], row["candidates"])
+            async with conn.transaction():
+                await conn.execute(_SET_TENANT, row["tenant_id"])
+                inserted = await conn.fetchval(
+                    """
+                    INSERT INTO thompson_reward_log (decision_id, reward_type, tenant_id, arm_id, field_updated)
+                    VALUES ($1::uuid, 'NO_RESPONSE_7D', $2::uuid, $3::uuid, $4)
+                    ON CONFLICT DO NOTHING
+                    RETURNING 1
+                    """,
+                    row["id"], row["tenant_id"], arm_id, "beta" if arm_id else "none",
+                )
+                if not inserted:
+                    continue
+                if not arm_id:
+                    unresolved += 1
+                    continue
+                await conn.execute(_UPDATE_BETA, 1.0, now, arm_id, row["tenant_id"])
+            swept += 1
+            touched.add((row["tenant_id"], _as_dict(row["context"]).get("context_key", "global")))
+
+    redis = get_redis()
+    for t, ck in touched:
+        await redis.delete(f"{CACHE_PREFIX}:{t}:{ck}")
+    return {"swept": swept, "unresolved": unresolved, "scanned": len(rows),
+            "window_days": window_days, "max_age_days": max_age_days}
+
+
+async def apply_followup_outcome(tenant_id: str, appointment_id: str, outcome: str) -> dict:
+    """Audit 2.10: the follow-up sequence bandit never learned - nothing wrote followup_variants.alpha/beta.
+
+    SHOWED -> alpha += 1, NO_SHOW -> beta += 1 on the assigned variant. Idempotent: the
+    assignment row transitions from UNKNOWN/NULL exactly once.
+    """
+    if outcome not in ("SHOWED", "NO_SHOW"):
+        raise ValueError("outcome must be SHOWED or NO_SHOW")
+    field = "alpha" if outcome == "SHOWED" else "beta"
+    pool = await tenant_pool(tenant_id)
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(_SET_TENANT, tenant_id)
+            variant_id = await conn.fetchval(
+                """
+                UPDATE followup_assignments
+                SET    outcome = $1, resolved_at = now()
+                WHERE  appointment_id = $2::uuid AND tenant_id = $3::uuid
+                  AND  (outcome IS NULL OR outcome = 'UNKNOWN')
+                RETURNING variant_id::text
+                """,
+                outcome, appointment_id, tenant_id,
+            )
+            if not variant_id:
+                return {"updated": False, "variant_id": None, "field_updated": None,
+                        "reason": "assignment not found or already resolved"}
+            await conn.execute(
+                f"UPDATE followup_variants SET {field} = {field} + 1 WHERE id = $1::uuid AND tenant_id = $2::uuid",
+                variant_id, tenant_id,
+            )
+    return {"updated": True, "variant_id": variant_id, "field_updated": field}
+
+
 async def get_benchmark(tenant_id: str, days: int = 30) -> dict:
     """Bayesian lift: P(system CVR > holdout CVR) over the last N days.
 
@@ -603,7 +948,7 @@ async def get_benchmark(tenant_id: str, days: int = 30) -> dict:
     Lift      = (treatment_cvr - holdout_cvr) / holdout_cvr * 100.
     P(better) = Monte Carlo integral over Beta posteriors (N=10 000).
     """
-    pool = await get_pool()
+    pool = await tenant_pool(tenant_id)
     async with pool.acquire() as conn:
         counts = await conn.fetchrow(
             """
@@ -693,7 +1038,6 @@ async def get_benchmark(tenant_id: str, days: int = 30) -> dict:
 
 
 ### Полный код
-
 ```python
 """
 Follow-up sequence optimisation — Thompson Sampling bandit (vision §19.6).
@@ -773,16 +1117,18 @@ def should_auto_pause(
     variant_beta: float,
     control_alpha: float,
     control_beta: float,
+    prior_alpha: float = 1.0,
+    prior_beta: float = 1.0,
     min_ess: int = 100,
 ) -> tuple[bool, float]:
     """
     Monte Carlo estimate of P(variant is WORSE than control).
     Auto-pause if P(worse) > 0.95 AND ESS >= min_ess.
 
-    ESS approximation: α + β - 2  (flat prior removed).
+    ESS approximation: α + β - prior_alpha - prior_beta (informed priors supported).
     Returns (should_pause, p_worse).
     """
-    ess = (variant_alpha + variant_beta - 2.0)
+    ess = (variant_alpha + variant_beta - prior_alpha - prior_beta)
     if ess < min_ess:
         return False, 0.0
 
@@ -854,7 +1200,6 @@ def compute_show_rate_posterior(
 
 
 ### Полный код
-
 ```python
 """
 Funnel Path Thompson Sampling (vision §19.18.1; arch §16.14).
@@ -919,7 +1264,10 @@ def check_path_b_engagement_gate(
     has_dataroom      = "DATAROOM_OPEN" in event_types
     has_video_75      = any(
         e.get("event_type") == "VIDEO_PROGRESS" and
-        int(e.get("payload", {}).get("progress_pct", 0)) >= gate["video_progress_threshold"]
+        int(e.get("payload", {}).get("progress_pct")
+            or e.get("payload", {}).get("progress")
+            or e.get("payload", {}).get("percent")
+            or 0) >= gate["video_progress_threshold"]
         for e in events
     )
 
@@ -1023,7 +1371,6 @@ def compute_path_metrics(
 
 
 ### Полный код
-
 ```python
 """
 No-show Propensity Model (vision §19.18.2; arch §16.15).
@@ -1034,6 +1381,9 @@ Rule-based model until holdout AUC >= 0.70.
 from __future__ import annotations
 
 BOOKING_DISTANCE_COEF = 0.012
+# Seed constants — no empirical basis yet (Phase 12-13).
+# Replace with fitted LogisticRegression coefficients once ≥200 labelled leads available.
+# Source: expert judgment from noshow literature (Gupta et al. 2018, B2B webinar context).
 TZ_UNKNOWN_PENALTY    = 0.10
 INTERNATIONAL_PENALTY = 0.08
 LOW_TICKET_PENALTY    = 0.06
@@ -1124,6 +1474,9 @@ def compute_slot_fill_probability(
     if not noshow_probs:
         return {"p_no_one_shows": 0.0, "p_at_least_one_shows": 1.0, "booked": booked_count}
 
+    # Independence assumption (Phase 12-14): each booking's no-show probability is treated
+    # as independent. Valid for solo bookings; underestimates P(no_one) for paired/group slots
+    # where correlated no-show behaviour is expected. Track group_booking flag when available.
     p_no_one = 1.0
     for p in noshow_probs:
         p_no_one *= p
@@ -1163,7 +1516,6 @@ PLV = p_show × p_verified|show × p_invest|verified × E[ticket|bucket]
 
 
 ### Полный код
-
 ```python
 """
 Predicted Lead Value at Day 0 (vision §19.18.3; arch §16.16).
@@ -1173,7 +1525,16 @@ Formula: p_show × p_verified|show × p_invest|verified × E[ticket|bucket]
 Acceptance: calibration slope 0.8–1.2 on >=200 realised leads.
 """
 from __future__ import annotations
+import logging
 from collections import defaultdict
+
+_logger = logging.getLogger(__name__)
+
+# ── Phase 12-4: PLV slope auto-recalibration state ───────────────────────────
+# Counts consecutive out-of-range OLS slope results; resets on an in-range slope.
+_ols_out_of_range_streak: int = 0
+# Dynamically adjusted seed coefficient (soft correction when slope drifts).
+_seed_p_invest_adjusted: float | None = None  # None = use SEED_P_INVEST_GIVEN_VERIFIED
 
 E_TICKET = {
     "LT25K":    12_500,
@@ -1220,7 +1581,8 @@ def calibrate_value_model(
     """OLS calibration: predicted vs realised. Acceptance: slope ∈ [0.8, 1.2]."""
     valid = [
         p for p in predictions
-        if p.get("predicted_value") and p.get("realised_value") and p["predicted_value"] > 0
+        if p.get("predicted_value") is not None and p.get("realised_value") is not None
+        and p["predicted_value"] > 0
     ]
 
     if len(valid) < min_samples:
@@ -1258,13 +1620,40 @@ def calibrate_value_model(
         for bk, d in by_bucket.items()
     }
 
+    calibrated = 0.8 <= slope <= 1.2
+
+    # ── Phase 12-4: auto-recalibration ────────────────────────────────────────
+    global _ols_out_of_range_streak, _seed_p_invest_adjusted
+
+    if not calibrated:
+        _ols_out_of_range_streak += 1
+        _logger.warning(
+            "PLV calibration slope=%.3f outside [0.8,1.2] — adjusting seed coefficients",
+            slope,
+        )
+        base = SEED_P_INVEST_GIVEN_VERIFIED
+        if slope > 1.2:
+            _seed_p_invest_adjusted = base * min(slope / 1.0, 1.3)
+        else:  # slope < 0.8
+            _seed_p_invest_adjusted = base * max(slope / 1.0, 0.7)
+
+        if _ols_out_of_range_streak >= 3:
+            _logger.error(
+                "ALERT PLV calibration slope out of range %d consecutive times",
+                _ols_out_of_range_streak,
+            )
+    else:
+        _ols_out_of_range_streak = 0
+
     return {
-        "calibrated": 0.8 <= slope <= 1.2,
-        "n":          n,
-        "slope":      round(slope, 4),
-        "intercept":  round(intercept, 2),
-        "by_bucket":  bucket_stats,
-        "acceptance": "slope ∈ [0.8, 1.2]",
+        "calibrated":              calibrated,
+        "n":                       n,
+        "slope":                   round(slope, 4),
+        "intercept":               round(intercept, 2),
+        "by_bucket":               bucket_stats,
+        "acceptance":              "slope ∈ [0.8, 1.2]",
+        "adjusted_p_invest":       round(_seed_p_invest_adjusted or SEED_P_INVEST_GIVEN_VERIFIED, 6),
+        "ols_out_of_range_streak": _ols_out_of_range_streak,
     }
 ```
 
@@ -1298,7 +1687,6 @@ multiplier = blended / prior_mean ∈ [0.5, 1.5]
 
 
 ### Полный код
-
 ```python
 """
 Reward Ladder for landing variant Thompson Sampling (vision §19.3).
@@ -1508,7 +1896,6 @@ def apply_show_rate_to_gates(
 
 
 ### Полный код
-
 ```python
 """
 Propensity Model Service (Phase 5-2, §7.3 Этап 2).
@@ -1519,10 +1906,20 @@ No FastAPI imports — safe to unit-test without Pydantic.
 Model:
   - GradientBoostingClassifier — P(conversion)
   - Threshold-based objection: price | trust | urgency | understanding
+
+Model serialisation (Phase 12-1):
+  - Preferred: ONNX bytes (no arbitrary code execution on load)
+    Format: b"ONNX\\x00" + onnx_protobuf_bytes
+  - Fallback: SHA-256 hash-validated joblib pickle
+    Format: b"SAFE\\x00" + 64-byte hex hash + b"\\x00" + pickle_bytes
+  - Legacy (read-only, WARN on load): raw pickle starting with b"\\x80"
 """
+import logging
 from typing import Any
 
 import numpy as np
+
+_log = logging.getLogger(__name__)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1666,6 +2063,67 @@ def determine_objection(features: np.ndarray) -> str | None:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Internal: safe model loading (Phase 12-1)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _load_and_score(model_bytes: bytes, features: np.ndarray) -> float:
+    """
+    Deserialise model bytes and return P(convert) for a single feature vector.
+
+    Supported formats:
+      b"ONNX\\x00"  — ONNX protobuf; loaded with onnxruntime (no pickle exec).
+      b"SAFE\\x00"  — SHA-256-validated joblib pickle.
+      b"\\x80..."   — Legacy raw pickle; WARN logged; rotate after next fit.
+    """
+    import io
+
+    if model_bytes[:5] == b"ONNX\x00":
+        import onnxruntime as rt
+        sess = rt.InferenceSession(model_bytes[5:])
+        input_name = sess.get_inputs()[0].name
+        X_input = features.reshape(1, -1).astype(np.float32)
+        outputs = sess.run(None, {input_name: X_input})
+        prob_output = outputs[1]  # list[dict] or 2-D array
+        if isinstance(prob_output, list):
+            # list of {class: prob} dicts
+            p = float(prob_output[0][1])
+        else:
+            p = float(prob_output[0][1])
+        return p
+
+    elif model_bytes[:5] == b"SAFE\x00":
+        import hashlib
+        import joblib
+        # Format: b"SAFE\x00" + 64 ASCII hex chars + b"\x00" + pickle_bytes
+        sha256_hex = model_bytes[5:69].decode("ascii")
+        pickle_bytes = model_bytes[70:]
+        actual_hex = hashlib.sha256(pickle_bytes).hexdigest()
+        if actual_hex != sha256_hex:
+            raise ValueError(
+                f"Propensity model hash mismatch — possible tampering "
+                f"(stored={sha256_hex[:8]}…, actual={actual_hex[:8]}…)"
+            )
+        model = joblib.load(io.BytesIO(pickle_bytes))
+        X = features.reshape(1, -1)
+        return float(model.predict_proba(X)[0][1])
+
+    elif model_bytes[:1] == b"\x80":
+        import joblib
+        _log.warning(
+            "Propensity model: legacy pickle model detected — "
+            "arbitrary code execution risk; rotate after next fit"
+        )
+        model = joblib.load(io.BytesIO(model_bytes))
+        X = features.reshape(1, -1)
+        return float(model.predict_proba(X)[0][1])
+
+    else:
+        raise ValueError(
+            f"Unknown propensity model format (magic={model_bytes[:5]!r})"
+        )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Gradient Boosting scoring (uses trained model bytes from caller)
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -1686,10 +2144,7 @@ def score_session(
 
     if model_bytes is not None:
         import io
-        import joblib
-        model = joblib.load(io.BytesIO(model_bytes))
-        X = features.reshape(1, -1)
-        p_convert = float(model.predict_proba(X)[0][1])
+        p_convert = _load_and_score(model_bytes, features)
     else:
         p_convert = rule_based_score(features)
 
@@ -1748,9 +2203,26 @@ def fit_propensity_model(
     ])
     pipe.fit(X, y)
 
+    # ── Phase 12-1: prefer ONNX (no pickle exec on load) ──────────────────────
+    try:
+        from skl2onnx import convert_sklearn
+        from skl2onnx.common.data_types import FloatTensorType
+        initial_type = [("float_input", FloatTensorType([None, N_PROPENSITY_FEATURES]))]
+        onnx_proto = convert_sklearn(pipe, initial_types=initial_type)
+        return b"ONNX\x00" + onnx_proto.SerializeToString()
+    except Exception as exc:
+        _log.warning(
+            "ONNX conversion failed (%s) — falling back to SHA-256-validated joblib pickle",
+            exc,
+        )
+
+    # ── Fallback: SHA-256 hash-validated joblib pickle ─────────────────────────
+    import hashlib
     buf = io.BytesIO()
     joblib.dump(pipe, buf)
-    return buf.getvalue()
+    pickle_bytes = buf.getvalue()
+    sha256_hex = hashlib.sha256(pickle_bytes).hexdigest().encode("ascii")  # 64 bytes
+    return b"SAFE\x00" + sha256_hex + b"\x00" + pickle_bytes
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1794,7 +2266,6 @@ def compute_uplift_score(
 
 
 ### Полный код
-
 ```python
 """
 Burnout survival model — pure logic, no FastAPI/Pydantic imports.
@@ -1807,13 +2278,14 @@ from typing import Optional
 
 N_MIN_FOR_SURVIVAL = 30
 
-DEFAULT_BETAS = {
-    "log_frequency":     0.8,
-    "log_initial_roas": -0.5,
+EXPERT_PRIOR_BETAS = {  # expert priors, NOT fitted coefficients — no training loop in this service
+    "log_frequency":     0.8,   # higher frequency → faster burnout
+    "log_initial_roas": -0.5,   # stronger ROAS start → longer survival
     "audience_broad":   -0.2,
     "audience_retarget": 0.4,
     "season_peak":       0.3,
 }
+DEFAULT_BETAS = EXPERT_PRIOR_BETAS  # backward-compat alias
 
 AUDIENCE_TYPE_ENCODING = {
     "BROAD":       "audience_broad",
@@ -1840,23 +2312,26 @@ def encode_covariates(
         "log_initial_roas": math.log(max(initial_roas, 0.01)),
     }
     aud_key = AUDIENCE_TYPE_ENCODING.get(audience_type.upper(), 0.0)
-    cov["audience_effect"] = DEFAULT_BETAS.get(aud_key, 0.0) if isinstance(aud_key, str) else float(aud_key)
+    cov["audience_effect"] = EXPERT_PRIOR_BETAS.get(aud_key, 0.0) if isinstance(aud_key, str) else float(aud_key)
     sea_key = SEASON_ENCODING.get(season.upper(), 0.0)
-    cov["season_effect"] = DEFAULT_BETAS.get(sea_key, 0.0) if isinstance(sea_key, str) else float(sea_key)
+    cov["season_effect"] = EXPERT_PRIOR_BETAS.get(sea_key, 0.0) if isinstance(sea_key, str) else float(sea_key)
     return cov
+
+
+_WEIBULL_SCALE_DAYS = 21.0  # baseline creative half-life; 14d for DTC, 21d+ for B2B/investment funnels
 
 
 def cox_hazard_ratio(covariates: dict) -> float:
     linear = (
-        DEFAULT_BETAS["log_frequency"]    * covariates["log_frequency"]
-      + DEFAULT_BETAS["log_initial_roas"] * covariates["log_initial_roas"]
+        EXPERT_PRIOR_BETAS["log_frequency"]    * covariates["log_frequency"]
+      + EXPERT_PRIOR_BETAS["log_initial_roas"] * covariates["log_initial_roas"]
       + covariates.get("audience_effect", 0.0)
       + covariates.get("season_effect", 0.0)
     )
     return math.exp(linear)
 
 
-def weibull_survival(t: float, scale: float = 14.0, shape: float = 1.5, hazard_ratio: float = 1.0) -> float:
+def weibull_survival(t: float, scale: float = _WEIBULL_SCALE_DAYS, shape: float = 1.5, hazard_ratio: float = 1.0) -> float:
     """S(t) = exp(-(t/λ_eff)^k), λ_eff = scale / HR^(1/k)."""
     if t <= 0:
         return 1.0
@@ -1961,7 +2436,6 @@ def should_suppress_burnout_alert(anchor_verdict: Optional[str]) -> bool:
 
 
 ### Полный код
-
 ```python
 """
 Cross-channel attribution — Shapley + Markov MTA. Phase 7, §17.3.
@@ -2108,7 +2582,8 @@ def compute_shapley_attribution(touchpoint_paths: list[list[str]]) -> dict[str, 
     shapley: dict[str, float] = {ch: 0.0 for ch in channels}
 
     rng = random.Random(42)
-    n_samples = 200
+    # SE ≈ sqrt(p*(1-p)/n_samples). At n=1000, SE≈1.6% for p≈0.5
+    n_samples = 1_000
 
     for _ in range(n_samples):
         perm = channels[:]
@@ -2239,7 +2714,9 @@ def linear_attribution(touchpoints: list[dict]) -> list[dict]:
     return [{"touchpoint_id": t["id"], "credit": round(credit, 6), "model": "linear"} for t in touchpoints]
 
 
-def time_decay_attribution(touchpoints: list[dict], half_life_days: float = 7.0) -> list[dict]:
+_TIME_DECAY_HALF_LIFE_DAYS = 21.0  # 7d too aggressive for B2B/investment funnels where 30d-old touches matter
+
+def time_decay_attribution(touchpoints: list[dict], half_life_days: float = _TIME_DECAY_HALF_LIFE_DAYS) -> list[dict]:
     """Exponential time decay: closer to conversion gets more credit."""
     if not touchpoints:
         return []
@@ -2334,7 +2811,6 @@ ECE = Σ_{b=1}^{B} (n_b / N) × |mean_pred_b − mean_actual_b|
 
 
 ### Полный код
-
 ```python
 """
 Match-score calibration — pure logic, zero FastAPI/Pydantic imports.
@@ -2424,7 +2900,6 @@ def compute_calibration_report(
 
 
 ### Полный код
-
 ```python
 """
 Off-Policy Evaluation (IPS / SNIPS / Doubly-Robust) — no FastAPI/Pydantic imports.
@@ -2444,14 +2919,23 @@ def _clip_weight(w: float, w_max: float) -> float:
     return min(w, w_max)
 
 
-def _bootstrap_ci(values: list[float], n_boot: int = 500, alpha: float = 0.05,
-                  seed: int = 42) -> tuple[float, float]:
+def _bootstrap_snips_ci(weights: list[float], rewards: list[float], n_boot: int = 500,
+                        alpha: float = 0.05, seed: int = 42) -> tuple[float, float]:
+    """Percentile bootstrap of the self-normalised estimator Σwr/Σw over resampled decisions.
+
+    Audit 6.2: the previous version bootstrapped per-decision values in which the weights cancelled,
+    i.e. a CI for the logged reward rate rather than for SNIPS.
+    """
     rng = random.Random(seed)
+    n = len(weights)
     stats = []
-    n = len(values)
     for _ in range(n_boot):
-        sample = [values[rng.randint(0, n - 1)] for _ in range(n)]
-        stats.append(sum(sample) / n)
+        sw = swr = 0.0
+        for _k in range(n):
+            i = rng.randint(0, n - 1)
+            sw += weights[i]
+            swr += weights[i] * rewards[i]
+        stats.append(swr / sw if sw > 1e-9 else 0.0)
     stats.sort()
     lo_idx = int(alpha / 2 * n_boot)
     hi_idx = int((1 - alpha / 2) * n_boot)
@@ -2518,17 +3002,17 @@ def compute_ope(
     ess = (weight_sum ** 2) / max(w2, 1e-9)
 
     # Bootstrap CI on SNIPS
+    rewards = [float(d.get("reward", 0) or 0) for d in decisions]
     if n >= 10:
-        ci_low, ci_high = _bootstrap_ci(
-            [ips_terms[i] / max(weights[i], 1e-9) * (weight_sum / n)
-             for i in range(n)])
+        ci_low, ci_high = _bootstrap_snips_ci(weights, rewards)
     else:
         ci_low, ci_high = snips * 0.8, snips * 1.2
 
-    # Verdict: current policy is at least as good as logged if SNIPS >= baseline
-    # Baseline = logged policy mean reward (approximately 1.0 in ratio)
-    # Pass if SNIPS >= 0.95 (within 5% of logged) AND ESS sufficient
-    verdict = "PASS" if snips >= 0.95 and ess >= min_ess else "FAIL"
+    # Verdict (audit 6.1): SNIPS is an absolute reward *rate* of the current policy (typically
+    # 0.03-0.05), so it is compared with the logged policy's mean reward, not with 0.95.
+    # PASS when the current policy keeps >= 95 % of the logged reward rate AND ESS is sufficient.
+    baseline = mean_reward
+    verdict = "PASS" if snips >= 0.95 * baseline and ess >= min_ess else "FAIL"
     if len(decisions) < 30:
         verdict = "INSUFFICIENT_DATA"
 
@@ -2540,8 +3024,17 @@ def compute_ope(
         "ci_high": round(ci_high, 4),
         "ess": round(ess, 1),
         "clipped_mass": round(clipped_mass, 4),
+        "logged_mean_reward": round(mean_reward, 4),
         "verdict": verdict,
     }
+
+
+def passes_ope_gate(result: dict, min_ess: float = 200.0) -> bool:
+    """True when an OPE result clears the promotion gate (verdict PASS and ESS >= min_ess).
+
+    Used by /analyze/ope/ips; INSUFFICIENT_DATA and FAIL never pass.
+    """
+    return result.get("verdict") == "PASS" and float(result.get("ess", 0.0)) >= min_ess
 ```
 
 ---
@@ -2565,7 +3058,6 @@ def compute_ope(
 
 
 ### Полный код
-
 ```python
 """
 Circuit Breaker Bayesian L1 trigger — pure logic, no FastAPI/Pydantic imports.
@@ -2602,24 +3094,16 @@ def compute_cpa_exceedance_probability(
             "reason": "Insufficient data (no clicks or spend)",
         }
 
-    observed_cpa = total_spend / max(conversions, 1)
-
-    if conversions == 0:
-        # Zero conversions — CPA is effectively infinite; fire if spend is meaningful
-        p_exceed = 1.0 if total_spend > threshold * 0.5 else 0.5
-        return {
-            "p_exceed": p_exceed,
-            "should_trigger": p_exceed > 0.90,
-            "observed_cpa": None,
-            "reason": f"Zero conversions; spend={total_spend:.2f}; threshold={threshold:.2f}",
-        }
+    # Audit 6.5: no special case for zero conversions — Beta(1, clicks+1) already encodes it.
+    # (The old branch fired on 1 click / $101 and stayed silent on 500 clicks / $99.)
+    observed_cpa = total_spend / conversions if conversions > 0 else None
 
     alpha_cvr = float(conversions) + 1.0
     beta_cvr  = float(clicks - conversions) + 1.0
 
     try:
         import random
-        rng = random.Random(42)
+        rng = random.Random()  # unseeded: deterministic seed hid MC variance
         spend_per_click = total_spend / clicks
         exceed_count = 0
         for _ in range(n_samples):
@@ -2633,12 +3117,12 @@ def compute_cpa_exceedance_probability(
         p_exceed = exceed_count / n_samples
 
     except Exception:
-        p_exceed = 1.0 if observed_cpa > threshold else 0.0
+        p_exceed = 1.0 if (observed_cpa is None or observed_cpa > threshold) else 0.0
 
     return {
         "p_exceed": round(p_exceed, 4),
         "should_trigger": p_exceed > 0.90,
-        "observed_cpa": round(observed_cpa, 2),
+        "observed_cpa": round(observed_cpa, 2) if observed_cpa is not None else None,
         "threshold_cpa": round(threshold, 2),
         "target_cpa": target_cpa,
         "cpa_multiplier": cpa_multiplier,
@@ -2704,7 +3188,6 @@ def l1_combined_check(
 
 
 ### Полный код
-
 ```python
 """
 GLM interaction terms via Bayes factor approximation — pure logic, no FastAPI/Pydantic.
@@ -2746,7 +3229,7 @@ def compute_bayes_factor_approx(
     bic_restricted = n * math.log(rss_restricted / n) + k_restricted * math.log(n)
 
     delta_bic = bic_restricted - bic_full
-    bf = math.exp(0.5 * delta_bic)
+    bf = math.exp(min(0.5 * delta_bic, 700.0))  # clamp: math.exp(>710) raises OverflowError
 
     if bf > 3.0:
         decision = "INCLUDE"
@@ -2802,7 +3285,6 @@ def rank_interactions_by_bf(
 
 
 ### Полный код
-
 ```python
 """
 Diagnostics baseline + Benjamini-Hochberg correction — pure logic.
@@ -2819,6 +3301,15 @@ SYMPTOMS = [
     "CTR_DROP", "CVR_DROP", "BOUNCE_SPIKE", "SCROLL_DEPTH_LOW",
     "LPV_CLICK_GAP", "MARKET_SHIFT", "CREATIVE_FATIGUE",
 ]
+
+# Audit 6.7: for these symptoms the bad direction is a RISE of the observed metric
+# (bounce rate, fatigue index, LPV/click gap); every other symptom is a drop.
+RISE_IS_BAD = {"BOUNCE_SPIKE", "CREATIVE_FATIGUE", "LPV_CLICK_GAP"}
+
+
+def symptom_p_value(symptom: str, z: float) -> float:
+    """One-tailed p-value in the direction that is bad for this symptom."""
+    return z_to_p_value(-z) if symptom in RISE_IS_BAD else z_to_p_value(z)
 
 
 def compute_z_score(observed: float, baseline: float, baseline_std: float, n: int) -> float:
@@ -2844,23 +3335,67 @@ def z_to_p_value(z: float) -> float:
 
 
 def benjamini_hochberg(p_values: list[float], fdr: float = 0.10) -> list[bool]:
-    """BH procedure for FDR control. Returns True = significant after correction."""
+    """BH procedure for FDR control. Returns True = significant after correction.
+
+    Audit 6.8: reject every hypothesis up to the LARGEST rank k with p(k) <= k·q/n. The previous
+    loop stopped at the first non-significant rank, which under-rejects
+    (p = [0.04, 0.05, 0.06], q = 0.10 -> BH rejects all three; the old code rejected none).
+    """
     n = len(p_values)
     if n == 0:
         return []
     indexed = sorted(enumerate(p_values), key=lambda x: x[1])
+    k_max = 0
+    for rank, (_idx, p) in enumerate(indexed, start=1):
+        if p <= fdr * rank / n:
+            k_max = rank
     rejected = [False] * n
-    for rank, (idx, p) in enumerate(indexed, start=1):
-        threshold = fdr * rank / n
-        if p <= threshold:
+    for rank, (idx, _p) in enumerate(indexed, start=1):
+        if rank <= k_max:
             rejected[idx] = True
-        else:
-            break
     return rejected
 
 
 def check_minimum_n(sample_size: int, min_n: int = MIN_N_FOR_SYMPTOM) -> bool:
     return sample_size >= min_n
+
+
+# BH applied separately to CTR and CVR families: anti-correlation between them violates PRDS assumption
+_CTR_FAMILY = {"CTR_DROP", "LPV_CLICK_GAP"}
+_CVR_FAMILY = {"CVR_DROP", "BOUNCE_SPIKE", "SCROLL_DEPTH_LOW", "CREATIVE_FATIGUE", "MARKET_SHIFT"}
+
+
+def _apply_bh_by_family(
+    eligible: list[dict],
+    p_values: list[float],
+    fdr: float,
+) -> list[bool]:
+    """Apply BH separately to CTR and CVR families; Bonferroni for cross-family.
+
+    Returns a boolean mask (len == len(eligible)) where True means significant.
+    """
+    n = len(eligible)
+    # Split indices by family
+    ctr_indices = [i for i, o in enumerate(eligible) if o.get("symptom", "") in _CTR_FAMILY]
+    cvr_indices = [i for i, o in enumerate(eligible) if o.get("symptom", "") in _CVR_FAMILY]
+    other_indices = [i for i in range(n) if i not in ctr_indices and i not in cvr_indices]
+
+    significant = [False] * n
+
+    for group_indices in (ctr_indices, cvr_indices, other_indices):
+        if not group_indices:
+            continue
+        group_p = [p_values[i] for i in group_indices]
+        group_flags = benjamini_hochberg(group_p, fdr)
+        for local_j, global_i in enumerate(group_indices):
+            significant[global_i] = group_flags[local_j]
+
+    # Bonferroni cross-family alert: both CTR and CVR families must flag at least one symptom
+    ctr_flagged = any(significant[i] for i in ctr_indices)
+    cvr_flagged = any(significant[i] for i in cvr_indices)
+    cross_family_alert = ctr_flagged and cvr_flagged
+
+    return significant, cross_family_alert
 
 
 def run_diagnostics(
@@ -2871,6 +3406,9 @@ def run_diagnostics(
     Run full diagnostics pipeline with BH correction.
     Each symptom compared against tenant's own baseline per placement×device
     to avoid Simpson's paradox (vision §3.2).
+
+    BH is applied separately to CTR and CVR families (PRDS assumption violated
+    across families due to anti-correlation). Cross-family alert uses Bonferroni.
     """
     eligible = [o for o in observations if check_minimum_n(o.get("n", 0))]
 
@@ -2888,9 +3426,9 @@ def run_diagnostics(
             obs.get("baseline_std", obs["baseline"] * 0.1 + 1e-6),
             obs["n"],
         )
-        p_values.append(z_to_p_value(z))
+        p_values.append(symptom_p_value(obs.get("symptom", ""), z))
 
-    significant_flags = benjamini_hochberg(p_values, fdr)
+    significant_flags, cross_family_alert = _apply_bh_by_family(eligible, p_values, fdr)
 
     symptoms_out = []
     for i, obs in enumerate(eligible):
@@ -2912,11 +3450,13 @@ def run_diagnostics(
             })
 
     return {
-        "symptoms":         symptoms_out,
-        "total_checked":    len(eligible),
-        "suppressed_count": len(observations) - len(eligible),
-        "fdr_threshold":    fdr,
-        "bh_applied":       True,
+        "symptoms":            symptoms_out,
+        "total_checked":       len(eligible),
+        "suppressed_count":    len(observations) - len(eligible),
+        "fdr_threshold":       fdr,
+        "bh_applied":          True,
+        "bh_family_separated": True,
+        "cross_family_alert":  cross_family_alert,
     }
 
 
@@ -3008,7 +3548,6 @@ def compute_lpv_click_gap(
 
 
 ### Полный код
-
 ```python
 """
 Quality Score service — no FastAPI/Pydantic imports.
@@ -3026,6 +3565,16 @@ DEFAULT_WEIGHTS = {
     "form_completion": 0.25,
 }
 
+# Roadmap 8-3 (2-12 change): when the tenant's quality key is an appointment stage, whether the
+# booked call was actually held carries the highest weight.
+APPOINTMENT_WEIGHTS = {
+    "match_score": 0.15,
+    "non_bounce": 0.15,
+    "scroll_depth": 0.15,
+    "form_completion": 0.15,
+    "show_rate": 0.40,
+}
+
 
 def compute_quality_score(
     match_score: float | None,
@@ -3033,16 +3582,20 @@ def compute_quality_score(
     scroll_depth: float,
     form_completion: float,
     weights: dict | None = None,
+    show_rate: float | None = None,
 ) -> float:
     """
     Compute quality score for a session.
     quality_score = w1*match_score + w2*(1-bounce) + w3*scroll_depth_norm + w4*form_completion
-    All inputs normalized to [0, 1].
+                    [+ w5*show_rate when an appointment outcome exists — roadmap 8-3]
+    All inputs normalized to [0, 1]. show_rate: 1.0 held, 0.0 no-show, None = no outcome yet
+    (base weights apply, so unresolved bookings are never penalised).
 
     Quality Score is NOT added to alpha/beta (one binary event per arm, arch §4.4).
     It acts as a protective metric and a multiplier on the Phase 3 profit estimate.
     """
-    w = {**DEFAULT_WEIGHTS, **(weights or {})}
+    base = APPOINTMENT_WEIGHTS if show_rate is not None else DEFAULT_WEIGHTS
+    w = {**base, **(weights or {})}
 
     ms = match_score if match_score is not None else 0.5  # neutral prior if unknown
     nb = 0.0 if bounced else 1.0
@@ -3055,12 +3608,18 @@ def compute_quality_score(
         + w["scroll_depth"] * sd
         + w["form_completion"] * fc
     )
+    if show_rate is not None:
+        score += w.get("show_rate", 0.0) * max(0.0, min(1.0, show_rate))
     return round(max(0.0, min(1.0, score)), 4)
 
 
 def _prob_a_greater_b(rate_a: float, n_a: int, rate_b: float, n_b: int) -> float:
     """P(rate_a > rate_b) using normal approximation of proportions."""
     if n_a < 5 or n_b < 5:
+        return 0.5
+    # Normal approximation requires np≥5 and n(1-p)≥5; fall back for sparse rates (e.g. CVR≈1%)
+    if (rate_a * n_a < 5 or (1 - rate_a) * n_a < 5
+            or rate_b * n_b < 5 or (1 - rate_b) * n_b < 5):
         return 0.5
     se = math.sqrt(
         rate_a * (1 - rate_a) / n_a + rate_b * (1 - rate_b) / n_b
@@ -3081,25 +3640,31 @@ def compute_clickbait_check(
     ctr_n: int,
     cvr_n: int,
     bounce_n: int,
+    noshow_beta: float | None = None,
+    noshow_beta_threshold: float = -0.3,
 ) -> dict:
     """
     Bayesian clickbait detector (vision §15.3 pre-LKJ heuristic).
     Flags CLICKBAIT_SUSPECT if:
       P(creative_ctr > anchor_ctr) > 0.9 AND
-      (P(creative_cvr < anchor_cvr) > 0.9 OR P(creative_bounce > anchor_bounce) > 0.9)
+      (P(creative_cvr < anchor_cvr) > 0.9 OR P(creative_bounce > anchor_bounce) > 0.9
+       OR the creative's hook is a no-show driver: β_noshow <= threshold — roadmap 8-3)
     Uses normal approximation for probabilities.
     """
     p_ctr_higher = _prob_a_greater_b(creative_ctr, ctr_n, anchor_ctr, ctr_n)
     p_cvr_lower = 1.0 - _prob_a_greater_b(creative_cvr, cvr_n, anchor_cvr, cvr_n)
     p_bounce_higher = _prob_a_greater_b(creative_bounce, bounce_n, anchor_bounce, bounce_n)
+    noshow_driver = noshow_beta is not None and noshow_beta <= noshow_beta_threshold
 
-    is_clickbait = p_ctr_higher > 0.9 and (p_cvr_lower > 0.9 or p_bounce_higher > 0.9)
+    is_clickbait = p_ctr_higher > 0.9 and (p_cvr_lower > 0.9 or p_bounce_higher > 0.9 or noshow_driver)
 
     return {
         "suspect": is_clickbait,
         "p_ctr_higher_than_anchor": round(p_ctr_higher, 3),
         "p_cvr_lower_than_anchor": round(p_cvr_lower, 3),
         "p_bounce_higher_than_anchor": round(p_bounce_higher, 3),
+        "noshow_driver": noshow_driver,
+        "noshow_beta": noshow_beta,
         "verdict": "CLICKBAIT_SUSPECT" if is_clickbait else "CLEAN",
     }
 
@@ -3110,12 +3675,19 @@ def detect_cvr_collapse(
     n_conversions: int,
     n_sessions: int,
     threshold_drop: float = 0.3,
+    baseline_n: int | None = None,
 ) -> dict:
     """
     CVR-collapse detector for 3-13 site health full.
     collapsed=True if relative drop >= threshold AND two-proportion z-test p < 0.05.
+
+    Audit 6.6: the z-test used n_conversions as the baseline sample size (ZeroDivisionError on a
+    full collapse, huge SE otherwise). `baseline_n` is the number of baseline sessions; when the
+    caller does not know it, the current window size is assumed.
     """
     relative_drop = (baseline_cvr - current_cvr) / max(baseline_cvr, 1e-9)
+    n1 = n_sessions
+    n2 = baseline_n if baseline_n and baseline_n > 0 else n_sessions
 
     # Two-proportion z-test (normal approximation)
     if n_sessions < 10 or baseline_cvr <= 0:
@@ -3126,10 +3698,8 @@ def detect_cvr_collapse(
             "verdict": "INSUFFICIENT_DATA",
         }
 
-    pooled = (current_cvr * n_sessions + baseline_cvr * n_conversions) / (
-        n_sessions + n_conversions
-    )
-    se = math.sqrt(pooled * (1 - pooled) * (1 / n_sessions + 1 / n_conversions))
+    pooled = (current_cvr * n1 + baseline_cvr * n2) / (n1 + n2)
+    se = math.sqrt(max(pooled * (1 - pooled), 0.0) * (1 / n1 + 1 / n2))
     if se < 1e-10:
         z = 0.0
     else:
@@ -3211,7 +3781,6 @@ def aggregate_quality_scores(
 
 
 ### Полный код
-
 ```python
 """
 Red Flags Detector — pure logic, no FastAPI/Pydantic imports.
@@ -3241,7 +3810,7 @@ def compute_beta_exceedance(
 
     try:
         import random
-        rng = random.Random(0)
+        rng = random.Random()  # unseeded: deterministic seed hid MC variance across calls
 
         def beta_sample(a: float, b: float) -> float:
             # Gamma-based Beta sampler: O(1) per sample regardless of parameters
@@ -3344,7 +3913,6 @@ def check_red_flag(
 
 
 ### Полный код
-
 ```python
 """
 ML model quality metrics — log-loss, Brier score, calibration error (Block F §8).
@@ -3522,7 +4090,6 @@ def assess_model_health(
 
 
 ### Полный код
-
 ```python
 """
 Segment random effects — audience × atom interactions with partial pooling (vision §15.4 §3-1b).
@@ -3531,7 +4098,8 @@ Pure logic, zero FastAPI/Pydantic imports.
 from __future__ import annotations
 import math
 
-TAU_SQUARED = 4.0   # prior variance for segment effects (controls shrinkage strength)
+TAU_SQUARED = 0.25  # prior variance; precision=4 → 50% shrinkage at n≈4, meaningful pull below n≈20
+# Previous value (4.0) gave w≈0.976 at n=10 — effectively disabled partial pooling
 MIN_N = 30
 
 
@@ -3626,7 +4194,6 @@ def rank_atoms_by_segment(
 
 
 ### Полный код
-
 ```python
 """
 Behavioral Cluster Service (Phase 5-1, §7.3 Этап 1).
@@ -3665,8 +4232,23 @@ FEATURE_NAMES = [
     "is_mobile",              # 0/1 mobile device
     "is_repeat_visit",        # 0/1 has prior session
     "event_count",            # total number of events in session
+    "ticket_bucket_ord",      # roadmap 9-9 / arch §16.19: 0..4 ordinal of sessions.ticket_bucket
+    "self_accredited",        # 0/1 sessions.self_accredited
 ]
 N_FEATURES = len(FEATURE_NAMES)
+
+_TICKET_ORDINAL = {"LT25K": 0.0, "25_50K": 1.0, "50_100K": 2.0, "100_250K": 3.0, "GT250K": 4.0}
+
+
+def ticket_bucket_ordinal(bucket) -> float:
+    """Ordinal 0..4 for the five investor ticket buckets; unknown/None → 0."""
+    return _TICKET_ORDINAL.get(str(bucket).upper(), 0.0) if bucket else 0.0
+
+
+def _investor_features(session: dict) -> tuple[float, float]:
+    accredited = session.get("self_accredited")
+    acc = 1.0 if accredited is True or str(accredited).lower() in ("1", "true", "t", "yes") else 0.0
+    return ticket_bucket_ordinal(session.get("ticket_bucket")), acc
 
 # Rule-based archetype labels (used when k-means has no trained model yet)
 RULE_ARCHETYPES = {
@@ -3696,6 +4278,7 @@ def extract_features(events: list[dict], session: dict) -> np.ndarray:
         np.ndarray of shape (N_FEATURES,) — float32
     """
     feat: dict[str, float] = {name: 0.0 for name in FEATURE_NAMES}
+    feat["ticket_bucket_ord"], feat["self_accredited"] = _investor_features(session or {})
 
     if not events:
         return np.array([feat[n] for n in FEATURE_NAMES], dtype=np.float32)
@@ -3795,14 +4378,23 @@ def fit_clusters(
     km = KMeans(n_clusters=n_clusters, random_state=random_state, n_init=10)
     labels = km.fit_predict(X_scaled)
 
-    # Unscale centroids back to interpretable values
+    # Unscale centroids back to interpretable values (for human inspection)
     centroids_raw = scaler.inverse_transform(km.cluster_centers_)
+
+    # Phase 12-5: store both scaled centroids and scaler params so assign_cluster
+    # can compute distances in the same (scaled) space used during fit.
+    scaler_mean = scaler.mean_.tolist()
+    scaler_std  = scaler.scale_.tolist()
 
     centroid_dicts = []
     for i, centroid in enumerate(centroids_raw):
         c = {name: float(val) for name, val in zip(FEATURE_NAMES, centroid)}
-        c["_cluster_idx"] = i
-        c["_session_count"] = int(np.sum(labels == i))
+        c["_cluster_idx"]     = i
+        c["_session_count"]   = int(np.sum(labels == i))
+        # Store scaled centroid (in the fitted StandardScaler space)
+        c["_centroid_scaled"] = km.cluster_centers_[i].tolist()
+        c["_scaler_mean"]     = scaler_mean
+        c["_scaler_std"]      = scaler_std
         centroid_dicts.append(c)
 
     return centroid_dicts
@@ -3828,17 +4420,34 @@ def assign_cluster(centroid_dicts: list[dict], features: np.ndarray) -> int:
 
     best_idx = 0
     best_dist = float("inf")
-    for cd in centroid_dicts:
-        centroid_vec = np.array(
-            [cd.get(name, 0.0) for name in FEATURE_NAMES], dtype=np.float32
-        )
-        # Normalise by feature std to avoid scale dominance
-        diff  = features - centroid_vec
-        scale = np.maximum(np.abs(centroid_vec), 1.0)
-        dist  = float(np.sum((diff / scale) ** 2))
-        if dist < best_dist:
-            best_dist = dist
-            best_idx = cd.get("_cluster_idx", 0)
+
+    # Phase 12-5: use StandardScaler params from fit_clusters so distances are
+    # computed in scaled space — the same space K-means was fitted in.
+    first = centroid_dicts[0]
+    if "_scaler_mean" in first and "_scaler_std" in first:
+        scaler_mean = np.array(first["_scaler_mean"], dtype=np.float32)
+        scaler_std  = np.array(first["_scaler_std"],  dtype=np.float32)
+        # Guard against zero std (constant feature)
+        scaler_std  = np.where(scaler_std == 0.0, 1.0, scaler_std)
+        features_scaled = (features - scaler_mean) / scaler_std
+
+        for cd in centroid_dicts:
+            centroid_scaled = np.array(cd["_centroid_scaled"], dtype=np.float32)
+            dist = float(np.sum((features_scaled - centroid_scaled) ** 2))
+            if dist < best_dist:
+                best_dist = dist
+                best_idx  = cd.get("_cluster_idx", 0)
+    else:
+        # Legacy / manually constructed centroid dicts without scaler info:
+        # fall back to plain Euclidean distance in raw feature space.
+        for cd in centroid_dicts:
+            centroid_vec = np.array(
+                [cd.get(name, 0.0) for name in FEATURE_NAMES], dtype=np.float32
+            )
+            dist = float(np.sum((features - centroid_vec) ** 2))
+            if dist < best_dist:
+                best_dist = dist
+                best_idx  = cd.get("_cluster_idx", 0)
 
     return int(best_idx)
 
@@ -4023,7 +4632,6 @@ def validate_ips_coverage(
 
 
 ### Полный код
-
 ```python
 """
 Three-level prior hierarchy — pure logic, no FastAPI/Pydantic imports.
@@ -4040,6 +4648,24 @@ UNIVERSAL_PRIORS = {
     "bounce":       {"mu": 0.55,  "sigma": 0.15},
     "scroll_depth": {"mu": 0.45,  "sigma": 0.20},
 }
+
+
+def studentt_to_normal_moments(mu: float, sigma: float, nu: float = 4.0) -> tuple[float, float]:
+    """
+    Moment-match StudentT(nu, mu, sigma) to Normal for conjugate update approximation.
+
+    Mean  = mu       (defined for nu > 1; we accept nu=4 default)
+    Var   = sigma^2 * nu/(nu-2)  (defined for nu > 2)
+
+    Returns (matched_mu, matched_sigma) suitable for Normal-Normal conjugate update.
+    """
+    # Approximation: StudentT moments matched to Normal (Phase 12-3).
+    # Replace with PyMC sampling in Phase 7 MMM.
+    if nu <= 2:
+        # Undefined variance — inflate sigma as conservative fallback
+        return mu, sigma * 3.0
+    variance = sigma ** 2 * nu / (nu - 2)
+    return mu, math.sqrt(variance)
 
 
 def student_t_params(nu: float, mu: float, sigma: float) -> dict:
@@ -4099,6 +4725,13 @@ def build_client_prior(
 
     niche_mu    = niche_prior["prior"]["mu"]
     niche_sigma = niche_prior["prior"]["sigma"]
+
+    # Approximation: StudentT moments matched to Normal (Phase 12-3).
+    # Replace with PyMC sampling in Phase 7 MMM.
+    if niche_prior["prior"].get("distribution") == "StudentT":
+        nu = float(niche_prior["prior"].get("nu", 4.0))
+        niche_mu, niche_sigma = studentt_to_normal_moments(niche_mu, niche_sigma, nu=nu)
+
     obs_sigma   = client_std if client_std and client_std > 0 else niche_sigma
 
     precision_prior = 1.0 / (niche_sigma ** 2)
@@ -4162,7 +4795,6 @@ def get_effective_prior(
 
 
 ### Полный код
-
 ```python
 """
 External Signals + Baseline Anomaly Service — no FastAPI/Pydantic imports.
@@ -4187,6 +4819,7 @@ def classify_anomaly(
     calendar_tags: list[str],           # e.g. ["black_friday", "drought_moderate"]
     fraud_threshold_pct: float = 15.0,
     cpm_z_threshold: float = 2.5,
+    news_label: str = "NEUTRAL",       # NEGATIVE / NEUTRAL / POSITIVE from /signals/news-sentiment (3-12)
 ) -> dict:
     """
     Returns {verdict, evidence} per §8.2 three-row table.
@@ -4209,7 +4842,13 @@ def classify_anomaly(
             evidence.append(f"cpm_z={cpm_z_score:.2f}")
         if calendar_tags:
             evidence.append(f"calendar={calendar_tags}")
+        if news_label == "NEGATIVE":
+            evidence.append("news_sentiment=NEGATIVE")
         return {"verdict": "MARKET", "evidence": evidence}
+
+    if anchor_verdict == "NONE" and news_label == "NEGATIVE" and cpm_z_score is not None and cpm_z_score > cpm_z_threshold:
+        # no anchor signal yet, but negative news + CPM spike is a market explanation (3-12)
+        return {"verdict": "MARKET", "evidence": [f"cpm_z={cpm_z_score:.2f}", "news_sentiment=NEGATIVE"]}
 
     if anchor_verdict == "CREATIVE":
         evidence.append("tests_dropped_anchors_stable")
@@ -4386,7 +5025,6 @@ frequency_penalty = clip((frequency − 1.5) / 6.5, [0, 1])
 
 
 ### Полный код
-
 ```python
 """Creative Burnout Detection Service (Phase 6-1, §8.1).
 
@@ -4459,7 +5097,6 @@ score = 0.5 × eff_score + 0.5 × freq_score
 
 
 ### Полный код
-
 ```python
 """Audience Saturation Detection Service (Phase 6-2, §8.2).
 
@@ -4559,7 +5196,6 @@ entropy = 1 − mean_cosine_similarity(всех пар хуков)
 
 
 ### Полный код
-
 ```python
 """
 Niche Creative Entropy Index service — no FastAPI/Pydantic imports.
@@ -4705,7 +5341,6 @@ def build_entropy_report(
 
 
 ### Полный код
-
 ```python
 """
 Niche Benchmarks — first-party only (vision §8; arch §16.10).
@@ -4857,7 +5492,6 @@ def compare_tenant_to_niche(
 
 
 ### Полный код
-
 ```python
 """Evolutionary Creative Generation Service (Phase 6-4 + v1.1).
 
@@ -4953,16 +5587,21 @@ def generate_candidates(
         return []
 
     parent_a = ranked[0]
-    parent_b = ranked[1] if len(ranked) > 1 else ranked[0]
+    single_parent = len(ranked) < 2
+    parent_b = ranked[1] if not single_parent else ranked[0]
 
     candidates = []
     for i in range(n_candidates):
-        child_atoms = crossover_atoms(parent_a, parent_b, rng_seed=i)
-        mutated     = mutate_atoms(child_atoms, atom_pool, mutation_rate, rng_seed=i + 1000)
+        if single_parent:
+            # Crossover between identical parents produces an exact copy — skip it, mutate only
+            child_atoms = list(parent_a.get("atoms", []))
+        else:
+            child_atoms = crossover_atoms(parent_a, parent_b, rng_seed=i)
+        mutated = mutate_atoms(child_atoms, atom_pool, mutation_rate, rng_seed=i + 1000)
         candidates.append({
             "candidate_index": i,
             "atoms":           mutated,
-            "parent_ids":      [parent_a.get("id"), parent_b.get("id")],
+            "parent_ids":      [parent_a.get("id"), parent_b.get("id") if not single_parent else None],
         })
     return candidates
 
@@ -5147,15 +5786,23 @@ CPA = budget / conversions  (∞ если conversions=0)
 
 
 ### Полный код
-
 ```python
 """Predictive Budget Curve Service (Phase 6-3, §8.4).
 
 Monte Carlo simulation over Beta(alpha, beta) CVR distribution to produce
 CPA corridors at each budget level.
 """
+import warnings
 from typing import List, Optional
 import numpy as np
+
+
+def _hill_sessions(budget: float, sessions_max: float, ec50: float, k: float = 1.0) -> float:
+    """Hill curve: sessions = sessions_max * budget^k / (ec50^k + budget^k)"""
+    if budget <= 0:
+        return 0.0
+    bk = budget ** k
+    return sessions_max * bk / (ec50 ** k + bk)
 
 
 def simulate_budget_step(
@@ -5165,18 +5812,31 @@ def simulate_budget_step(
     budget: float,
     n_mc: int = 2000,
     rng_seed: Optional[int] = None,
+    max_budget: Optional[float] = None,
 ) -> dict:
     """Sample CVR from Beta(alpha, beta) n_mc times, compute CPA distribution.
 
     Returns p10, p50, p90 of CPA at the given budget.
     sessions_per_dollar: expected traffic volume per $ spent.
+    max_budget: when provided alongside sessions_per_dollar, enables Hill saturation
+    model (ec50 = max_budget * 0.3, sessions_max = sessions_per_dollar * max_budget * 0.8).
+    Falls back to linear with saturation_model='linear_fallback' when data is insufficient.
     """
     rng = np.random.default_rng(rng_seed)
     if alpha <= 0 or beta <= 0:
         alpha, beta = 1.0, 1.0
 
+    saturation_model = "linear"
+    if sessions_per_dollar is not None and max_budget is not None and max_budget > 0:
+        ec50 = max_budget * 0.3
+        sessions_max = sessions_per_dollar * max_budget * 0.8
+        sessions = _hill_sessions(budget, sessions_max, ec50)
+        saturation_model = "hill"
+    else:
+        sessions = budget * sessions_per_dollar
+        saturation_model = "linear_fallback"
+
     cvr_samples    = rng.beta(alpha, beta, size=n_mc)
-    sessions       = budget * sessions_per_dollar
     conversions    = cvr_samples * sessions
 
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -5184,7 +5844,8 @@ def simulate_budget_step(
 
     finite_mask = np.isfinite(cpa_samples)
     if finite_mask.sum() == 0:
-        return {"budget": budget, "cpa_p10": None, "cpa_p50": None, "cpa_p90": None}
+        return {"budget": budget, "cpa_p10": None, "cpa_p50": None, "cpa_p90": None,
+                "saturation_model": saturation_model}
 
     cpa_finite = cpa_samples[finite_mask]
     return {
@@ -5192,6 +5853,7 @@ def simulate_budget_step(
         "cpa_p10": round(float(np.percentile(cpa_finite, 10)), 4),
         "cpa_p50": round(float(np.percentile(cpa_finite, 50)), 4),
         "cpa_p90": round(float(np.percentile(cpa_finite, 90)), 4),
+        "saturation_model": saturation_model,
     }
 
 
@@ -5252,7 +5914,6 @@ def find_diminishing_returns_point(curve: List[dict]) -> Optional[float]:
 
 
 ### Полный код
-
 ```python
 """
 Compliance check service — no FastAPI/Pydantic imports.
@@ -5273,9 +5934,9 @@ def check_meta_policy(text: str, llm_client: Any, model: str = "claude-haiku-5-5
     """
     if llm_client is None:
         return {
-            "result": "WARN",
-            "findings": [{"rule": "ML_UNAVAILABLE", "excerpt": "", "severity": "WARN",
-                          "suggestion": "Manual policy review required (ml-service unavailable)"}],
+            "result": "FAIL",
+            "findings": [{"rule": "ML_UNAVAILABLE", "excerpt": "", "severity": "FAIL",
+                          "suggestion": "Manual policy review required — LLM unavailable, cannot confirm compliance"}],
         }
 
     prompt = (
@@ -5320,9 +5981,9 @@ def check_claims_vs_facts(text: str, product_facts: list[str], llm_client: Any, 
 
     if llm_client is None:
         return {
-            "result": "WARN",
-            "findings": [{"rule": "ML_UNAVAILABLE", "excerpt": "", "severity": "WARN",
-                          "suggestion": "Manual claims verification required"}],
+            "result": "FAIL",
+            "findings": [{"rule": "ML_UNAVAILABLE", "excerpt": "", "severity": "FAIL",
+                          "suggestion": "Manual claims verification required — LLM unavailable, cannot confirm compliance"}],
         }
 
     facts_str = "\n".join(f"- {f}" for f in product_facts)
@@ -5550,7 +6211,6 @@ def run_all_text_checks(
 
 
 ### Полный код
-
 ```python
 """
 Compliance by Construction + Moderation Probe + Reviewer Persona (vision §19.18.4; arch §16.17).
@@ -5693,7 +6353,6 @@ lift_pct = lift / synthetic_post
 
 
 ### Полный код
-
 ```python
 """
 Geo-Lift service — no FastAPI/Pydantic imports.
@@ -5709,6 +6368,17 @@ import numpy as np
 _RNG = np.random.default_rng(seed=42)
 _MC_SAMPLES = 5_000
 _CI_LEVEL = 0.80  # 80% credible interval
+
+
+def _block_bootstrap_sample(arr: np.ndarray, block_size: int = None) -> np.ndarray:
+    """Block bootstrap preserving temporal autocorrelation."""
+    n = len(arr)
+    if block_size is None:
+        block_size = max(7, int(np.sqrt(n)))  # weekly blocks by default
+    n_blocks = int(np.ceil(n / block_size))
+    starts = _RNG.integers(0, n, size=n_blocks)
+    indices = np.concatenate([np.arange(s, min(s + block_size, n)) for s in starts])[:n]
+    return arr[indices]
 
 
 def validate_geo_split(
@@ -5792,10 +6462,10 @@ def compute_synthetic_control_simple(
 
     bootstrap_lifts = []
     for _ in range(_MC_SAMPLES):
-        s_ctrl_pre  = _RNG.choice(control_pre_arr, size=n_ctrl_pre, replace=True)
-        s_test_pre  = _RNG.choice(test_pre_arr, size=n_test_pre, replace=True)
-        s_ctrl_post = _RNG.choice(control_post_arr, size=n_ctrl_post, replace=True)
-        s_test_post = _RNG.choice(test_post_arr, size=n_test_post, replace=True)
+        s_ctrl_pre  = _block_bootstrap_sample(control_pre_arr)
+        s_test_pre  = _block_bootstrap_sample(test_pre_arr)
+        s_ctrl_post = _block_bootstrap_sample(control_post_arr)
+        s_test_post = _block_bootstrap_sample(test_post_arr)
 
         m_ctrl_pre  = s_ctrl_pre.mean()
         if m_ctrl_pre == 0:
@@ -5850,7 +6520,6 @@ def compute_synthetic_control_simple(
 
 
 ### Полный код
-
 ```python
 """
 Agency Measurability (vision §19.18.7; arch §16.20).
@@ -5946,8 +6615,8 @@ def compare_creative_sources(
             a, b = results[i], results[j]
             # Approximate P(A > B) as Φ((mean_A - mean_B) / sqrt(se_A^2 + se_B^2))
             diff = a["hold_rate"] - b["hold_rate"]
-            se_a = a["ci_80_upper"] - a["hold_rate"]  # approx se from CI
-            se_b = b["ci_80_upper"] - b["hold_rate"]
+            se_a = (a["ci_80_upper"] - a["hold_rate"]) / 1.282  # recover se: CI_upper = mean + 1.282·se
+            se_b = (b["ci_80_upper"] - b["hold_rate"]) / 1.282
             pooled_se = math.sqrt(max(se_a**2 + se_b**2, 1e-9))
             z = diff / pooled_se
             # Φ(z) approximation
@@ -5984,7 +6653,6 @@ def compare_creative_sources(
 
 
 ### Полный код
-
 ```python
 """
 Investor Archetype Classifier (vision §19.18.6; arch §16.19).
@@ -6155,7 +6823,6 @@ def archetype_follow_up_strategy(archetype: str) -> dict:
 
 
 ### Полный код
-
 ```python
 """
 Post-Call Intelligence (vision §19.18.5; arch §16.18).
@@ -6312,7 +6979,6 @@ def summarise_call_batch(call_notes: list[dict], days: int = 30) -> dict:
 
 
 ### Полный код
-
 ```python
 """
 Form Self-Qualification + Value Calibration (vision §19.5).
@@ -6453,7 +7119,7 @@ def calibrate_value_coefficients(
         predicted = entry.get("predicted_value")
         actual    = entry.get("actual_value")
         bucket    = entry.get("ticket_bucket")
-        if predicted and actual and bucket and float(predicted) > 0:
+        if predicted is not None and actual is not None and bucket and float(predicted) > 0:
             bucket_data[bucket].append(float(actual) / float(predicted))
 
     suggestions = {}
@@ -6504,7 +7170,6 @@ def calibrate_value_coefficients(
 
 
 ### Полный код
-
 ```python
 """
 Bayesian Media Mix Modeling (MMM) — Phase 7, §17.3.
@@ -6614,7 +7279,34 @@ def optimize_budget_allocation(
                 best_alloc = {k: round(v, 2) for k, v in alloc.items()}
         return {"allocation": best_alloc, "expected_roi": round(best_roi, 4), "curve": curve}
 
-    # N channels: greedy marginal increment (each step allocates total_budget/n_steps)
+    # N channels: try SLSQP (global optimum under Hill saturation); fall back to greedy
+    try:
+        from scipy.optimize import minimize  # type: ignore[import]
+
+        def _neg_roi(x: list) -> float:
+            return -_expected_roi(saturation_params, {ch: max(0.0, float(b)) for ch, b in zip(channels, x)})
+
+        x0 = [total_budget / len(channels)] * len(channels)
+        result = minimize(
+            _neg_roi,
+            x0,
+            method="SLSQP",
+            bounds=[(0.0, total_budget)] * len(channels),
+            constraints=[{"type": "eq", "fun": lambda x: float(sum(x)) - total_budget}],
+            options={"ftol": 1e-9, "maxiter": 1000},
+        )
+        if result.success:
+            best_alloc = {ch: round(max(0.0, float(b)), 2) for ch, b in zip(channels, result.x)}
+            # re-normalise to exact total_budget
+            alloc_sum = sum(best_alloc.values())
+            if alloc_sum > 0:
+                best_alloc = {k: round(v / alloc_sum * total_budget, 2) for k, v in best_alloc.items()}
+            roi = _expected_roi(saturation_params, best_alloc)
+            return {"allocation": best_alloc, "expected_roi": round(roi, 4), "curve": [], "method": "slsqp"}
+    except Exception:
+        pass  # scipy unavailable or failed → greedy fallback below
+
+    # Greedy marginal increment fallback (may find local optima on non-convex Hill curves)
     step_size = total_budget / n_steps
     allocation = {ch: 0.0 for ch in channels}
     for _ in range(n_steps):
@@ -6635,6 +7327,7 @@ def optimize_budget_allocation(
         "allocation": {k: round(v, 2) for k, v in allocation.items()},
         "expected_roi": round(roi, 4),
         "curve": [],
+        "method": "greedy",
     }
 
 
@@ -6701,7 +7394,6 @@ Sharpe = (mean_r − rf) × 365 / (std_r × √365)
 
 
 ### Полный код
-
 ```python
 """
 Portfolio Budget Optimisation service — no FastAPI/Pydantic imports.
@@ -6748,10 +7440,9 @@ def check_sufficient_history(
     }
 
 
-def _sharpe_weight(returns: list[float], risk_free: float = _RISK_FREE_RATE) -> float:
-    """
-    Annualised Sharpe ratio for a single asset.
-    """
+def _sharpe_weight(returns: list[float], risk_free: float = _RISK_FREE_RATE,
+                   periods_per_year: float = _ANNUALISE) -> float:
+    """Annualised Sharpe ratio. periods_per_year: 365 daily, 52 weekly, 12 monthly."""
     if len(returns) < 2:
         return 0.0
     import math as _math
@@ -6759,8 +7450,7 @@ def _sharpe_weight(returns: list[float], risk_free: float = _RISK_FREE_RATE) -> 
     mean_r = sum(returns) / n
     variance = sum((r - mean_r) ** 2 for r in returns) / (n - 1)
     std_r = _math.sqrt(variance) if variance > 0 else 1e-9
-    # Annualise: daily mean * 365 / (daily std * sqrt(365))
-    sharpe = (mean_r - risk_free) * _ANNUALISE / (std_r * math.sqrt(_ANNUALISE))
+    sharpe = (mean_r - risk_free) * periods_per_year / (std_r * _math.sqrt(periods_per_year))
     return max(sharpe, 0.0)  # floor at 0 — negative Sharpe gets zero allocation
 
 
@@ -6858,6 +7548,115 @@ def _apply_floor(weights: list[float], floor: float) -> list[float]:
             break
 
     return w
+
+
+# ─── Markowitz mean-variance (roadmap 9-12; vision §8.5) ─────────────────────────────────────────
+
+def _roas_samples(asset: dict, n_samples: int, rng) -> "np.ndarray":
+    """Posterior ROAS samples for one asset.
+
+    Accepts either raw samples {roas_samples: [...]} or a Beta-scaled posterior
+    {roas_alpha, roas_beta, roas_scale?}: ROAS = scale × Beta(α, β) (scale defaults to the
+    tenant's max plausible ROAS, 10). Raw samples are resampled with replacement to n_samples.
+    """
+    import numpy as np
+    samples = asset.get("roas_samples")
+    if samples:
+        arr = np.asarray(samples, dtype=float)
+        if arr.size == 0:
+            return np.zeros(n_samples)
+        return rng.choice(arr, size=n_samples, replace=True) if arr.size != n_samples else arr
+    a = float(asset.get("roas_alpha", 1.0))
+    b = float(asset.get("roas_beta", 1.0) or 1.0)
+    scale = float(asset.get("roas_scale", 10.0))
+    return scale * rng.beta(max(a, 1e-6), max(b, 1e-6), size=n_samples)
+
+
+def compute_markowitz(
+    assets: list[dict],
+    risk_aversion: float = 3.0,
+    floor: float = _MIN_WEIGHT_FLOOR,
+    n_samples: int = 2000,
+    rng=None,
+    n_iter: int = 2000,
+) -> dict:
+    """Long-only mean-variance allocation with a per-asset floor.
+
+    maximise  μᵀw − λ·wᵀΣw   s.t. Σw = 1, w ≥ floor
+    solved by projected gradient ascent (projection onto the floored simplex). μ and Σ come from
+    posterior ROAS samples, so the covariance carries the *uncertainty* of each campaign, not only
+    its historical volatility. Output is a recommendation only (never inside CBO).
+    """
+    import numpy as np
+    g = rng if rng is not None else np.random.default_rng()
+    assets = [a for a in assets if not a.get("is_cbo")]
+    n = len(assets)
+    if n == 0:
+        return {"weights": {}, "expected_roas": 0.0, "variance": 0.0, "method": "markowitz",
+                "is_recommendation_only": True, "warnings": ["no eligible assets"]}
+    if n == 1:
+        return {"weights": {assets[0]["id"]: 1.0}, "expected_roas": float(np.mean(_roas_samples(assets[0], n_samples, g))),
+                "variance": 0.0, "method": "markowitz", "is_recommendation_only": True, "warnings": []}
+
+    S = np.column_stack([_roas_samples(a, n_samples, g) for a in assets])   # n_samples × n
+    mu = S.mean(axis=0)
+    cov = np.cov(S, rowvar=False) + np.eye(n) * 1e-9
+    floor = min(max(float(floor), 0.0), 1.0 / n)
+
+    def project(w):
+        """Project onto {w ≥ floor, Σw = 1}: shift by the floor, project the rest onto the simplex."""
+        v = w - floor
+        budget = 1.0 - floor * n
+        u = np.sort(v)[::-1]
+        css = np.cumsum(u)
+        k = np.nonzero(u * np.arange(1, n + 1) > (css - budget))[0]
+        rho = k[-1] if k.size else 0
+        theta = (css[rho] - budget) / (rho + 1)
+        return np.maximum(v - theta, 0.0) + floor
+
+    w = np.full(n, 1.0 / n)
+    lam = float(risk_aversion)
+    step = 1.0 / (2.0 * lam * float(np.linalg.eigvalsh(cov).max()) + float(np.abs(mu).max()) + 1e-9)
+    for _ in range(n_iter):
+        grad = mu - 2.0 * lam * cov @ w
+        w_new = project(w + step * grad)
+        if np.abs(w_new - w).max() < 1e-9:
+            w = w_new
+            break
+        w = w_new
+
+    weights = {a["id"]: round(float(x), 4) for a, x in zip(assets, w)}
+    return {
+        "weights": weights,
+        "expected_roas": round(float(mu @ w), 6),
+        "variance": round(float(w @ cov @ w), 6),
+        "mu": {a["id"]: round(float(m), 6) for a, m in zip(assets, mu)},
+        "risk_aversion": lam,
+        "floor": floor,
+        "method": "markowitz",
+        "is_recommendation_only": True,
+        "warnings": [],
+    }
+
+
+def allocate(
+    assets: list[dict],
+    history_ok: bool,
+    total_budget: float = 0.0,
+    risk_aversion: float = 3.0,
+    rng=None,
+) -> dict:
+    """Markowitz when ≥ 6 months of history (`history_ok`), otherwise the Sharpe allocation."""
+    if history_ok:
+        res = compute_markowitz(assets, risk_aversion=risk_aversion, rng=rng)
+        res["allocations"] = [
+            {"id": k, "weight": v, "budget": round(v * total_budget, 2)} for k, v in res["weights"].items()
+        ]
+        return res
+    res = compute_portfolio_allocation(assets, total_budget)
+    res["method"] = "sharpe"
+    res["weights"] = {a["id"]: a["weight"] for a in res["allocations"]}
+    return res
 ```
 
 ---
@@ -6895,10 +7694,11 @@ def _apply_floor(weights: list[float], floor: float) -> list[float]:
 
 
 ### Полный код
-
 ```java
 package com.marketingai.service;
 
+import java.util.Map;
+import org.springframework.jdbc.core.JdbcTemplate;
 import com.marketingai.entity.MetaAdSet;
 import com.marketingai.entity.MetaCampaign;
 import com.marketingai.repository.MetaAdSetRepository;
@@ -6914,6 +7714,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Random;
 import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Bayesian Staged Gate evaluation per vision §12.3.
@@ -6943,6 +7744,55 @@ public class GateEvaluationService {
     private final MetaAdSetRepository adSetRepo;
     private final MetaCampaignRepository campaignRepo;
     private final MetaApiService metaApi;
+    private final JdbcTemplate jdbc;
+    private final FunnelService funnelService;
+
+    // ─── Held-call funnel counts (roadmap 8-3; vision §19.5) ─────────────────
+
+    /** Booking + held stage keys for the tenant, or null when the funnel has no appointment quality stage. */
+    record HeldStages(String bookingStage, String heldStage) {}
+
+    private HeldStages heldStages(UUID tenantId) {
+        String held = funnelService.getQualityStageKey(tenantId).orElse(null);
+        if (held == null) return null;
+        List<String> booking = jdbc.queryForList(
+                "SELECT stage_key FROM funnel_stages WHERE tenant_id = ? " +
+                "AND (stage_key = 'BOOKED' OR maps_to_ghl_status LIKE 'AppointmentCreate%') " +
+                "ORDER BY ordinal DESC LIMIT 1", String.class, tenantId);
+        if (booking.isEmpty()) return null;
+        // the quality stage must be an appointment outcome, otherwise the legacy conversion gate applies
+        List<String> ghl = jdbc.queryForList(
+                "SELECT maps_to_ghl_status FROM funnel_stages WHERE tenant_id = ? AND stage_key = ?",
+                String.class, tenantId, held);
+        boolean appointment = !ghl.isEmpty() && ghl.get(0) != null && ghl.get(0).startsWith("AppointmentUpdate");
+        return appointment ? new HeldStages(booking.get(0), held) : null;
+    }
+
+    /** reward_events of sessions attributed to the ad set's creative, for the batch window. */
+    private HeldCallGate.Counts heldCounts(MetaAdSet adSet, HeldStages stages) {
+        if (adSet.getCreativeId() == null) return new HeldCallGate.Counts(safe(adSet.getClicksTotal()), 0, 0, spend(adSet));
+        Map<String, Object> row = jdbc.queryForMap("""
+                SELECT COUNT(DISTINCT re.session_id) FILTER (WHERE re.stage_key = ?) AS bookings,
+                       COUNT(DISTINCT re.session_id) FILTER (WHERE re.stage_key = ?) AS held
+                FROM reward_events re
+                JOIN sessions s ON s.id = re.session_id AND s.tenant_id = re.tenant_id
+                WHERE re.tenant_id = ? AND s.creative_id = ?
+                  AND re.rewarded_at >= COALESCE(?, now() - INTERVAL '90 days')
+                """, stages.bookingStage(), stages.heldStage(), adSet.getTenantId(), adSet.getCreativeId(),
+                adSet.getBatchLaunchedAt() != null ? java.sql.Timestamp.from(adSet.getBatchLaunchedAt()) : null);
+        return new HeldCallGate.Counts(safe(adSet.getClicksTotal()),
+                ((Number) row.get("bookings")).longValue(), ((Number) row.get("held")).longValue(), spend(adSet));
+    }
+
+    private static HeldCallGate.Counts sum(List<HeldCallGate.Counts> list) {
+        long c = 0, b = 0, h = 0; double sp = 0;
+        for (HeldCallGate.Counts x : list) { c += x.clicks(); b += x.bookings(); h += x.held(); sp += x.spend(); }
+        return new HeldCallGate.Counts(c, b, h, sp);
+    }
+
+    private static double spend(MetaAdSet a) {
+        return a.getSpendTotal() == null ? 0.0 : a.getSpendTotal();
+    }
 
     /**
      * Evaluate all eligible TEST campaign ad sets for the given tenant.
@@ -7028,7 +7878,7 @@ public class GateEvaluationService {
         double pBetter = probBetter(alpha, beta, groupAlpha, groupBeta);
 
         adSet.setGate1EvaluatedAt(Instant.now());
-        log.info("Gate 1 — adSet={} impressions={} clicks={} P(better)={:.3f}",
+        log.info("Gate 1 — adSet={} impressions={} clicks={} P(better)={}",
                 adSet.getId(), impressions, clicks, pBetter);
 
         if (pBetter < KILL_THRESHOLD) {
@@ -7060,11 +7910,23 @@ public class GateEvaluationService {
         double pBetter = probBetter(alpha, beta, groupAlpha, groupBeta);
 
         adSet.setGate2EvaluatedAt(Instant.now());
-        log.info("Gate 2 — adSet={} clicks={} P(CTR>group)={:.3f}", adSet.getId(), clicks, pBetter);
+        log.info("Gate 2 — adSet={} clicks={} P(CTR>group)={}", adSet.getId(), clicks, pBetter);
 
         if (pBetter < KILL_THRESHOLD) {
             return kill(adSet, String.format("Gate 2: P(CTR>group)=%.2f%% < 10%% (clicks=%d)",
                     pBetter * 100, clicks));
+        }
+
+        // Roadmap 8-3: Gate 2 += booking_rate — clicks that never book are not a landing win
+        HeldStages stages = heldStages(adSet.getTenantId());
+        if (stages != null) {
+            HeldCallGate.Counts mine = heldCounts(adSet, stages);
+            HeldCallGate.Counts group = sum(peers.stream().map(p -> heldCounts(p, stages)).toList());
+            Optional<Double> pBook = HeldCallGate.probBookingRateBetter(mine, group);
+            if (pBook.isPresent() && pBook.get() < KILL_THRESHOLD) {
+                return kill(adSet, String.format("Gate 2: P(booking_rate>group)=%.2f%% < 10%% (bookings=%d of %d clicks)",
+                        pBook.get() * 100, mine.bookings(), mine.clicks()));
+            }
         }
 
         adSet.setGateStatus("GATE_3");
@@ -7075,6 +7937,28 @@ public class GateEvaluationService {
     // ─── Gate 3: Conversion ───────────────────────────────────────────────
 
     private boolean evaluateGate3(MetaAdSet adSet, List<MetaAdSet> peers, MetaAdSet anchor) {
+        // Roadmap 8-3: for an appointment funnel Gate 3 is cost per CALL_HELD vs anchor + show-rate kill
+        HeldStages stages = heldStages(adSet.getTenantId());
+        if (stages != null) {
+            HeldCallGate.Counts mine = heldCounts(adSet, stages);
+            if (!HeldCallGate.hasEnoughData(mine)) return false;
+            HeldCallGate.Counts base = (anchor != null && !anchor.getId().equals(adSet.getId()))
+                    ? heldCounts(anchor, stages)
+                    : sum(peers.stream().filter(p -> !p.getId().equals(adSet.getId())).map(p -> heldCounts(p, stages)).toList());
+            adSet.setGate3EvaluatedAt(Instant.now());
+            Optional<String> killReason = HeldCallGate.evaluateGate3(mine, base);
+            log.info("Gate 3 (held calls) — adSet={} bookings={} held={} cost/held={} kill={}",
+                    adSet.getId(), mine.bookings(), mine.held(), mine.costPerHeld(), killReason.orElse("no"));
+            if (killReason.isPresent()) return kill(adSet, killReason.get());
+            if (mine.held() >= HeldCallGate.MIN_HELD_FOR_COST) {
+                adSet.setGateStatus("PASSED");
+                adSetRepo.save(adSet);
+                log.info("Gate 3 PASSED on held calls: adSet={} is a winner candidate", adSet.getId());
+                return true;
+            }
+            return false;
+        }
+
         long conversions = safe(adSet.getConversionsTotal());
         if (conversions < GATE_3_MIN_CONVERSIONS) return false;
 
@@ -7100,7 +7984,7 @@ public class GateEvaluationService {
         double pBetter = probBetter(alpha, beta, baseAlpha, baseBeta);
 
         adSet.setGate3EvaluatedAt(Instant.now());
-        log.info("Gate 3 — adSet={} conversions={} P(CVR>baseline)={:.3f}",
+        log.info("Gate 3 — adSet={} conversions={} P(CVR>baseline)={}",
                 adSet.getId(), conversions, pBetter);
 
         if (pBetter < KILL_THRESHOLD) {
@@ -7121,7 +8005,9 @@ public class GateEvaluationService {
      * Estimated via Monte Carlo (Marsaglia-Tsang Gamma sampler).
      */
     static double probBetter(double a1, double b1, double a2, double b2) {
-        Random rng = new Random();
+        // Replace: Random rng = new Random();
+        // With: ThreadLocalRandom (thread-safe, no shared state)
+        Random rng = ThreadLocalRandom.current();
         int wins = 0;
         for (int i = 0; i < MC_SAMPLES; i++) {
             if (sampleBeta(a1, b1, rng) > sampleBeta(a2, b2, rng)) wins++;
@@ -7196,10 +8082,10 @@ public class GateEvaluationService {
 
 
 ### Полный код
-
 ```java
 package com.marketingai.service;
 
+import com.marketingai.config.AppProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -7222,6 +8108,7 @@ public class ExperimentService {
 
     private final JdbcTemplate jdbc;
     private final RestTemplate restTemplate;
+    private final AppProperties appProperties;
     private final AlertService  alertService;
 
     public UUID createExperiment(UUID tenantId, UUID createdBy, Map<String, Object> body) {
@@ -7295,9 +8182,11 @@ public class ExperimentService {
                    COALESCE(ta.alpha, 1.0) AS alpha,
                    COALESCE(ta.beta,  1.0) AS beta
             FROM landing_variants lv
-            LEFT JOIN thompson_arms ta
-                ON ta.variant_id = lv.id AND ta.tenant_id = lv.tenant_id
-                AND ta.reward_event = 'quality_gate_pass'
+            LEFT JOIN LATERAL (
+                SELECT 1 + SUM(ta.alpha - 1) AS alpha, 1 + SUM(ta.beta - 1) AS beta
+                FROM thompson_arms ta
+                WHERE ta.variant_id = lv.id AND ta.tenant_id = lv.tenant_id
+            ) ta ON TRUE
             WHERE lv.experiment_id = ? AND lv.status = 'ACTIVE'
             """, experimentId);
 
@@ -7311,7 +8200,7 @@ public class ExperimentService {
             Map<String, Object> req = Map.of("arms", arms, "min_ess", minEss, "auto_stop_p", autoP);
             @SuppressWarnings("unchecked")
             Map<String, Object> result = restTemplate.postForObject(
-                "http://ml-service:8001/decide/experiment/should-conclude", req, Map.class);
+                appProperties.getMlServiceUrl() + "/decide/experiment/should-conclude", req, Map.class);
             if (result != null && Boolean.TRUE.equals(result.get("should_conclude"))) {
                 String winnerId = (String) result.get("winner_variant_id");
                 if (winnerId != null) {
@@ -7330,7 +8219,7 @@ public class ExperimentService {
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> pauses = (List<Map<String, Object>>)
                 restTemplate.postForObject(
-                    "http://ml-service:8001/decide/experiment/check-pause", req, List.class);
+                    appProperties.getMlServiceUrl() + "/decide/experiment/check-pause", req, List.class);
             if (pauses != null) {
                 for (Map<String, Object> p : pauses) {
                     if (Boolean.TRUE.equals(p.get("should_pause"))) {
@@ -7385,12 +8274,15 @@ public class ExperimentService {
 
 
 ### Полный код
-
 ```java
 package com.marketingai.service;
 
+import com.marketingai.config.AppProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
@@ -7410,14 +8302,81 @@ public class RewardService {
 
     private final JdbcTemplate jdbc;
     private final RestTemplate restTemplate;
+    private final AppProperties appProperties;
     private final AlertService  alertService;
+    private final FunnelService funnelService;
+
+    /**
+     * tenants.settings.reward_levels (roadmap 8-3, Audit F1): {"L1": "SLOT_SELECTED", "L2": "FORM_SUBMIT",
+     * "corrector": "CALL_HELD"}. L1/L2 stages reward the landing arm; the corrector never touches
+     * alpha/beta (it drives the weekly show-rate multiplier instead).
+     */
+    public record RewardLevels(String l1, String l2, String corrector) {
+        static RewardLevels parse(Object json) {
+            Map<String, Object> m = com.marketingai.util.Jsonb.asMap(json);
+            if (m.isEmpty()) return null;
+            return new RewardLevels(str(m.get("L1")), str(m.get("L2")), str(m.get("corrector")));
+        }
+        private static String str(Object o) { return o == null ? null : o.toString(); }
+    }
+
+    /**
+     * Reward type to send to FastAPI for a reached stage, or null when the stage carries no
+     * Thompson reward. With reward_levels configured, only L1/L2 reward (L1 = micro, L2 = secondary);
+     * without it, the legacy rule applies: the quality stage rewards with its CRM-mapped type.
+     */
+    static String rewardTypeFor(String stageKey, RewardLevels levels, boolean isQualityStage) {
+        if (stageKey == null) return null;
+        if (levels != null) {
+            if (stageKey.equalsIgnoreCase(levels.l1())) return "CTA_CLICK";
+            if (stageKey.equalsIgnoreCase(levels.l2())) return "FORM_SUBMIT";
+            return null;  // corrector and every other stage: no α/β increment
+        }
+        return isQualityStage ? rewardTypeForStage(stageKey) : null;
+    }
+
+    RewardLevels loadRewardLevels(UUID tenantId) {
+        try {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT settings->'reward_levels' AS rl FROM tenants WHERE id = ?", tenantId);
+            return rows.isEmpty() ? null : RewardLevels.parse(rows.get(0).get("rl"));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * First-party event (SLOT_SELECTED, FORM_SUBMIT, …) mapped to a funnel stage through
+     * funnel_stages.maps_to_event_type — the L1/L2 rewards of an investor funnel arrive this way,
+     * not from the CRM. Called by EventIngestionService.
+     */
+    public void onEventIngested(UUID tenantId, String sessionId, UUID variantId, String eventType) {
+        funnelService.stageForEventType(tenantId, eventType)
+                .ifPresent(stage -> onStageReached(tenantId, sessionId, variantId, stage));
+    }
+
+    /**
+     * Map a funnel stage to the Thompson reward type understood by FastAPI /decide/reward
+     * (thompson_service.REWARD_MAP). Quality stages are CRM-confirmed outcomes.
+     */
+    static String rewardTypeForStage(String stageKey) {
+        if (stageKey == null) return "CONVERSION";
+        String k = stageKey.toUpperCase();
+        if (k.endsWith("_HELD") || k.contains("MEETING") || k.contains("ATTENDED")) return "MEETING_ATTENDED";
+        if (k.contains("ANSWERED")) return "CALL_ANSWERED";
+        if (k.contains("FUNDS") || k.contains("PURCHASE") || k.contains("PAID") || k.contains("WON")) return "PURCHASE";
+        if (k.contains("FORM_SUBMIT")) return "FORM_SUBMIT";
+        return "CONVERSION";
+    }
 
     /**
      * Called when a funnel stage is reached for a session.
      * Writes reward_events. If quality stage, also writes quality_gate_log and
-     * calls FastAPI /thompson/reward (binary increment 1.0 — FastAPI sole writer).
+     * posts the reward to FastAPI /decide/reward (binary increment 1.0 — FastAPI sole writer).
+     * The decision_id is looked up in decision_log by (tenant, session, variant); the Redis
+     * decision key alone expires after 1 h while CRM rewards arrive days later (audit 2.1/2.2).
      */
-    public void onStageReached(UUID tenantId, UUID sessionId, UUID variantId, String stageKey) {
+    public void onStageReached(UUID tenantId, String sessionId, UUID variantId, String stageKey) {
         List<Boolean> qualityCheck = jdbc.queryForList("""
             SELECT is_quality_key FROM funnel_stages
             WHERE tenant_id = ? AND stage_key = ?
@@ -7443,15 +8402,31 @@ public class RewardService {
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT (session_id, variant_id, stage_key) DO NOTHING
                 """, tenantId, sessionId, variantId, stageKey);
+        }
 
+        RewardLevels levels = loadRewardLevels(tenantId);
+        String rewardType = rewardTypeFor(stageKey, levels, isQuality);
+        if (rewardType != null && variantId != null) {
             try {
-                Map<String, Object> req = Map.of(
-                    "tenant_id",  tenantId.toString(),
-                    "variant_id", variantId.toString(),
-                    "reward",     1.0,
-                    "event_type", "quality_gate_pass"
-                );
-                restTemplate.postForObject("http://ml-service:8001/thompson/reward", req, Map.class);
+                List<String> decisionIds = jdbc.queryForList("""
+                    SELECT id::text FROM decision_log
+                    WHERE tenant_id = ? AND session_id = ? AND chosen_variant_id = ?
+                    ORDER BY decided_at DESC LIMIT 1
+                    """, String.class, tenantId, sessionId, variantId);
+                if (decisionIds.isEmpty()) {
+                    log.info("No Thompson decision for session {} variant {} — reward not forwarded", sessionId, variantId);
+                } else {
+                    Map<String, Object> req = Map.of(
+                        "decision_id", decisionIds.get(0),
+                        "reward_type", rewardType,
+                        "tenant_configured", levels != null
+                    );
+                    HttpHeaders headers = new HttpHeaders();
+                    headers.setContentType(MediaType.APPLICATION_JSON);
+                    headers.set("X-Internal-API-Key", appProperties.getInternalApiKey());
+                    restTemplate.postForObject(appProperties.getMlServiceUrl() + "/decide/reward",
+                            new HttpEntity<>(req, headers), Map.class);
+                }
             } catch (Exception e) {
                 log.warn("Thompson reward notification failed for variant {}: {}", variantId, e.getMessage());
             }
@@ -7464,7 +8439,7 @@ public class RewardService {
         List<Map<String, Object>> stages = jdbc.queryForList("""
             SELECT
                 fs.stage_key,
-                fs.stage_label,
+                fs.label AS stage_label,
                 fs.ordinal,
                 fs.is_quality_key,
                 fs.reward_weight,
@@ -7479,7 +8454,7 @@ public class RewardService {
             LEFT JOIN capi_event_map cem
                 ON cem.tenant_id = fs.tenant_id AND cem.stage_key = fs.stage_key
             WHERE fs.tenant_id = ?
-            GROUP BY fs.stage_key, fs.stage_label, fs.ordinal,
+            GROUP BY fs.stage_key, fs.label, fs.ordinal,
                      fs.is_quality_key, fs.reward_weight, fs.micro_reward_weight,
                      cem.meta_event_name
             ORDER BY fs.ordinal
@@ -7544,7 +8519,6 @@ public class RewardService {
 
 
 ### Полный код
-
 ```java
 package com.marketingai.scheduler;
 
@@ -7578,12 +8552,12 @@ public class PosteriorRecalcScheduler {
                 SELECT DISTINCT v.id  AS variant_id,
                                 v.tenant_id,
                                 COUNT(e.id) AS new_conversions
-                FROM variants v
-                JOIN sessions s ON s.tenant_id = v.tenant_id
-                JOIN events   e ON e.session_id = s.id
+                FROM landing_variants v
+                JOIN sessions s ON s.tenant_id = v.tenant_id AND s.variant_id = v.id
+                JOIN events   e ON e.session_id = s.id AND e.tenant_id = s.tenant_id
                 WHERE v.status = 'ACTIVE'
-                  AND e.event_type = 'CONVERSION'
-                  AND e.created_at > NOW() - INTERVAL '15 minutes'
+                  AND e.event_type IN ('CONVERSION', 'FORM_SUBMIT')
+                  AND e.event_time > NOW() - INTERVAL '15 minutes'
                 GROUP BY v.id, v.tenant_id
                 LIMIT 200
                 """);
