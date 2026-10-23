@@ -52,7 +52,7 @@ class MetaTokenExchangeTest {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         AlertService alerts = mock(AlertService.class);
         TokenRotationScheduler s = new TokenRotationScheduler(jdbc, alerts, new AppProperties(),
-                new TokenVault(new EncryptionService(KEY)), mock(RestTemplate.class), mock(MetaApiAuditService.class));
+                new TokenVault(new EncryptionService(KEY, false)), mock(RestTemplate.class), mock(MetaApiAuditService.class));
         UUID t = UUID.randomUUID();
 
         s.markInvalid(t, "Acme", 60, "SEMI_AUTOPILOT");
@@ -68,7 +68,7 @@ class MetaTokenExchangeTest {
     void markInvalid_does_not_touch_autonomy_when_already_observer() {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         TokenRotationScheduler s = new TokenRotationScheduler(jdbc, mock(AlertService.class), new AppProperties(),
-                new TokenVault(new EncryptionService(KEY)), mock(RestTemplate.class), mock(MetaApiAuditService.class));
+                new TokenVault(new EncryptionService(KEY, false)), mock(RestTemplate.class), mock(MetaApiAuditService.class));
         s.markInvalid(UUID.randomUUID(), "Acme", 60, "OBSERVER");
         verify(jdbc, times(1)).update(anyString(), any(Object[].class));
     }
@@ -76,7 +76,7 @@ class MetaTokenExchangeTest {
     @Test
     void rotation_without_app_credentials_is_skipped() {
         TokenRotationScheduler s = new TokenRotationScheduler(mock(JdbcTemplate.class), mock(AlertService.class),
-                new AppProperties(), new TokenVault(new EncryptionService(KEY)), mock(RestTemplate.class),
+                new AppProperties(), new TokenVault(new EncryptionService(KEY, false)), mock(RestTemplate.class),
                 mock(MetaApiAuditService.class));
         assertThat(s.attemptTokenRotation(UUID.randomUUID(), "tok".getBytes())).isFalse();
     }
@@ -88,7 +88,7 @@ class MetaTokenExchangeTest {
         MetaApiAuditService audit = mock(MetaApiAuditService.class);
         AppProperties props = new AppProperties();
         props.getMeta().setAppId("app"); props.getMeta().setAppSecret("secret");
-        TokenVault vault = new TokenVault(new EncryptionService(KEY));
+        TokenVault vault = new TokenVault(new EncryptionService(KEY, false));
         when(rest.getForObject(anyString(), eq(Map.class))).thenReturn(Map.of("access_token", "EAABfresh"));
         TokenRotationScheduler s = new TokenRotationScheduler(jdbc, mock(AlertService.class), props, vault, rest, audit);
         UUID t = UUID.randomUUID();
@@ -109,7 +109,7 @@ class MetaTokenExchangeTest {
         MetaApiAuditService audit = mock(MetaApiAuditService.class);
         AppProperties props = new AppProperties();
         props.getMeta().setAppId("app"); props.getMeta().setAppSecret("secret");
-        TokenVault vault = new TokenVault(new EncryptionService(KEY));
+        TokenVault vault = new TokenVault(new EncryptionService(KEY, false));
         when(rest.getForObject(anyString(), eq(Map.class))).thenThrow(new RuntimeException("boom"));
         TokenRotationScheduler s = new TokenRotationScheduler(mock(JdbcTemplate.class), mock(AlertService.class), props, vault, rest, audit);
 
