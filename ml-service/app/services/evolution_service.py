@@ -92,16 +92,21 @@ def generate_candidates(
         return []
 
     parent_a = ranked[0]
-    parent_b = ranked[1] if len(ranked) > 1 else ranked[0]
+    single_parent = len(ranked) < 2
+    parent_b = ranked[1] if not single_parent else ranked[0]
 
     candidates = []
     for i in range(n_candidates):
-        child_atoms = crossover_atoms(parent_a, parent_b, rng_seed=i)
-        mutated     = mutate_atoms(child_atoms, atom_pool, mutation_rate, rng_seed=i + 1000)
+        if single_parent:
+            # Crossover between identical parents produces an exact copy — skip it, mutate only
+            child_atoms = list(parent_a.get("atoms", []))
+        else:
+            child_atoms = crossover_atoms(parent_a, parent_b, rng_seed=i)
+        mutated = mutate_atoms(child_atoms, atom_pool, mutation_rate, rng_seed=i + 1000)
         candidates.append({
             "candidate_index": i,
             "atoms":           mutated,
-            "parent_ids":      [parent_a.get("id"), parent_b.get("id")],
+            "parent_ids":      [parent_a.get("id"), parent_b.get("id") if not single_parent else None],
         })
     return candidates
 

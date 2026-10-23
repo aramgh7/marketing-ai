@@ -53,10 +53,7 @@ def test_run_all_checks_no_violations():
     assert set(result["checks"].keys()) == {"meta_policy", "claims", "trademark"}
 
 
-def test_run_all_checks_fail_overrides_warn():
-    # Force a FAIL by having a trademark + simulate structure returning FAIL
-    # We test the logic via check_trademarks integration
-    # Since no LLM, meta_policy returns WARN, claims returns PASS (no facts), trademark PASS
+def test_run_all_checks_fail_when_llm_unavailable():
+    # llm_client=None → check_meta_policy returns FAIL (audit: unavailable LLM must not silently pass)
     result = run_all_text_checks("Hello world", [], [], None)
-    # meta_policy no-llm returns WARN
-    assert result["result"] == "WARN"
+    assert result["result"] == "FAIL"

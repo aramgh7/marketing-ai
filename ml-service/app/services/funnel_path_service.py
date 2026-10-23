@@ -61,7 +61,10 @@ def check_path_b_engagement_gate(
     has_dataroom      = "DATAROOM_OPEN" in event_types
     has_video_75      = any(
         e.get("event_type") == "VIDEO_PROGRESS" and
-        int(e.get("payload", {}).get("progress_pct", 0)) >= gate["video_progress_threshold"]
+        int(e.get("payload", {}).get("progress_pct")
+            or e.get("payload", {}).get("progress")
+            or e.get("payload", {}).get("percent")
+            or 0) >= gate["video_progress_threshold"]
         for e in events
     )
 

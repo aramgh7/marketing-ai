@@ -66,6 +66,10 @@ def _prob_a_greater_b(rate_a: float, n_a: int, rate_b: float, n_b: int) -> float
     """P(rate_a > rate_b) using normal approximation of proportions."""
     if n_a < 5 or n_b < 5:
         return 0.5
+    # Normal approximation requires np≥5 and n(1-p)≥5; fall back for sparse rates (e.g. CVR≈1%)
+    if (rate_a * n_a < 5 or (1 - rate_a) * n_a < 5
+            or rate_b * n_b < 5 or (1 - rate_b) * n_b < 5):
+        return 0.5
     se = math.sqrt(
         rate_a * (1 - rate_a) / n_a + rate_b * (1 - rate_b) / n_b
     )

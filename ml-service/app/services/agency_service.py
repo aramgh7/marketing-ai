@@ -92,8 +92,8 @@ def compare_creative_sources(
             a, b = results[i], results[j]
             # Approximate P(A > B) as Φ((mean_A - mean_B) / sqrt(se_A^2 + se_B^2))
             diff = a["hold_rate"] - b["hold_rate"]
-            se_a = a["ci_80_upper"] - a["hold_rate"]  # approx se from CI
-            se_b = b["ci_80_upper"] - b["hold_rate"]
+            se_a = (a["ci_80_upper"] - a["hold_rate"]) / 1.282  # recover se: CI_upper = mean + 1.282·se
+            se_b = (b["ci_80_upper"] - b["hold_rate"]) / 1.282
             pooled_se = math.sqrt(max(se_a**2 + se_b**2, 1e-9))
             z = diff / pooled_se
             # Φ(z) approximation

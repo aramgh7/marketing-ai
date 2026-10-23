@@ -42,7 +42,7 @@ def compute_cpa_exceedance_probability(
 
     try:
         import random
-        rng = random.Random(42)
+        rng = random.Random()  # unseeded: deterministic seed hid MC variance
         spend_per_click = total_spend / clicks
         exceed_count = 0
         for _ in range(n_samples):

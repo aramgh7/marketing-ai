@@ -5,7 +5,8 @@ Pure logic, zero FastAPI/Pydantic imports.
 from __future__ import annotations
 import math
 
-TAU_SQUARED = 4.0   # prior variance for segment effects (controls shrinkage strength)
+TAU_SQUARED = 0.25  # prior variance; precision=4 → 50% shrinkage at n≈4, meaningful pull below n≈20
+# Previous value (4.0) gave w≈0.976 at n=10 — effectively disabled partial pooling
 MIN_N = 30
 
 

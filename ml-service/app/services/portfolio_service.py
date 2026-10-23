@@ -43,10 +43,9 @@ def check_sufficient_history(
     }
 
 
-def _sharpe_weight(returns: list[float], risk_free: float = _RISK_FREE_RATE) -> float:
-    """
-    Annualised Sharpe ratio for a single asset.
-    """
+def _sharpe_weight(returns: list[float], risk_free: float = _RISK_FREE_RATE,
+                   periods_per_year: float = _ANNUALISE) -> float:
+    """Annualised Sharpe ratio. periods_per_year: 365 daily, 52 weekly, 12 monthly."""
     if len(returns) < 2:
         return 0.0
     import math as _math
@@ -54,8 +53,7 @@ def _sharpe_weight(returns: list[float], risk_free: float = _RISK_FREE_RATE) -> 
     mean_r = sum(returns) / n
     variance = sum((r - mean_r) ** 2 for r in returns) / (n - 1)
     std_r = _math.sqrt(variance) if variance > 0 else 1e-9
-    # Annualise: daily mean * 365 / (daily std * sqrt(365))
-    sharpe = (mean_r - risk_free) * _ANNUALISE / (std_r * math.sqrt(_ANNUALISE))
+    sharpe = (mean_r - risk_free) * periods_per_year / (std_r * _math.sqrt(periods_per_year))
     return max(sharpe, 0.0)  # floor at 0 — negative Sharpe gets zero allocation
 
 

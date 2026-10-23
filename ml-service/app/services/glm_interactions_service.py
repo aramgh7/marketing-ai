@@ -38,7 +38,7 @@ def compute_bayes_factor_approx(
     bic_restricted = n * math.log(rss_restricted / n) + k_restricted * math.log(n)
 
     delta_bic = bic_restricted - bic_full
-    bf = math.exp(0.5 * delta_bic)
+    bf = math.exp(min(0.5 * delta_bic, 700.0))  # clamp: math.exp(>710) raises OverflowError
 
     if bf > 3.0:
         decision = "INCLUDE"

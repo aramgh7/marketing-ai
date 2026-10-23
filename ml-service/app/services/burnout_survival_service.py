@@ -9,13 +9,14 @@ from typing import Optional
 
 N_MIN_FOR_SURVIVAL = 30
 
-DEFAULT_BETAS = {
-    "log_frequency":     0.8,
-    "log_initial_roas": -0.5,
+EXPERT_PRIOR_BETAS = {  # expert priors, NOT fitted coefficients — no training loop in this service
+    "log_frequency":     0.8,   # higher frequency → faster burnout
+    "log_initial_roas": -0.5,   # stronger ROAS start → longer survival
     "audience_broad":   -0.2,
     "audience_retarget": 0.4,
     "season_peak":       0.3,
 }
+DEFAULT_BETAS = EXPERT_PRIOR_BETAS  # backward-compat alias
 
 AUDIENCE_TYPE_ENCODING = {
     "BROAD":       "audience_broad",
@@ -42,23 +43,26 @@ def encode_covariates(
         "log_initial_roas": math.log(max(initial_roas, 0.01)),
     }
     aud_key = AUDIENCE_TYPE_ENCODING.get(audience_type.upper(), 0.0)
-    cov["audience_effect"] = DEFAULT_BETAS.get(aud_key, 0.0) if isinstance(aud_key, str) else float(aud_key)
+    cov["audience_effect"] = EXPERT_PRIOR_BETAS.get(aud_key, 0.0) if isinstance(aud_key, str) else float(aud_key)
     sea_key = SEASON_ENCODING.get(season.upper(), 0.0)
-    cov["season_effect"] = DEFAULT_BETAS.get(sea_key, 0.0) if isinstance(sea_key, str) else float(sea_key)
+    cov["season_effect"] = EXPERT_PRIOR_BETAS.get(sea_key, 0.0) if isinstance(sea_key, str) else float(sea_key)
     return cov
+
+
+_WEIBULL_SCALE_DAYS = 21.0  # baseline creative half-life; 14d for DTC, 21d+ for B2B/investment funnels
 
 
 def cox_hazard_ratio(covariates: dict) -> float:
     linear = (
-        DEFAULT_BETAS["log_frequency"]    * covariates["log_frequency"]
-      + DEFAULT_BETAS["log_initial_roas"] * covariates["log_initial_roas"]
+        EXPERT_PRIOR_BETAS["log_frequency"]    * covariates["log_frequency"]
+      + EXPERT_PRIOR_BETAS["log_initial_roas"] * covariates["log_initial_roas"]
       + covariates.get("audience_effect", 0.0)
       + covariates.get("season_effect", 0.0)
     )
     return math.exp(linear)
 
 
-def weibull_survival(t: float, scale: float = 14.0, shape: float = 1.5, hazard_ratio: float = 1.0) -> float:
+def weibull_survival(t: float, scale: float = _WEIBULL_SCALE_DAYS, shape: float = 1.5, hazard_ratio: float = 1.0) -> float:
     """S(t) = exp(-(t/λ_eff)^k), λ_eff = scale / HR^(1/k)."""
     if t <= 0:
         return 1.0

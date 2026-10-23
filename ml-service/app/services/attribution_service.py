@@ -275,7 +275,9 @@ def linear_attribution(touchpoints: list[dict]) -> list[dict]:
     return [{"touchpoint_id": t["id"], "credit": round(credit, 6), "model": "linear"} for t in touchpoints]
 
 
-def time_decay_attribution(touchpoints: list[dict], half_life_days: float = 7.0) -> list[dict]:
+_TIME_DECAY_HALF_LIFE_DAYS = 21.0  # 7d too aggressive for B2B/investment funnels where 30d-old touches matter
+
+def time_decay_attribution(touchpoints: list[dict], half_life_days: float = _TIME_DECAY_HALF_LIFE_DAYS) -> list[dict]:
     """Exponential time decay: closer to conversion gets more credit."""
     if not touchpoints:
         return []

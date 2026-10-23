@@ -17,9 +17,9 @@ def check_meta_policy(text: str, llm_client: Any, model: str = "claude-haiku-5-5
     """
     if llm_client is None:
         return {
-            "result": "WARN",
-            "findings": [{"rule": "ML_UNAVAILABLE", "excerpt": "", "severity": "WARN",
-                          "suggestion": "Manual policy review required (ml-service unavailable)"}],
+            "result": "FAIL",
+            "findings": [{"rule": "ML_UNAVAILABLE", "excerpt": "", "severity": "FAIL",
+                          "suggestion": "Manual policy review required — LLM unavailable, cannot confirm compliance"}],
         }
 
     prompt = (
@@ -64,9 +64,9 @@ def check_claims_vs_facts(text: str, product_facts: list[str], llm_client: Any, 
 
     if llm_client is None:
         return {
-            "result": "WARN",
-            "findings": [{"rule": "ML_UNAVAILABLE", "excerpt": "", "severity": "WARN",
-                          "suggestion": "Manual claims verification required"}],
+            "result": "FAIL",
+            "findings": [{"rule": "ML_UNAVAILABLE", "excerpt": "", "severity": "FAIL",
+                          "suggestion": "Manual claims verification required — LLM unavailable, cannot confirm compliance"}],
         }
 
     facts_str = "\n".join(f"- {f}" for f in product_facts)

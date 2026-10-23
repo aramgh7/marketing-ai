@@ -26,7 +26,7 @@ def compute_beta_exceedance(
 
     try:
         import random
-        rng = random.Random(0)
+        rng = random.Random()  # unseeded: deterministic seed hid MC variance across calls
 
         def beta_sample(a: float, b: float) -> float:
             # Gamma-based Beta sampler: O(1) per sample regardless of parameters
