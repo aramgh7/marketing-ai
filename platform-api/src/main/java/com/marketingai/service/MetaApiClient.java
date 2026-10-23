@@ -16,7 +16,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * Priority-queue wrapper for Meta Graph API calls (3-15).
  * Three lanes: P0 (emergency/pause), P1 (learning-phase), P2 (bid/budget).
  * Token bucket: 100 calls/hour — refilled each hour.
- * All calls are logged to learning_phase_log.
+ * All calls are logged to meta_api_audit (D-11).
  */
 @Slf4j
 @Service
@@ -28,6 +28,7 @@ public class MetaApiClient {
     private final JdbcTemplate jdbc;
 
     private final MetaWriteGate metaWriteGate;   // roadmap 9-19: single choke point for Meta writes
+    private final MetaApiAuditService auditService;  // D-11: all calls logged to meta_api_audit
     private final AppProperties appProperties;
 
     private final AtomicInteger tokenBucket = new AtomicInteger(TOKEN_BUCKET_CAPACITY);
@@ -116,14 +117,10 @@ public class MetaApiClient {
     }
 
     private void logCall(UUID tenantId, String adSetId, String action, String lane, String status) {
-        try {
-            jdbc.update("""
-                    INSERT INTO learning_phase_log
-                    (ad_set_id, tenant_id, phase_before, phase_after, action, created_at)
-                    VALUES (?, ?, ?, ?, ?, now())
-                    """, adSetId, tenantId, lane, status, action);
-        } catch (Exception e) {
-            log.trace("learning_phase_log insert skipped (non-adset call): {}", e.getMessage());
-        }
+        // D-11: all queued Meta API calls are logged to meta_api_audit (not learning_phase_log)
+        int code = status != null && status.startsWith("FAILED") ? 500
+                 : status != null && status.startsWith("POLICY") ? 403
+                 : 200;
+        auditService.log(tenantId, "JOB", null, action, "adset", adSetId, null, code, lane, 0);
     }
 }

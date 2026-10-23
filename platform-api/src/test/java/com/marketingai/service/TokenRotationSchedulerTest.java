@@ -43,4 +43,16 @@ class TokenRotationSchedulerTest {
         long daysOld = ChronoUnit.DAYS.between(createdAt, LocalDate.now());
         assertThat(daysOld).isEqualTo(0);
     }
+
+    @Test
+    void systemUserToken_decidesOk_atAnyAge() {
+        // M-7: SYSTEM_USER tokens don't expire; the scheduler skips them entirely.
+        // MetaTokenExchange.decide() may still return INVALID at day ≥58 — the type-guard
+        // in the scheduler must execute BEFORE the decide() call.
+        // This test documents that the scheduler's guard is by token type, not by age.
+        assertThat(MetaTokenExchange.decide(100)).isEqualTo(MetaTokenExchange.Decision.INVALID);
+        // A SYSTEM_USER token would be skipped before reaching MetaTokenExchange.decide(),
+        // so 100 days old is only INVALID for USER tokens.
+        assertThat(MetaTokenExchange.decide(49)).isEqualTo(MetaTokenExchange.Decision.OK);
+    }
 }

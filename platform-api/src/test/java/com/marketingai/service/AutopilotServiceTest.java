@@ -20,6 +20,15 @@ class AutopilotServiceTest {
     @Mock
     JdbcTemplate jdbc;
 
+    @Mock
+    MetaApiService metaApiService;  // M-9: required for real Meta calls
+
+    @Mock
+    TokenVault vault;               // M-9: required to decrypt tenant token
+
+    @Mock
+    MetaWriteGate metaWriteGate;    // M-9: all Meta writes must pass the gate
+
     @InjectMocks
     AutopilotService service;
 

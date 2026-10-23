@@ -44,6 +44,14 @@ public class BudgetGuard {
     /** First day of billing period (MONTHLY_CEILING only) */
     private LocalDate periodStart;
 
+    /**
+     * M-10/D-3: Meta ad set ID used for real-time spend polling via /insights.
+     * When set, {@link com.marketingai.service.BudgetGuardService#checkAllGuards()} fetches the
+     * actual spend from Meta API instead of relying on manual updates.
+     */
+    @Column(length = 100)
+    private String metaAdsetId;
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
 
