@@ -20,7 +20,7 @@ public class VideoLifecycleScheduler {
 
     private final JdbcTemplate jdbc;
 
-    @Scheduled(cron = "0 0 2 * * *")
+    @Scheduled(cron = "0 0 2 * * *", zone = "UTC")
     public void runLifecycleScan() {
         archiveOldFootage();
         killOrphanedRenders();

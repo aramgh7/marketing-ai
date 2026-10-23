@@ -38,7 +38,7 @@ public class TokenRotationScheduler {
     private final RestTemplate restTemplate;
     private final MetaApiAuditService auditService;
 
-    @Scheduled(cron = "0 0 4 * * *")
+    @Scheduled(cron = "0 0 4 * * *", zone = "UTC")
     public void rotateTokens() {
         log.info("TokenRotationScheduler: checking Meta token ages");
 

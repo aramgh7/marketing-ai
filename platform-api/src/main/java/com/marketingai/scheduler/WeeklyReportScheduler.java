@@ -52,17 +52,18 @@ public class WeeklyReportScheduler {
             return;
         }
 
-        List<Tenant> tenants = tenantRepository.findAll();
+        // D-7: findAll must run in system scope; per-tenant processing uses runAs() which
+        // switches to tenant-scoped RLS (removes bypass) so analytics queries are properly
+        // filtered and don't inadvertently read cross-tenant data.
+        List<Tenant> tenants = TenantContext.callAsSystem(tenantRepository::findAll);
         log.info("Weekly report run: {} tenants", tenants.size());
 
         for (Tenant tenant : tenants) {
             try {
-                TenantContext.set(tenant.getId().toString());
-                sendReportForTenant(tenant);
+                // runAs() sets current_tenant AND removes rls_bypass so RLS is enforced for this tenant
+                TenantContext.runAs(tenant.getId().toString(), () -> sendReportForTenant(tenant));
             } catch (Exception e) {
                 log.error("Weekly report failed for tenant {}: {}", tenant.getId(), e.getMessage());
-            } finally {
-                TenantContext.clear();
             }
         }
     }

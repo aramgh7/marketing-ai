@@ -29,7 +29,7 @@ public class BurnoutScanScheduler {
     private final AppProperties appProperties;
     private final AlertService alertService;
 
-    @Scheduled(cron = "0 0 6 * * *")
+    @Scheduled(cron = "0 0 6 * * *", zone = "UTC")
     public void runDailyScan() {
         List<UUID> tenantIds = jdbc.queryForList("""
                 SELECT DISTINCT tenant_id

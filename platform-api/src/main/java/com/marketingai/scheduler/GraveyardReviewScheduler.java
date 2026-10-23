@@ -26,7 +26,7 @@ public class GraveyardReviewScheduler {
     private final AppProperties appProperties;
     private final AlertService alertService;
 
-    @Scheduled(cron = "0 0 8 * * MON")
+    @Scheduled(cron = "0 0 8 * * MON", zone = "UTC")
     public void runWeeklyReview() {
         List<UUID> tenantIds = jdbc.queryForList("""
                 SELECT DISTINCT tenant_id FROM creative_postmortems

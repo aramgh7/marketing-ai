@@ -100,4 +100,18 @@ public class AppProperties {
                     && chatId != null && !chatId.isBlank();
         }
     }
+
+    /** D-21: external-signals configuration. */
+    private final Signals signals = new Signals();
+
+    @Getter
+    @Setter
+    public static class Signals {
+        /**
+         * Semicolon-separated "lat,lon" pairs for the weather fetch (Open-Meteo).
+         * Example: "51.5,-0.1;40.7,-74.0" for London + New York.
+         * Defaults to "51.5,-0.1" (London) when blank.
+         */
+        private String weatherGeos = "";
+    }
 }

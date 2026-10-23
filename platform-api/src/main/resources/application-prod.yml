@@ -16,7 +16,9 @@ spring:
       max-lifetime: 1800000
   jpa:
     hibernate:
-      ddl-auto: none   # Flyway owns the schema
+      # D-16: validate — Hibernate checks entity ↔ schema alignment on startup without modifying DDL.
+      # Flyway owns all DDL; a mismatch here surfaces immediately rather than at first query.
+      ddl-auto: validate
     open-in-view: false
   data:
     redis:

@@ -27,7 +27,7 @@ public class ShowRateCorrectorScheduler {
     private final RestTemplate  restTemplate;
     private final AppProperties appProperties;
 
-    @Scheduled(cron = "0 0 6 * * MON")
+    @Scheduled(cron = "0 0 6 * * MON", zone = "UTC")
     public void weeklyCorrection() {
         List<Map<String, Object>> tenants = jdbc.queryForList(
                 "SELECT id FROM tenants");

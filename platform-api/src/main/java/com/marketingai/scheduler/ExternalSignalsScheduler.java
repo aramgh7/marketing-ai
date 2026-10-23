@@ -58,10 +58,21 @@ public class ExternalSignalsScheduler {
         }
     }
 
-    @Scheduled(cron = "0 0 6 * * *")
+    /**
+     * D-12: HTTP fetch is outside any @Transactional scope — collected here, persisted in a
+     * separate helper so the DB write does not participate in the same transaction as the HTTP call.
+     * D-21: geo coordinates are read from {@code app.signals.weather-geos} (default "51.5,-0.1")
+     *        so the London hardcode can be overridden without a redeploy.
+     * D-26: zone = "UTC" added.
+     */
+    @Scheduled(cron = "0 0 6 * * *", zone = "UTC")
     public void fetchWeatherSignals() {
-        // Default geo: lat,lon pairs from app config (agricultural hydrogel client)
-        String geosConfig = "51.5,-0.1";  // default London; override via AppProperties if needed
+        // D-21: configurable; app.signals.weather-geos semi-colon-separated lat,lon pairs
+        String geosConfig = appProperties.getSignals() != null
+                && appProperties.getSignals().getWeatherGeos() != null
+                && !appProperties.getSignals().getWeatherGeos().isBlank()
+                ? appProperties.getSignals().getWeatherGeos()
+                : "51.5,-0.1"; // default London
         String[] geos = geosConfig.split(";");
 
         for (String geo : geos) {
@@ -71,6 +82,7 @@ public class ExternalSignalsScheduler {
                 String lat = parts[0].trim();
                 String lon = parts[1].trim();
 
+                // D-12: fetch OUTSIDE any transaction — only the save step is transactional
                 String url = "https://api.open-meteo.com/v1/forecast"
                         + "?latitude=" + lat
                         + "&longitude=" + lon
@@ -97,16 +109,8 @@ public class ExternalSignalsScheduler {
                 double temp = tempMax != null && !tempMax.isEmpty() ? tempMax.get(0) : 0.0;
                 double gdd = et0 != null && !et0.isEmpty() ? et0.get(0) : 0.0;
 
-                List<String> tags = buildWeatherTags(precip, temp, gdd);
-                String tagsArray = "{" + String.join(",", tags) + "}";
-
-                // Platform-wide signal (tenant_id = null)
-                jdbc.update("""
-                        INSERT INTO external_signals
-                        (signal_type, geo, observed_at, value_num, value_tags, source, created_at)
-                        VALUES ('WEATHER', ?, now(), ?, ?, 'open-meteo', now())
-                        """, lat + "," + lon, (float) precip, tagsArray);
-
+                // Persist in a separate non-HTTP method so no HTTP call lives in a @Transactional scope
+                saveWeatherSignal(lat, lon, precip, temp, gdd);
                 log.debug("ExternalSignals: weather signal saved for geo={}", geo);
             } catch (Exception e) {
                 log.warn("ExternalSignals: failed to fetch weather for geo={}: {}", geo, e.getMessage());
@@ -114,12 +118,24 @@ public class ExternalSignalsScheduler {
         }
     }
 
+    /** D-12: DB write separated from HTTP fetch — called only after the HTTP response is parsed. */
+    private void saveWeatherSignal(String lat, String lon, double precip, double temp, double gdd) {
+        List<String> tags = buildWeatherTags(precip, temp, gdd);
+        String tagsArray = "{" + String.join(",", tags) + "}";
+        // Platform-wide signal (tenant_id = null)
+        jdbc.update("""
+                INSERT INTO external_signals
+                (signal_type, geo, observed_at, value_num, value_tags, source, created_at)
+                VALUES ('WEATHER', ?, now(), ?, ?, 'open-meteo', now())
+                """, lat + "," + lon, (float) precip, tagsArray);
+    }
+
     /**
      * Roadmap 3-12: news headline sentiment per tenant (tenants.settings.news_feeds / news_keywords).
      * One external_signals row per run: signal_type NEWS_SENTIMENT, value_num = mean sentiment,
      * value_tags = themes (regulation, rates, market_drop, …), raw = top headlines + label.
      */
-    @Scheduled(cron = "0 30 6 * * *")
+    @Scheduled(cron = "0 30 6 * * *", zone = "UTC")
     public void fetchNewsSignals() {
         List<Map<String, Object>> tenants = jdbc.queryForList("SELECT id, settings FROM tenants");
         for (Map<String, Object> t : tenants) {

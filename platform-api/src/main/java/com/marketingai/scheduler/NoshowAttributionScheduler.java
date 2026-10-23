@@ -33,7 +33,7 @@ public class NoshowAttributionScheduler {
     private final MlServiceClient mlClient;
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    @Scheduled(cron = "0 30 5 * * MON")
+    @Scheduled(cron = "0 30 5 * * MON", zone = "UTC")
     public void weeklyFit() {
         List<UUID> tenants = jdbc.queryForList("SELECT id FROM tenants", UUID.class);
         for (UUID tenantId : tenants) {

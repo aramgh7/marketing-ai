@@ -53,6 +53,7 @@ public class FormHealthScheduler {
                 JOIN tenants t ON t.id = lv.tenant_id
                 WHERE lv.status = 'ACTIVE'
                   AND (lv.form_endpoint_url IS NOT NULL OR t.settings->>'form_check_mode' = 'browser')
+                ORDER BY lv.last_checked_at NULLS FIRST, lv.id
                 LIMIT 50
                 """);
         } catch (Exception e) {
@@ -75,9 +76,10 @@ public class FormHealthScheduler {
 
                 int currentPasses = landing.get("consecutive_form_passes") instanceof Number n ? n.intValue() : 0;
                 if (ok) {
-                    jdbc.update("UPDATE landing_variants SET consecutive_form_passes = ? WHERE id = ?", currentPasses + 1, variantId);
+                    // D-22: update last_checked_at so ORDER BY works for next run
+                    jdbc.update("UPDATE landing_variants SET consecutive_form_passes = ?, last_checked_at = now() WHERE id = ?", currentPasses + 1, variantId);
                 } else {
-                    jdbc.update("UPDATE landing_variants SET consecutive_form_passes = 0 WHERE id = ?", variantId);
+                    jdbc.update("UPDATE landing_variants SET consecutive_form_passes = 0, last_checked_at = now() WHERE id = ?", variantId);
                     log.warn("FormHealthScheduler: form check FAILED for landing {} [{}]: {}", variantId, method, result.get("error"));
                     openIncidentIfRepeated(tenantId, variantId, landing);
                 }

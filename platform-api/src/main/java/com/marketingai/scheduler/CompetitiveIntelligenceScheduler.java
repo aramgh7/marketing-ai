@@ -15,7 +15,7 @@ public class CompetitiveIntelligenceScheduler {
     private final CompetitiveIntelligenceService ciService;
 
     /** Every Monday at 05:00 UTC — after nightly scans complete. */
-    @Scheduled(cron = "0 0 5 * * MON")
+    @Scheduled(cron = "0 0 5 * * MON", zone = "UTC")
     public void runWeeklyScan() {
         log.info("Competitive intelligence scan started");
         try {
