@@ -106,7 +106,34 @@ def optimize_budget_allocation(
                 best_alloc = {k: round(v, 2) for k, v in alloc.items()}
         return {"allocation": best_alloc, "expected_roi": round(best_roi, 4), "curve": curve}
 
-    # N channels: greedy marginal increment (each step allocates total_budget/n_steps)
+    # N channels: try SLSQP (global optimum under Hill saturation); fall back to greedy
+    try:
+        from scipy.optimize import minimize  # type: ignore[import]
+
+        def _neg_roi(x: list) -> float:
+            return -_expected_roi(saturation_params, {ch: max(0.0, float(b)) for ch, b in zip(channels, x)})
+
+        x0 = [total_budget / len(channels)] * len(channels)
+        result = minimize(
+            _neg_roi,
+            x0,
+            method="SLSQP",
+            bounds=[(0.0, total_budget)] * len(channels),
+            constraints=[{"type": "eq", "fun": lambda x: float(sum(x)) - total_budget}],
+            options={"ftol": 1e-9, "maxiter": 1000},
+        )
+        if result.success:
+            best_alloc = {ch: round(max(0.0, float(b)), 2) for ch, b in zip(channels, result.x)}
+            # re-normalise to exact total_budget
+            alloc_sum = sum(best_alloc.values())
+            if alloc_sum > 0:
+                best_alloc = {k: round(v / alloc_sum * total_budget, 2) for k, v in best_alloc.items()}
+            roi = _expected_roi(saturation_params, best_alloc)
+            return {"allocation": best_alloc, "expected_roi": round(roi, 4), "curve": [], "method": "slsqp"}
+    except Exception:
+        pass  # scipy unavailable or failed → greedy fallback below
+
+    # Greedy marginal increment fallback (may find local optima on non-convex Hill curves)
     step_size = total_budget / n_steps
     allocation = {ch: 0.0 for ch in channels}
     for _ in range(n_steps):
@@ -127,6 +154,7 @@ def optimize_budget_allocation(
         "allocation": {k: round(v, 2) for k, v in allocation.items()},
         "expected_roi": round(roi, 4),
         "curve": [],
+        "method": "greedy",
     }
 
 
