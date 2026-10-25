@@ -1,3 +1,80 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ─── Phase 14: block-wrapper layout variants ─────────────────────────────── */
+.block-wrapper {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+}
+
+/* centered — single column, content centred horizontally */
+.layout-centered {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 3rem 1.5rem;
+}
+
+/* left-text-right-image — two columns; stacks on mobile */
+.layout-left-text-right-image {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2rem;
+  align-items: center;
+  padding: 3rem 1.5rem;
+}
+@media (max-width: 768px) {
+  .layout-left-text-right-image {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* full-bleed-video — content centred over a video/image fill */
+.layout-full-bleed-video {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  min-height: 480px;
+  padding: 4rem 1.5rem;
+}
+.layout-full-bleed-video > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* split-screen — equal-height halves */
+.layout-split-screen {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-height: 400px;
+}
+@media (max-width: 768px) {
+  .layout-split-screen {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* media helpers */
+.block-media-image {
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  object-fit: cover;
+}
+.block-media-video {
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+/* ─── Phase 14: background variants ──────────────────────────────────────── */
+/* gradient presets — applied via inline style; these are helpers for tests  */
+.bg-gradient-dark  { background: linear-gradient(135deg, #0f0c29, #302b63, #24243e); }
+.bg-gradient-warm  { background: linear-gradient(135deg, #f5f7fa, #c3cfe2); }
+.bg-gradient-fresh { background: linear-gradient(135deg, #e0f7fa, #b2ebf2); }

@@ -352,6 +352,68 @@ CREATE TABLE runner_keys (               -- credential of a client-hosted runner
 -- both: RLS tenant_isolation (as every tenant table), mai_app read/write, mai_ml read
 ```
 
+**[v1.8 — added] Phase 14 tables.**
+
+```sql
+-- Template library — visual shell (block order + layout variants + slot config); no text/media content
+CREATE TABLE templates (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id        UUID REFERENCES tenants(id),          -- NULL = platform default (available to all)
+    name             VARCHAR(255) NOT NULL,
+    description      TEXT,
+    version          INT NOT NULL DEFAULT 1,
+    blocks           JSONB NOT NULL,                        -- [{block_type, position, layout_variant, slot_overrides}]
+    default_bg_type  VARCHAR(20) DEFAULT 'color',           -- color | gradient | image | video
+    background_config JSONB,                                -- gradient stops, asset_id, css, etc.
+    tags             TEXT[],                                -- niche, tone, use_case
+    forked_from      UUID REFERENCES templates(id),         -- lineage when cloned from platform default
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Asset library — uploaded images and videos, 3-level tagged
+CREATE TABLE assets (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id        UUID NOT NULL REFERENCES tenants(id),
+    s3_key           VARCHAR(1024) NOT NULL,
+    mime_type        VARCHAR(100) NOT NULL,
+    width            INT,
+    height           INT,
+    duration_s       REAL,                                  -- NULL for images
+    tags_l1          TEXT[],                                -- Object type: founder_portrait, property_aerial, …
+    tags_l2          TEXT[],                                -- Role/slot: hero_background, proof_visual, …
+    tags_l3          TEXT[],                                -- Mood/tone: professional, warm_approachable, …
+    auto_tag_suggested JSONB,                               -- Claude Vision raw suggestions + confidence
+    tag_confirmed_at TIMESTAMPTZ,
+    uploaded_by      UUID REFERENCES users(id),
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Multi-context placement tracking — one asset may appear in landing slots, ad creatives, materials
+CREATE TABLE asset_placements (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    asset_id         UUID NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    context_type     VARCHAR(30) NOT NULL,                  -- LANDING_SLOT | AD_CREATIVE | MATERIALS_BLOCK
+    context_id       UUID NOT NULL,
+    slot_name        VARCHAR(100),
+    placed_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Hybrid auto-tagging RLHA — tracks human corrections to Claude's tag suggestions
+CREATE TABLE tag_rlha_log (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    asset_id         UUID NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    tag_level        VARCHAR(5) NOT NULL,                   -- L1 | L2 | L3
+    suggested_tags   TEXT[],
+    confirmed_tags   TEXT[],
+    was_corrected    BOOLEAN NOT NULL,
+    corrected_by     UUID REFERENCES users(id),
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+`landing_variants` gains `template_id UUID REFERENCES templates(id)` and `template_version INT` — recorded at generation time (immutable snapshot reference).
+
 ### 4.4 Thompson Sampling Arms
 
 ```sql
@@ -1085,6 +1147,8 @@ MVP Thompson Sampling uses **simple Beta(α,β)** for conversion rate, not the f
 
 **[v1.1 — added]** Also not in MVP: sGTM (§12 #14), Google Calendar integration (§2), Cloudflare Bot Management Enterprise (§2 — Super Bot Fight Mode instead).
 
+**[v1.8 — added]** Visual template system (template library, asset library, auto-fill pipeline, visual atoms in GLM) → Phase 14. In pre-Phase-14 landings: text-only slots, no template ID, single unstyled layout per block type.
+
 **[v1.3 — added]** §16 (client #1 adaptation) is a pre-onboarding track: §16.1–16.3 (funnel config + CAPI v2), §16.5 (follow-up module) and §16.7 (securities compliance) must exist before the first campaign under our control; the rest follows the existing phase order.
 
 **[v1.2 — added]** Of the §15 modules, three belong in MVP despite the list above, because the vision places them in Phase 0 or they protect Phase 0 data: event schema registry + retention/erasure (§15.12), token rotation + audit log (§15.15), and fraud L2 additions (§15.18). The site-health HTTP check (§15.3) can also ship in Phase 0 as alert-only (autopause needs the Marketing API write that is in MVP anyway for budget guards). Everything else in §15 is Phase 2–6 and is phased in roadmap.md.
@@ -1732,3 +1796,103 @@ moderation_results PENDING → ModerationProbeScheduler → APPROVED (activate f
 ```
 
 Rules enforced in code: one publishing road (download is allowed but marks the creative NOT_IN_META; tenants may set `creative_download_mode = PREVIEW_ONLY` to refuse final downloads); `CREATE_AD_PAUSED` from GUARDED_WRITES; Advantage+ creative enhancements off for test ads; identity = our creative (one creative in several ads/placements is one arm, placement is context); linkage health gates `LAUNCH` writes and is an onboarding checklist item; organic visits learn the landing only.
+
+---
+
+## 19. Visual Template System & Media Library (roadmap Phase 14) **[v1.8 — added]**
+
+> The platform generates text content today. Phase 14 adds the visual layer: a template library that defines block order and layout variants, an asset library with 3-level tagging, a hybrid auto-tagging pipeline, an auto-fill pipeline that assembles templates + product facts + assets into fully composed landing variants, and visual atoms in the GLM.
+
+### 19.1 Template as visual shell
+
+A **template** owns block order, per-block `layout_variant` (controls internal CSS arrangement — `centered`, `left-text-right-image`, `full-bleed-video`, `split-screen`), slot visibility flags, and background config. It holds no text or media — those are filled at generation time. Stored in `templates` (§4.3 Phase 14 tables). Templates are immutable after creation; editing creates a new version. `landing_variants.template_id` + `template_version` record the snapshot used.
+
+Five platform defaults ship with `tenant_id = NULL` (available to all clients):
+
+| ID | Name | Block order | Primary use |
+|----|------|-------------|-------------|
+| T1 | Authority | HERO → PROOF → PRICING → CTA → disclaimer_506c | Cold traffic, high-ticket, dark premium |
+| T2 | Transparency | HERO → data_room → PROBLEM → social_proof_investors → CTA → accreditation_checkbox | Warm leads, data-heavy |
+| T3 | Story | HERO → PROBLEM → PROOF → materials → CTA → FAQ | Mid-funnel, founder-forward |
+| T4 | Fast Track | HERO → CTA → accreditation_checkbox | Retargeting, bottom-of-funnel |
+| T5 | Education First | HERO → materials → webinar_reg → PROBLEM → PROOF → CTA → disclaimer_506c | Cold traffic, education-led |
+
+Clients fork any default to create an editable copy (`forked_from` FK).
+
+### 19.2 Media slot types
+
+Block slot schema gains three families alongside text:
+
+| Slot family | Attributes | Notes |
+|-------------|-----------|-------|
+| `image` | `aspect_ratio`, `required`, `accepts_tags` (L2 filter) | Static photo/graphic |
+| `video` | `autoplay`, `muted`, `loop`, `max_duration_s` | Background loop or inline player |
+| `background` | `type ∈ {color,gradient,image,video}` | Full-bleed behind a block |
+
+`accepts_tags` is a JSON filter against asset `tags_l2`: the auto-fill pipeline uses it to constrain asset selection per slot. Existing blocks remain text-only; new blocks (e.g. `HERO_VISUAL`, `PROOF_GALLERY`) declare media slots.
+
+### 19.3 Asset library and 3-level tagging
+
+All tenant assets stored in `assets` (§4.3). Tags are three levels:
+
+- **L1 — Object type** (what is depicted): `founder_portrait`, `team_photo`, `property_aerial`, `property_interior`, `chart_graph`, `document`, `abstract_visual`, `product_shot`
+- **L2 — Role / slot** (intended placement): `hero_background`, `hero_face`, `proof_visual`, `social_proof_avatar`, `materials_thumbnail`, `ad_creative_primary`, `ad_creative_secondary`
+- **L3 — Mood / tone**: `professional`, `warm_approachable`, `aspirational`, `technical_data_driven`, `urgent`, `calm_trustworthy`
+
+One asset may carry multiple L2 tags (multi-context use).
+
+### 19.4 Hybrid auto-tagging pipeline
+
+On upload: `POST /assets/{id}/auto-tag` calls Claude Vision → returns `suggested_tags` per level + confidence score per tag. UI pre-fills the tag pickers; marketer confirms or adjusts with one click per level group. Diff between suggestion and confirmed is logged in `tag_rlha_log`. KPI: `tag_correction_rate` per level, tracked weekly. When L1 correction rate < 10 % for 4 consecutive weeks, auto-acceptance threshold is raised for that level.
+
+### 19.5 Auto-fill pipeline
+
+```
+template (block order + layout_variants)
+  + product_facts (brief)
+  + asset_library (filtered by slot accepts_tags)
+    → [text generation]   FastAPI /content/generate per text slot (existing)
+    → [asset selection]   query assets WHERE tags_l2 ∩ slot.accepts_tags, rank by visual atom score
+    → [layout apply]      set layout_variant CSS class on each block
+    → [compliance pass]   existing compliance_service on assembled variant
+    → [RLHA wiring]       asset choice logged alongside text generation_id
+    → landing_variant (slots filled | PLACEHOLDER_REQUIRED flag)
+```
+
+Asset ranking score = weighted sum of: (a) tag-level match score, (b) GLM visual atom coefficient for this slot (§19.6), (c) cross-context reward signal from `asset_placements`.
+
+### 19.6 Visual atoms in GLM
+
+`glm_service.py` is extended with a `visual_features` dict. For each image/video slot position that has data, the placed asset's L1 tag is one-hot encoded and added as a feature:
+
+```
+logit(P(conv)) = β_text_atoms + β_hero_l1[founder_portrait] + β_hero_l1[property_aerial] + β_proof_l1[chart_graph] + β_background_type[gradient] + …
+```
+
+Minimum data guard: 50 variants with at least one conversion event before fitting visual atom coefficients (avoids sparse-category overfitting). `GET /api/v1/glm/atoms` response gains a `visual_atoms` array alongside `text_atoms`.
+
+### 19.7 Background system (investor niche)
+
+Three background types for the investor niche, no AI-generated faces:
+
+1. **Brand gradients** — 2–3 color linear/radial gradients defined in `tenant_brand_settings`, always compliance-safe.
+2. **Blurred photo backgrounds** — any `hero_background`-tagged asset run through CSS `blur()` + brightness overlay at render time; no readable detail.
+3. **Geometric patterns** — 5 platform SVG defaults (diagonal lines, dot grid, angular shapes) tone-mapped to client brand colors.
+
+E-commerce AI-generated backgrounds are flag-gated (`FEATURE_AI_BACKGROUNDS = false`); not implemented in Phase 14.
+
+### 19.8 New API routes (Phase 14)
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/v1/templates` | List templates (platform defaults + tenant-owned) |
+| POST | `/api/v1/templates` | Create template |
+| PUT | `/api/v1/templates/{id}` | Update (creates new version) |
+| POST | `/api/v1/templates/{id}/fork` | Fork platform default into tenant copy |
+| GET | `/api/v1/assets` | List tenant assets (filter by L1/L2/L3 tags) |
+| POST | `/api/v1/assets/upload` | Upload asset (returns pre-signed S3 URL) |
+| POST | `/api/v1/assets/{id}/auto-tag` | Trigger Claude Vision auto-tagging |
+| PUT | `/api/v1/assets/{id}/tags` | Save confirmed tags (logs RLHA diff) |
+| POST | `/api/v1/landing-sets/generate-visual` | Auto-fill pipeline: template + facts + assets → variants |
+| GET | `/api/v1/glm/atoms` | Extended: now includes `visual_atoms` array |
+| GET | `/api/v1/assets/{id}/placements` | Cross-context placement history |

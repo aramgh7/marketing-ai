@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Tracker } from "@/lib/tracker";
 import { getRecaptchaToken } from "@/lib/recaptcha";
 import HeroBlock, { HeroBlockData } from "./blocks/HeroBlock";
@@ -18,6 +18,14 @@ import MaterialsBlock, { MaterialsBlockData } from "./blocks/MaterialsBlock";
 import DataRoomBlock, { DataRoomBlockData } from "./blocks/DataRoomBlock";
 import WebinarRegBlock, { WebinarRegBlockData } from "./blocks/WebinarRegBlock";
 
+/** Phase 14: image/video/background slot attached to any block. */
+export interface MediaImageSlot { url: string; alt?: string; aspect_ratio?: string; }
+export interface MediaVideoSlot { url: string; autoplay?: boolean; max_duration_s?: number; }
+export interface MediaBackgroundSlot {
+  type: "color" | "gradient" | "image" | "video";
+  value: string; // CSS color/gradient string, or asset URL
+}
+
 export interface LandingBlock {
   type:
     | "HERO" | "PROBLEM" | "PROOF" | "PRICING" | "CTA" | "FAQ"
@@ -26,6 +34,8 @@ export interface LandingBlock {
     | "materials" | "data_room" | "webinar_reg";   // roadmap 8-14 (paths B / C)
   id: string;
   data: Record<string, unknown>;
+  /** Phase 14: visual shell from the template. Applied by renderer; not part of block content. */
+  layout_variant?: "centered" | "left-text-right-image" | "full-bleed-video" | "split-screen";
 }
 
 interface Props {
@@ -169,6 +179,15 @@ export default function LandingRenderer({
     return true;
   };
 
+  /** Phase 14: resolve background_slot to a CSS background value. */
+  function resolveBackground(block: LandingBlock): string | undefined {
+    const bg = block.data.background_slot as MediaBackgroundSlot | undefined;
+    if (!bg) return undefined;
+    if (bg.type === "image") return `url(${bg.value}) center/cover no-repeat`;
+    if (bg.type === "video") return undefined; // video backgrounds handled separately
+    return bg.value; // color or gradient string
+  }
+
   return (
     <main ref={mainRef}>
       {preview && previewNote && (
@@ -180,138 +199,93 @@ export default function LandingRenderer({
         </p>
       )}
       {blocks.map((block) => {
+        const layoutClass = `layout-${block.layout_variant ?? "centered"}`;
+        const bgStyle = resolveBackground(block);
+        const imageSlot = block.data.image_slot as MediaImageSlot | undefined;
+        const videoSlot = block.data.video_slot as MediaVideoSlot | undefined;
+        const bgVideoSlot = (block.data.background_slot as MediaBackgroundSlot | undefined)?.type === "video"
+          ? (block.data.background_slot as MediaBackgroundSlot)
+          : undefined;
+
+        /** Wrap block content with layout + media shell (Phase 14). Pure additive — no existing block changes. */
+        const wrapBlock = (key: string, content: React.ReactNode) => (
+          <div
+            key={key}
+            className={`block-wrapper ${layoutClass}`}
+            style={bgStyle ? { background: bgStyle, position: "relative" } : { position: "relative" }}
+          >
+            {bgVideoSlot && (
+              <video
+                src={bgVideoSlot.value}
+                autoPlay muted loop playsInline
+                style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", zIndex: 0 }}
+              />
+            )}
+            <div style={{ position: "relative", zIndex: 1 }}>
+              {content}
+              {imageSlot && (
+                <img src={imageSlot.url} alt={imageSlot.alt ?? ""} className="block-media-image" style={{ maxWidth: "100%" }} />
+              )}
+              {videoSlot && (
+                <video
+                  src={videoSlot.url}
+                  className="block-media-video"
+                  autoPlay={videoSlot.autoplay}
+                  muted loop playsInline
+                  style={{ maxWidth: "100%" }}
+                />
+              )}
+            </div>
+          </div>
+        );
+
         switch (block.type) {
           case "HERO":
-            return (
-              <HeroBlock
-                key={block.id}
-                blockId={block.id}
-                data={block.data as unknown as HeroBlockData}
-                onCta={trackCta}
-              />
-            );
+            return wrapBlock(block.id, <HeroBlock blockId={block.id} data={block.data as unknown as HeroBlockData} onCta={trackCta} />);
           case "PROBLEM":
-            return (
-              <ProblemBlock
-                key={block.id}
-                blockId={block.id}
-                data={block.data as unknown as ProblemBlockData}
-              />
-            );
+            return wrapBlock(block.id, <ProblemBlock blockId={block.id} data={block.data as unknown as ProblemBlockData} />);
           case "PROOF":
-            return (
-              <ProofBlock
-                key={block.id}
-                blockId={block.id}
-                data={block.data as unknown as ProofBlockData}
-              />
-            );
+            return wrapBlock(block.id, <ProofBlock blockId={block.id} data={block.data as unknown as ProofBlockData} />);
           case "PRICING":
-            return (
-              <PricingBlock
-                key={block.id}
-                blockId={block.id}
-                data={block.data as unknown as PricingBlockData}
-                onCta={trackCta}
-              />
-            );
+            return wrapBlock(block.id, <PricingBlock blockId={block.id} data={block.data as unknown as PricingBlockData} onCta={trackCta} />);
           case "CTA":
-            return (
-              <CTABlock
-                key={block.id}
-                blockId={block.id}
-                data={block.data as unknown as CTABlockData}
-                onFormStart={trackFormStart}
-                onFormSubmit={trackFormSubmit}
-                submitState={submitState}
-              />
-            );
+            return wrapBlock(block.id, <CTABlock blockId={block.id} data={block.data as unknown as CTABlockData} onFormStart={trackFormStart} onFormSubmit={trackFormSubmit} submitState={submitState} />);
           case "FAQ":
-            return (
-              <FAQBlock
-                key={block.id}
-                blockId={block.id}
-                data={block.data as unknown as FAQBlockData}
-              />
-            );
+            return wrapBlock(block.id, <FAQBlock blockId={block.id} data={block.data as unknown as FAQBlockData} />);
           case "booking_calendar":
-            return (
-              <div key={block.id} data-block-id={block.id}>
-                <BookingCalendar
-                  calendarUrl={(block.data.calendar_url as string) ?? ""}
-                  showTimezone={(block.data.show_timezone as boolean) ?? true}
-                />
+            return wrapBlock(block.id,
+              <div data-block-id={block.id}>
+                <BookingCalendar calendarUrl={(block.data.calendar_url as string) ?? ""} showTimezone={(block.data.show_timezone as boolean) ?? true} />
               </div>
             );
           case "accreditation_checkbox":
-            return (
-              <div key={block.id} data-block-id={block.id}>
-                <AccreditationCheckbox
-                  formId={LEAD_FORM_ID}
-                  required={(block.data.required as boolean) ?? false}
-                  labelText={block.data.label_text as string | undefined}
-                  onChange={(checked) =>
-                    setFormData((prev) => ({ ...prev, self_accredited: checked }))
-                  }
-                />
+            return wrapBlock(block.id,
+              <div data-block-id={block.id}>
+                <AccreditationCheckbox formId={LEAD_FORM_ID} required={(block.data.required as boolean) ?? false} labelText={block.data.label_text as string | undefined} onChange={(checked) => setFormData((prev) => ({ ...prev, self_accredited: checked }))} />
               </div>
             );
           case "ticket_selector":
-            return (
-              <div key={block.id} data-block-id={block.id}>
-                <TicketSelector
-                  formId={LEAD_FORM_ID}
-                  label={block.data.label as string | undefined}
-                  required={(block.data.required as boolean) ?? false}
-                  onChange={(bucket) =>
-                    setFormData((prev) => ({ ...prev, ticket_bucket: bucket }))
-                  }
-                />
+            return wrapBlock(block.id,
+              <div data-block-id={block.id}>
+                <TicketSelector formId={LEAD_FORM_ID} label={block.data.label as string | undefined} required={(block.data.required as boolean) ?? false} onChange={(bucket) => setFormData((prev) => ({ ...prev, ticket_bucket: bucket }))} />
               </div>
             );
           case "disclaimer_506c":
-            return (
-              <div key={block.id} data-block-id={block.id}>
-                <Disclaimer506c
-                  text={block.data.text as string | undefined}
-                  version={block.data.version as string | undefined}
-                />
+            return wrapBlock(block.id,
+              <div data-block-id={block.id}>
+                <Disclaimer506c text={block.data.text as string | undefined} version={block.data.version as string | undefined} />
               </div>
             );
           case "materials":
-            return (
-              <MaterialsBlock
-                key={block.id}
-                blockId={block.id}
-                data={block.data as unknown as MaterialsBlockData}
-              />
-            );
+            return wrapBlock(block.id, <MaterialsBlock blockId={block.id} data={block.data as unknown as MaterialsBlockData} />);
           case "data_room":
-            return (
-              <DataRoomBlock
-                key={block.id}
-                blockId={block.id}
-                data={block.data as unknown as DataRoomBlockData}
-              />
-            );
+            return wrapBlock(block.id, <DataRoomBlock blockId={block.id} data={block.data as unknown as DataRoomBlockData} />);
           case "webinar_reg":
-            return (
-              <WebinarRegBlock
-                key={block.id}
-                blockId={block.id}
-                data={block.data as unknown as WebinarRegBlockData}
-                tenantId={tenantId}
-                sessionId={sessionId}
-                variantId={variantId}
-              />
-            );
+            return wrapBlock(block.id, <WebinarRegBlock blockId={block.id} data={block.data as unknown as WebinarRegBlockData} tenantId={tenantId} sessionId={sessionId} variantId={variantId} />);
           case "social_proof_investors":
-            return (
-              <div key={block.id} data-block-id={block.id}>
-                <SocialProofInvestors
-                  quotes={(block.data.quotes as Array<{ text: string; author?: string; amount?: string }>) ?? []}
-                  showAmounts={(block.data.show_amounts as boolean) ?? false}
-                />
+            return wrapBlock(block.id,
+              <div data-block-id={block.id}>
+                <SocialProofInvestors quotes={(block.data.quotes as Array<{ text: string; author?: string; amount?: string }>) ?? []} showAmounts={(block.data.show_amounts as boolean) ?? false} />
               </div>
             );
           default:

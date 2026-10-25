@@ -1502,6 +1502,141 @@ Already correct (verified, no change): thompson `churn_penalty_delta` already fl
 
 ---
 
+## Phase 14 — Visual Template System & Media Library **[v1.8 — added]**
+
+> **Goal**: give the platform a visual layer. Today the system generates text slots and renders any block in a single unstyled layout. After Phase 14 the system will have a template library (block order + per-block layout variant), a media asset library with 3-level tagging, hybrid auto-tagging, visual atoms in the GLM, and an auto-fill pipeline that maps templates + product facts + tagged assets → fully composed landing variants.
+
+### 14-1 — Media slot types in block schema
+
+Extend the block slot model to support three slot families alongside the existing text slots:
+
+- **`image`** slot — static photo or graphic; has `aspect_ratio`, `required` flag, `accepts_tags` filter
+- **`video`** slot — background loop or inline player; has `autoplay`, `muted`, `loop`, `max_duration_s` attributes
+- **`background`** slot — full-bleed behind a block; type enum: `color | gradient | image | video`
+
+Schema change is additive: every existing block continues to work with text-only slots. New block definitions (e.g. `HERO_VISUAL`, `PROOF_GALLERY`) declare the media slots they expose.
+
+Deliverables: updated slot type enum in `LandingSetService.java` slot constants; updated `LandingRenderer.tsx` block renderer to accept and display media slot values; DB column `slot_type` added to `landing_slots` table.
+
+### 14-2 — Asset library: upload & 3-level tagging
+
+Users upload images and videos to a per-client asset library. Each asset is tagged on three levels:
+
+- **Level 1 — Object type** (what is in the asset): `founder_portrait`, `team_photo`, `property_aerial`, `property_interior`, `chart_graph`, `document`, `abstract_visual`, `product_shot`
+- **Level 2 — Role / slot** (intended placement): `hero_background`, `hero_face`, `proof_visual`, `social_proof_avatar`, `materials_thumbnail`, `ad_creative_primary`, `ad_creative_secondary`
+- **Level 3 — Mood / tone** (emotional register): `professional`, `warm_approachable`, `aspirational`, `technical_data_driven`, `urgent`, `calm_trustworthy`
+
+One asset can carry multiple Level-2 tags (multi-context use — see 14-9). Storage: `assets` table with `client_id`, `s3_key`, `mime_type`, `duration_s`, `tags_l1[]`, `tags_l2[]`, `tags_l3[]`, `width`, `height`, upload timestamp.
+
+Frontend: asset upload flow with drag-and-drop + manual tag picker on upload; asset grid filtered by tag; bulk re-tag UI.
+
+### 14-3 — Hybrid auto-tagging pipeline
+
+On upload, Claude Vision analyzes the asset and suggests Level-1, Level-2, and Level-3 tags with a confidence score per tag. The marketer sees the suggestions pre-filled and can confirm, adjust, or override with one click per tag group. Confirmed/corrected pairs are stored as training signal.
+
+Tracking metric: `tag_correction_rate` per tag level — decreases over time as few-shot examples accumulate (RLHA loop). When correction rate for a level drops below 10 % consistently, auto-acceptance threshold can be raised.
+
+Backend: `POST /assets/{id}/auto-tag` calls Claude Vision; response includes `suggested_tags` + `confidence`; `POST /assets/{id}/tags` saves confirmed tags and logs the diff as RLHA signal in `tag_rlha_log` table.
+
+### 14-4 — Template data model
+
+A **template** is the visual shell of a landing page: block order, per-block layout variant, and per-slot configuration. It does **not** contain text or media — those are filled in at generation time.
+
+Template schema:
+```
+template {
+  id, client_id (nullable = platform default), name, description
+  blocks: [ { block_type, position, layout_variant, slot_overrides } ]
+  default_background_type: color | gradient | image | video
+  tags: string[]   // niche, tone, use_case
+  created_at, updated_at
+}
+```
+
+`layout_variant` per block: controls internal arrangement (e.g. HERO can be `centered`, `left-text-right-image`, `full-bleed-video`, `split-screen`). Each variant maps to a CSS class in the renderer.
+
+Templates are immutable snapshots — editing creates a new version. `landing_sets` FK references `template_id + template_version`.
+
+### 14-5 — 5 default platform templates (investor niche)
+
+Five templates shipped as platform defaults, available to all clients until they build their own:
+
+| # | Name | Block order | Layout mood | Primary use |
+|---|------|-------------|-------------|-------------|
+| T1 | **Authority** | HERO → PROOF → PRICING → CTA → disclaimer_506c | Dark premium; full-bleed founder photo; stat callouts | Cold traffic, high-ticket |
+| T2 | **Transparency** | HERO → data_room → PROBLEM → social_proof_investors → CTA → accreditation_checkbox | Light, data-heavy; chart slots prominent | Warm leads, numbers-first |
+| T3 | **Story** | HERO → PROBLEM → PROOF → materials → CTA → FAQ | Warm; large founder portrait; narrative copy flow | Mid-funnel, brand building |
+| T4 | **Fast Track** | HERO → CTA → accreditation_checkbox | Minimal; single message; no scroll | Retargeting, bottom-of-funnel |
+| T5 | **Education First** | HERO → materials → webinar_reg → PROBLEM → PROOF → CTA → disclaimer_506c | Content-rich; video slot in HERO; long-form | Cold traffic, education-led |
+
+Each default template is seeded in the `templates` table with `client_id = NULL` (platform-owned). Clients can fork any default to create their own editable copy.
+
+### 14-6 — Template builder UI
+
+Drag-and-drop interface for creating and editing templates:
+
+- **Block palette** (left sidebar): all available block types, draggable onto the canvas
+- **Canvas** (center): ordered list of blocks; drag to reorder; click to select
+- **Block config panel** (right): per selected block — choose `layout_variant`; configure slot visibility (show/hide optional slots); set `required` tags for image/video slots
+- **Preview pane**: live preview of the template shell (no real content; placeholder labels in slots)
+- **Template metadata**: name, description, tags (niche, tone, use_case)
+
+Saves as a new template version on "Save"; "Fork from default" creates a client-owned copy of any platform default.
+
+Frontend component: `TemplateBuilder.tsx`; API: `POST /templates`, `PUT /templates/{id}`, `GET /templates?client_id={id}`.
+
+### 14-7 — Auto-fill pipeline (template + facts + assets → variant)
+
+The auto-fill pipeline takes a template, a product/offer fact sheet (existing brief), and the client's tagged asset library, and produces a fully populated landing variant:
+
+1. **Text generation** (existing) — for each text slot in each block, call ML `/content/generate` with block context + style angle (unchanged from current `LandingSetService.java`)
+2. **Asset selection** — for each image/video/background slot, query the asset library filtered by the slot's `accepts_tags` filter; rank by tag-level match score; pick the best-matching asset; fall back to a placeholder flag if library is empty
+3. **Layout assignment** — apply the template's `layout_variant` per block to the renderer
+4. **Compliance pass** — existing compliance check runs on the assembled variant (text + media combo)
+5. **RLHA wiring** — record the asset selection choices alongside text generations so future reward signals can propagate to asset ranking
+
+Output: a `landing_variant` record with all text slots filled and all media slots either filled (asset `id` + `s3_url`) or flagged as `PLACEHOLDER_REQUIRED`.
+
+### 14-8 — Visual atoms in GLM
+
+Extend the creative atom GLM (currently text-only) to include image type per slot position as a categorical feature:
+
+```
+logit(P(conv)) = β_text_atoms + β_hero_image_type + β_proof_image_type + β_background_type + …
+```
+
+Each image slot position contributes one feature: the Level-1 tag of the asset placed there (e.g. `founder_portrait` vs `property_aerial` in the HERO slot). One-hot encoded; Level-2 and Level-3 tags added as separate features once enough data exists.
+
+Minimum data requirement before fitting visual atom coefficients: 50 landing variants with at least one conversion event each, to avoid overfitting with sparse image-type categories.
+
+Result: visual atom report alongside text atom report — shows which image type in which slot position correlates with ConversionRate lift. Feeds back into auto-fill ranking (step 2 of 14-7).
+
+Backend: `glm_service.py` extended with `visual_features` dict; `visual_atom_report` added to GLM output endpoint.
+
+### 14-9 — Multi-context asset usage tracking
+
+One asset can carry multiple Level-2 role tags (e.g. a founder video tagged `hero_background` + `ad_creative_primary` + `materials_thumbnail`). The system tracks every context in which an asset appears:
+
+- `asset_placements` table: `asset_id`, `context_type` (LANDING_SLOT | AD_CREATIVE | MATERIALS_BLOCK), `context_id`, `slot_name`, `placed_at`
+- On each reward event (conversion, show rate, click), propagate reward signal back through `asset_placements` to the asset's reward history
+- Asset card in library UI shows: placement count by context type, cumulative reward signal, last-used date
+
+This enables cross-context learning: a founder video that performs well as an ad creative primary gets a higher prior for HERO background slot selection.
+
+### 14-10 — Background system
+
+Investor niche (current): three background types, no AI-generated faces.
+
+- **Brand gradients**: 2–3 color linear/radial gradients per client, defined in brand settings; always safe for compliance
+- **Blurred photo backgrounds**: any `hero_background`-tagged image run through a CSS `blur()` + brightness overlay; maintains brand feel without readable detail
+- **Geometric patterns**: SVG-based; 5 platform defaults (subtle diagonal lines, dot grid, angular shapes); tone-mapped to client brand colors
+
+E-commerce niche (future, flag-gated): AI-generated product backgrounds — placeholder for integration with an image generation API (DALL-E / Flux / similar); gated behind `FEATURE_AI_BACKGROUNDS` flag, not implemented in Phase 14.
+
+Background system wiring: `background_config` JSON column on `templates`; renderer reads it and applies the appropriate CSS/asset to the block's outer wrapper.
+
+---
+
 ## Bug List
 
 _(empty — project not started)_
@@ -1529,6 +1664,7 @@ _(empty — project not started)_
 | **[v1.5 — added]** Phase 11 | **COMPLETE** (code) | 11-1 ✅ 11-2 ✅ 11-3 ✅ 11-4 ✅ 11-5 ✅ — creative publishing only through the platform (`.ai/creative-publishing.md`); real upload path needs a live Meta account at stage GUARDED_WRITES | — |
 | **[v1.6 — added]** Phase 12 | **COMPLETE** (code, 2026-10-23) | 12-1 ✅ 12-2 ✅ 12-3 ✅ 12-4 ✅ 12-5 ✅ 12-6 ✅ 12-7 ✅ 12-8 ✅ 12-9 ✅ 12-10 ✅ 12-11 ✅ 12-12 ✅ 12-13 ✅ 12-14 ✅ — ML math audit fixes (ML 1097, Java BUILD SUCCESSFUL) | — |
 | **[v1.7 — added]** Phase 13 | **COMPLETE** (code, 2026-10-23) | 13-1 ✅ … 13-12 ✅ — ML audit wave 2: shrinkage, BF overflow, SE recovery, Sharpe period, evolution, compliance fail-safe, normal approx, RNG seeds, Weibull scale/naming, time decay, CPA CB, funnel gate aliases (ML 1097) | — |
+| **[v1.8 — added]** Phase 14 | **PLANNED** | 14-1 media slot types · 14-2 asset library + 3-level tagging · 14-3 hybrid auto-tagging · 14-4 template data model · 14-5 5 default templates · 14-6 template builder UI · 14-7 auto-fill pipeline · 14-8 visual atoms GLM · 14-9 multi-context asset tracking · 14-10 background system | — |
 
 **Immediate priority**: ~~Phase 7 (Multi-Channel) or Phase 0.5 (Universal Cross-Niche Model) — Phase 6 complete~~ **[v1.1 — changed]** Before onboarding client #1 on anything above ADVISOR: the Phase 0 items (0-11, 0-12, 0-13), then Phase 2 content path (2-9 → 2-10 → 2-11, 2-12), then the Phase 3 protective set in this order — 3-15 queue → 3-13 Site Health → 3-14 anchors → 3-12 external signals → 3-16 recovery → 3-17/3-18 autonomy + OPE (unlocks 6-6). Phase 7 and 0.5 after that. **[v1.2 — changed]** With all v1.1 items ✅, the immediate priority is **Phase 8 pre-onboarding set (8-1 → 8-2 → 8-3 → 8-7 → 8-4)**: the implemented CAPI gate, reward map and gates are coded on the wrong funnel for client #1, and nothing should go live on their account until they read the configured funnel.
 
@@ -1630,3 +1766,10 @@ _(empty — project not started)_
 | **[v1.5 — added]** G62 | arch §11, §12.1b | Tenant domains, DNS verification, host-aware serving, CORS from table | 10-3 | §17 |
 | **[v1.5 — added]** G63 | §12.1b | Landing served from the client's own server with full tracking (runner) | 10-4 | §17 |
 | **[v1.5 — added]** G64 | §5.1, §19.18.1, §12.4 | Creative reaches Meta only via the platform; ad map; creative id in the click; reconciliation | 11-1 … 11-5 | §6, §15.4, §16.17, §18 |
+| **[v1.8 — added]** G91 | §5.1, §13.1 | Landing page has no visual layer; template = block order + layout variant + media slots | 14-1, 14-4, 14-5 | §15.7 |
+| **[v1.8 — added]** G92 | §5.1 | No asset library; system cannot select images/videos for slot placement | 14-2, 14-3 | §15.7 |
+| **[v1.8 — added]** G93 | §5.1, §6.4 | GLM atom analysis covers only text atoms; image type per slot not tracked | 14-8 | §15.8 |
+| **[v1.8 — added]** G94 | §5.1 | Template builder missing; marketers cannot create or fork visual templates | 14-6 | §15.7 |
+| **[v1.8 — added]** G95 | §5.1, §6.5 | Auto-fill pipeline missing; template + facts + assets not assembled into a variant | 14-7 | §15.7 |
+| **[v1.8 — added]** G96 | §5.1 | Assets used in multiple contexts (landing + ad) not cross-tracked; reward signal siloed | 14-9 | §15.7, §15.4 |
+| **[v1.8 — added]** G97 | §5.1, §13.2 | Background system undefined; investor landing backgrounds not standardized | 14-10 | §15.7 |

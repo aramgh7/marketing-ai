@@ -235,6 +235,24 @@ async def predict(req: PredictRequest) -> PredictResponse:
     )
 
 
+class VisualAtomsRequest(BaseModel):
+    tenant_id: str
+    variants: list[dict]   # [{id, conversions, impressions, visual_slots: {slot: l1_tag}}]
+
+
+@router.post("/visual-atoms")
+async def compute_visual_atoms(req: VisualAtomsRequest) -> dict:
+    """
+    Phase 14, §19.6: Fit visual atom coefficients from landing variant data.
+    Returns {"visual_atoms": [{slot, l1_tag, coefficient}], "n_obs", "n_variants"}.
+    Returns empty list with skipped_reason when < 50 variants have conversions.
+    """
+    from app.services.visual_atoms_service import extract_visual_features, fit_visual_atoms
+
+    features = extract_visual_features(req.variants)
+    return fit_visual_atoms(features)
+
+
 class InteractionCandidate(BaseModel):
     term: str
     r2_full: float = Field(..., ge=0.0, le=1.0)
