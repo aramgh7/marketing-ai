@@ -2,6 +2,7 @@ package com.marketingai.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.http.HttpEntity;
@@ -35,6 +36,7 @@ public class MetaVideoStatusService {
     private final int thumbnailAttempts;
     private final long thumbnailIntervalMs;
 
+    @Autowired
     public MetaVideoStatusService(RestTemplateBuilder builder,
                                   @Value("${app.meta.thumbnail-poll-attempts:6}") int thumbnailAttempts,
                                   @Value("${app.meta.thumbnail-poll-interval-ms:5000}") long thumbnailIntervalMs) {

@@ -7,7 +7,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.*;
 
 @RestController
-@RequestMapping("/api/v1/templates")
+@RequestMapping("/templates")
 @RequiredArgsConstructor
 public class TemplateController {
 

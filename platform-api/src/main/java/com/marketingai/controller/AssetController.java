@@ -7,7 +7,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.*;
 
 @RestController
-@RequestMapping("/api/v1/assets")
+@RequestMapping("/assets")
 @RequiredArgsConstructor
 public class AssetController {
 
@@ -21,6 +21,11 @@ public class AssetController {
         return assetService.list(l1, l2, l3);
     }
 
+    @PostMapping("/upload")
+    public Map<String, Object> getUploadUrl(@RequestBody Map<String, Object> body) {
+        return assetService.generateUploadUrl(body);
+    }
+
     @PostMapping("/register")
     public Map<String, Object> register(@RequestBody Map<String, Object> body) {
         return assetService.register(body);
@@ -29,6 +34,11 @@ public class AssetController {
     @PutMapping("/{id}/tags")
     public Map<String, Object> saveTags(@PathVariable UUID id, @RequestBody Map<String, Object> body) {
         return assetService.saveTags(id, body);
+    }
+
+    @PostMapping("/{id}/auto-tag")
+    public Map<String, Object> triggerAutoTag(@PathVariable UUID id, @RequestBody Map<String, Object> body) {
+        return assetService.triggerAutoTag(id, body);
     }
 
     @PostMapping("/{id}/auto-tag-result")

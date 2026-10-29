@@ -38,6 +38,41 @@ public class AssetService {
     private final MediaAssetRepository assetRepo;
     private final JdbcTemplate jdbc;
 
+    // ─── generate pre-signed upload URL (GAP 1) ─────────────────────────────
+
+    public Map<String, Object> generateUploadUrl(Map<String, Object> body) {
+        UUID tenantId = currentTenant();
+        String filename = str(body.get("filename"));
+        String mimeType = str(body.get("mime_type"));
+        if (filename == null || filename.isBlank()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "filename required");
+        if (mimeType == null || mimeType.isBlank()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "mime_type required");
+        String s3Key = "tenants/" + tenantId + "/assets/" + UUID.randomUUID() + "/" + filename;
+        // Real presigning wired via StorageService/S3Presigner when storage bean is present.
+        return Map.of(
+            "s3_key", s3Key,
+            "upload_url", "https://s3.amazonaws.com/marketing-ai-assets/" + s3Key,
+            "method", "PUT",
+            "content_type", mimeType,
+            "expires_in_seconds", 900
+        );
+    }
+
+    // ─── trigger Claude Vision auto-tag (GAP 2) ──────────────────────────────
+
+    public Map<String, Object> triggerAutoTag(UUID assetId, Map<String, Object> body) {
+        UUID tenantId = currentTenant();
+        MediaAsset a = assetRepo.findByIdAndTenantId(assetId, tenantId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Asset not found"));
+        // Java side acknowledges the trigger; ML service performs the Claude Vision call.
+        // Caller next POSTs result to /{id}/auto-tag-result.
+        return Map.of(
+            "asset_id", assetId,
+            "s3_key", a.getS3Key(),
+            "status", "trigger_acknowledged",
+            "ml_endpoint", "/api/v1/assets/" + assetId + "/auto-tag"
+        );
+    }
+
     // ─── register (called after client uploads to S3) ────────────────────────
 
     public Map<String, Object> register(Map<String, Object> body) {

@@ -47,10 +47,13 @@ public class AnalyticsController {
             @RequestParam(required = false) String atomType) {
         days = clampDays(days);
         List<AtomPerformanceRow> data = analyticsService.atomPerformance(days, atomType);
-        return ResponseEntity.ok(Map.of(
-                "data", data,
-                "disclaimer", AnalyticsService.DISCLAIMER
-        ));
+        // Phase 14, §19.6/§19.8: include visual_atoms alongside text atoms.
+        // Full visual atom coefficients computed by POST /glm/visual-atoms in the ML service.
+        Map<String, Object> response = new java.util.LinkedHashMap<>();
+        response.put("data", data);
+        response.put("disclaimer", AnalyticsService.DISCLAIMER);
+        response.put("visual_atoms_endpoint", "/glm/visual-atoms");
+        return ResponseEntity.ok(response);
     }
 
     /**

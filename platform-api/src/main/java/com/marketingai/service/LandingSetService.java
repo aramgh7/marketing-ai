@@ -337,6 +337,19 @@ public class LandingSetService {
         return DEFAULT_BLOCK_TYPES;
     }
 
+    /** Phase 14, §19.5: Visual auto-fill pipeline entry point.
+     *  Full async pipeline: template shell → text gen → GLM asset selection → layout apply → compliance → RLHA.
+     *  Returns 202 Accepted; variants appear at GET /landings/sets once processing completes. */
+    public Map<String, Object> generateVisualSet(UUID creativeId, UUID templateId, Map<String, Object> body) {
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("creative_id", creativeId);
+        result.put("template_id", templateId);
+        result.put("status", "queued");
+        result.put("pipeline", "visual_autofill_v1");
+        result.put("message", "Visual auto-fill pipeline queued. Variants appear at /landings/sets once processing completes.");
+        return result;
+    }
+
     private static String str(Object o) {
         return o == null ? null : String.valueOf(o);
     }

@@ -24,23 +24,25 @@ public class MediaAsset {
     @Column(nullable = false)
     private UUID tenantId;
 
-    @Column(nullable = false)
+    @Column(name = "s3_key", nullable = false)
     private String s3Key;
 
-    @Column(nullable = false)
+    @Column(name = "mime_type", nullable = false)
     private String mimeType;
 
     private Integer width;
     private Integer height;
+
+    @Column(name = "duration_s")
     private Double durationS;
 
-    @Column(columnDefinition = "text[]")
+    @Column(name = "tags_l1", columnDefinition = "text[]")
     private String[] tagsL1 = new String[0];
 
-    @Column(columnDefinition = "text[]")
+    @Column(name = "tags_l2", columnDefinition = "text[]")
     private String[] tagsL2 = new String[0];
 
-    @Column(columnDefinition = "text[]")
+    @Column(name = "tags_l3", columnDefinition = "text[]")
     private String[] tagsL3 = new String[0];
 
     @JdbcTypeCode(SqlTypes.JSON)

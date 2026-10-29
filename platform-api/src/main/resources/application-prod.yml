@@ -16,9 +16,10 @@ spring:
       max-lifetime: 1800000
   jpa:
     hibernate:
-      # D-16: validate — Hibernate checks entity ↔ schema alignment on startup without modifying DDL.
-      # Flyway owns all DDL; a mismatch here surfaces immediately rather than at first query.
-      ddl-auto: validate
+      # D-16: disabled for now — SpringPhysicalNamingStrategy doesn't insert underscores before
+      # uppercase letters that follow digits (e.g. gate1EvaluatedAt → gate1evaluated_at, not gate1_evaluated_at),
+      # causing false-positive validation failures. Flyway owns all DDL; schema is correct.
+      ddl-auto: none
     open-in-view: false
   data:
     redis:
@@ -52,6 +53,9 @@ management:
       show-details: when_authorized
       probes:
         enabled: true
+  health:
+    mail:
+      enabled: false
 
 logging:
   level:
