@@ -30,6 +30,8 @@ type Health = {
 };
 /** GET /tenants/me/settings — only the key this page needs (audit F-13). */
 type TenantSettings = { creative_download_mode?: "FINAL" | "PREVIEW_ONLY" | string | null };
+type MetaCreds = { meta_page_id?: string | null; meta_instagram_actor_id?: string | null; has_token?: boolean };
+type Pixel = { id: string; isDefault: boolean; status: string };
 type Campaign = { id: string; name: string; metaCampaignId: string | null; status: string };
 type AdSet = { id: string; campaignId: string; metaAdSetId: string | null; status: string; creativeId: string | null };
 type Variant = { id: string; slug: string; name: string; status: string };
@@ -74,6 +76,8 @@ export default function MetaAdsPage() {
   const [domains, setDomains] = useState<Domain[]>([]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [metaCreds, setMetaCreds] = useState<MetaCreds | null>(null);
+  const [hasDefaultPixel, setHasDefaultPixel] = useState<boolean | null>(null);
   const [loadErrors, setLoadErrors] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [downloadMode, setDownloadMode] = useState<string>("FINAL");
@@ -90,7 +94,7 @@ export default function MetaAdsPage() {
       catch (e) { failed.push(`${label}: ${e instanceof ApiError ? e.message : "request failed"}`); return fallback; }
     };
     setLoading(true);
-    const [c, m, h, camps, vars, doms, settings] = await Promise.all([
+    const [c, m, h, camps, vars, doms, settings, creds, pixels] = await Promise.all([
       safe("creatives", apiFetch<Creative[]>("/api/v1/creatives"), []),
       safe("ad map", apiFetch<AdMapRow[]>("/api/v1/meta/ad-map"), []),
       safe("linkage health", apiFetch<Health>("/api/v1/meta/linkage-health"), null as unknown as Health),
@@ -98,10 +102,14 @@ export default function MetaAdsPage() {
       safe("landings", apiFetch<Variant[]>("/api/v1/landings?status=ACTIVE"), []),
       safe("domains", apiFetch<Domain[]>("/api/v1/domains"), []),
       safe("settings", apiFetch<TenantSettings>("/api/v1/tenants/me/settings"), null as unknown as TenantSettings),
+      safe("meta credentials", apiFetch<MetaCreds>("/api/v1/tenants/me/meta-credentials"), null as unknown as MetaCreds),
+      safe("pixels", apiFetch<Pixel[]>("/api/v1/pixels"), [] as Pixel[]),
     ]);
     setCreatives((c ?? []).filter((x) => x.status !== "ARCHIVED"));
     setAdMap(m ?? []);
     setHealth(h);
+    setMetaCreds(creds);
+    setHasDefaultPixel((pixels ?? []).some((p) => p.isDefault && p.status !== "ARCHIVED"));
     setCampaigns(camps ?? []);
     setVariants(vars ?? []);
     setDomains((doms ?? []).filter((d) => d.status === "VERIFIED" && d.kind === "LANDING"));
@@ -191,6 +199,28 @@ export default function MetaAdsPage() {
           A creative reaches Meta only through this page: the ad is created paused with the landing URL and Meta&apos;s ad id in the URL,
           so every click is attributed to the creative → landing → path pair. Ads created by hand are unmanaged and excluded from learning.
         </p>
+      </div>
+
+      {/* Connection status: 4 credential indicators */}
+      <div className="rounded-lg border border-gray-200 bg-white p-4">
+        <div className="text-sm font-semibold text-gray-700 mb-2">Connection status</div>
+        <div className="flex flex-wrap gap-4 text-xs">
+          {[
+            { label: "Page ID", ok: !!metaCreds?.meta_page_id },
+            { label: "Instagram ID", ok: !!metaCreds?.meta_instagram_actor_id },
+            { label: "Token valid", ok: !!metaCreds?.has_token },
+            { label: "Default pixel set", ok: hasDefaultPixel === true },
+          ].map(({ label, ok }) => (
+            <span key={label} className={`flex items-center gap-1 font-medium ${ok ? "text-green-600" : "text-red-500"}`}>
+              {ok ? "✓" : "✗"} {label}
+            </span>
+          ))}
+        </div>
+        {metaCreds !== null && (!metaCreds.meta_page_id || !metaCreds.has_token) && (
+          <p className="text-xs text-gray-400 mt-1">
+            Set credentials in <a href="/settings" className="underline">Settings → Meta credentials</a>.
+          </p>
+        )}
       </div>
 
       {health && (
