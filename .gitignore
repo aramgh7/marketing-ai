@@ -47,6 +47,7 @@ yarn-error.log*
 secrets/
 credentials.json
 service-account*.json
+*.pem
 
 # ── Docker ─────────────────────────────────────────────────────────
 .docker/

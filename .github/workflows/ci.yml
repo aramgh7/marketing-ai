@@ -93,3 +93,25 @@ jobs:
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  deploy:
+    name: deploy to lightsail
+    needs: [java, ml, frontend, sql]
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            set -e
+            cd /home/ubuntu/marketing-ai
+            git pull origin master
+            docker compose --env-file .env.prod \
+              -f docker-compose.yml \
+              -f docker-compose.override.yml \
+              up -d --build frontend platform-api ml-service
+            docker image prune -f
