@@ -87,7 +87,7 @@ services:
     restart: unless-stopped
     logging: *default-logging
     ports:
-      - "127.0.0.1:8080:8080"
+      - "${API_BIND:-127.0.0.1:8080}:8080"
     environment:
       # `prod` = application-prod.yml (INFO logs, forward-headers, no defaults). Override with SPRING_PROFILES_ACTIVE=local.
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
@@ -172,7 +172,7 @@ services:
     restart: unless-stopped
     logging: *default-logging
     ports:
-      - "127.0.0.1:8000:8000"   # internal service: loopback only
+      - "${ML_BIND:-127.0.0.1:8000}:8000"   # internal service: loopback only
     environment:
       # non-owner RLS role mai_ml (V127); the password is the Flyway placeholder ml_role_password (DB_ML_PASS)
       DATABASE_URL: postgresql://mai_ml:${DB_ML_PASS:?required}@postgres:5432/${DB_NAME:-marketingai}
@@ -233,7 +233,7 @@ services:
     restart: unless-stopped
     logging: *default-logging
     ports:
-      - "127.0.0.1:3000:3000"
+      - "${FE_BIND:-127.0.0.1:3000}:3000"
     environment:
       NODE_ENV: production
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?required}        # browser -> API, e.g. https://app.example.com/api/v1

@@ -1,27 +1,21 @@
-# Port remapping for shared Lightsail server (sales-ai uses 8080/3000/80/443/6379).
 # Memory limits reduced from 64 GB sizing to fit ~5 GB available RAM on this instance.
+# Ports are set via API_BIND / ML_BIND / FE_BIND in .env.prod (see docker-compose.yml).
 # Usage: docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.override.yml up -d --build
 
 services:
   platform-api:
-    ports:
-      - "0.0.0.0:8083:8080"
     deploy:
       resources:
         limits:
           memory: 1536m
 
   ml-service:
-    ports:
-      - "127.0.0.1:8001:8000"
     deploy:
       resources:
         limits:
           memory: 1536m
 
   frontend:
-    ports:
-      - "0.0.0.0:8082:3000"
     deploy:
       resources:
         limits:
