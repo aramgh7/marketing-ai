@@ -14,6 +14,7 @@
 
 import { useState, useEffect } from "react";
 import { hasConsentDecision, setConsentLevel, syncCookiebotConsentCookie } from "@/lib/consent";
+import { hasSession } from "@/lib/api";
 
 export default function CookieBanner() {
   const [visible, setVisible] = useState(false);
@@ -25,6 +26,8 @@ export default function CookieBanner() {
       syncCookiebotConsentCookie();
       return;
     }
+    // Authenticated users are internal — no need to interrupt their session with the banner.
+    if (hasSession()) return;
     if (!hasConsentDecision()) setVisible(true);
   }, []);
 

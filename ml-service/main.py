@@ -19,6 +19,7 @@ from app.routers import post_call, investor_archetype, agency, regcf
 from app.routers import reward
 from app.routers import evi
 from app.routers import cvr_collapse
+from app.routers import assets as assets_router_module
 
 
 @asynccontextmanager
@@ -86,3 +87,4 @@ app.include_router(regcf.router, dependencies=_internal)
 app.include_router(reward.router, prefix="/reward", dependencies=_internal)
 app.include_router(evi.router, prefix="/decide/evi", dependencies=_internal)   # roadmap 9-10
 app.include_router(cvr_collapse.router, prefix="/signals", dependencies=_internal)   # roadmap 9-8
+app.include_router(assets_router_module.router, prefix="/api/v1", dependencies=_internal)   # Phase 14 auto-tag

@@ -21,6 +21,7 @@ __pycache__/
 venv/
 env/
 .env
+.env.prod
 *.egg-info/
 dist/
 .pytest_cache/
@@ -32,6 +33,7 @@ node_modules/
 .next/
 out/
 .vercel/
+frontend/src/_generated/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

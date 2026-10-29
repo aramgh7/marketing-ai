@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Script from "next/script";
-import "./globals.css";
+import { globalCss } from "@/_generated/global-css";
 import CookieBanner from "@/components/CookieBanner";
 
 export const metadata: Metadata = {
@@ -35,6 +35,7 @@ export default function RootLayout({
         )}
       </head>
       <body>
+        <style dangerouslySetInnerHTML={{ __html: globalCss }} />
         {children}
         {/* Fallback banner shown when Cookiebot is not configured */}
         <CookieBanner />

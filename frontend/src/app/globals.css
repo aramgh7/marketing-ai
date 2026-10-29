@@ -2,6 +2,58 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ─── Landing page ──────────────────────────────────────────────────────────── */
+.lp-nav{position:fixed;top:0;left:0;right:0;z-index:50;background:rgba(255,255,255,.97);border-bottom:1px solid #e5e7eb;box-shadow:0 1px 3px rgba(0,0,0,.07)}
+.lp-nav-inner{max-width:1152px;margin:0 auto;padding:0 1.5rem;height:64px;display:flex;align-items:center;justify-content:space-between}
+.lp-logo{display:flex;align-items:center;gap:10px;text-decoration:none}
+.lp-logo-mark{width:36px;height:36px;background:#4f46e5;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:16px;flex-shrink:0}
+.lp-logo-text{font-size:17px;font-weight:700;color:#111827;letter-spacing:-.3px}
+.lp-nav-links{display:flex;align-items:center;gap:8px}
+.lp-nav-login{font-size:14px;font-weight:500;color:#6b7280;text-decoration:none;padding:8px 14px;border-radius:8px}
+.lp-nav-login:hover{color:#111827}
+.lp-nav-cta{font-size:14px;font-weight:600;color:#fff;text-decoration:none;padding:9px 18px;border-radius:9px;background:#4f46e5}
+.lp-nav-cta:hover{background:#4338ca}
+
+.lp-hero{padding:112px 1.5rem 80px;background:linear-gradient(140deg,#312e81 0%,#4338ca 45%,#6d28d9 100%)}
+.lp-hero-inner{max-width:1152px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:center}
+@media(max-width:900px){.lp-hero-inner{grid-template-columns:1fr}}
+.lp-badge{display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,.15);border-radius:999px;padding:6px 16px;font-size:13px;font-weight:500;color:#e0e7ff;margin-bottom:24px}
+.lp-badge-dot{width:8px;height:8px;background:#34d399;border-radius:50%;display:inline-block}
+.lp-h1{font-size:clamp(2rem,4vw,3.2rem);font-weight:800;line-height:1.15;color:#fff;margin:0 0 20px;letter-spacing:-.5px}
+.lp-accent{color:#a5b4fc}
+.lp-sub{font-size:17px;line-height:1.7;color:#c7d2fe;max-width:440px;margin:0 0 40px}
+.lp-stats{display:flex;gap:40px}
+.lp-stat-num{font-size:2.2rem;font-weight:800;color:#fff;line-height:1}
+.lp-stat-label{font-size:13px;color:#a5b4fc;margin-top:4px}
+
+.lp-form-card{background:#fff;border-radius:20px;box-shadow:0 20px 60px rgba(0,0,0,.25),0 4px 16px rgba(0,0,0,.12);padding:36px}
+
+.lp-features{padding:80px 1.5rem;background:#f9fafb}
+.lp-features-inner{max-width:1152px;margin:0 auto}
+.lp-features-head{text-align:center;margin-bottom:52px}
+.lp-features-h2{font-size:2rem;font-weight:800;color:#111827;margin:0 0 12px}
+.lp-features-sub{font-size:16px;color:#6b7280;max-width:480px;margin:0 auto}
+.lp-feature-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:20px}
+@media(max-width:900px){.lp-feature-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:520px){.lp-feature-grid{grid-template-columns:1fr}}
+.lp-feature-card{background:#fff;border-radius:16px;border:1px solid #e5e7eb;padding:24px;transition:box-shadow .2s,transform .2s}
+.lp-feature-card:hover{box-shadow:0 8px 24px rgba(0,0,0,.08);transform:translateY(-2px)}
+.lp-feature-icon{width:48px;height:48px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;margin-bottom:16px}
+.lp-feature-title{font-size:15px;font-weight:700;color:#111827;margin:0 0 8px}
+.lp-feature-desc{font-size:14px;color:#6b7280;line-height:1.6;margin:0}
+
+.lp-cta{padding:80px 1.5rem;text-align:center;background:linear-gradient(140deg,#312e81 0%,#4338ca 60%,#6d28d9 100%)}
+.lp-cta-h2{font-size:2rem;font-weight:800;color:#fff;margin:0 0 12px}
+.lp-cta-sub{font-size:16px;color:#c7d2fe;margin:0 0 32px}
+.lp-cta-btn{display:inline-block;background:#fff;color:#4338ca;font-weight:700;font-size:16px;text-decoration:none;padding:14px 32px;border-radius:12px}
+.lp-cta-btn:hover{background:#eef2ff}
+
+.lp-footer{padding:28px 1.5rem;border-top:1px solid #e5e7eb;background:#fff}
+.lp-footer-inner{max-width:1152px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;font-size:13px;color:#9ca3af}
+.lp-footer-links{display:flex;gap:20px}
+.lp-footer-links a{color:#9ca3af;text-decoration:none}
+.lp-footer-links a:hover{color:#6b7280}
+
 /* ─── Phase 14: block-wrapper layout variants ─────────────────────────────── */
 .block-wrapper {
   position: relative;

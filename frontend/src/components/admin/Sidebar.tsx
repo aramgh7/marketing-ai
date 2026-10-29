@@ -20,7 +20,13 @@ const nav = [
   { href: "/autonomy",   label: "Autonomy",    icon: "🤖" },
   { href: "/meta-write", label: "Meta writes", icon: "🛡️" },
   { href: "/rlha",       label: "Learning",    icon: "🧠" },
+  { href: "/assets",       label: "Media Library", icon: "🖼️" },
+  { href: "/templates",    label: "Templates",    icon: "📐" },
+  { href: "/campaigns",    label: "Campaigns",    icon: "🏹" },
+  { href: "/product-facts",label: "Product Facts",icon: "📋" },
+  { href: "/video",        label: "Video",        icon: "🎬" },
   { href: "/settings",   label: "Settings",    icon: "⚙️" },
+  { href: "/help",       label: "Help",        icon: "❓" },
 ];
 
 export default function Sidebar() {

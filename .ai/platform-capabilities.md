@@ -483,3 +483,63 @@ Row-Level Security (ENABLE + FORCE) на всех таблицах с `tenant_id
 ---
 
 *Документ создан: 2026-10-17; обновлён 2026-10-20 после ревью соответствия кода architecture.md / vision-public.md и завершения Phase 9 (закрытие найденных пробелов), полный прогон тестов.*
+
+---
+
+## 17. Phase 14 — Visual Template System & Media Library
+
+**Status**: COMPLETE (2026-10-25) | Items 14-1 through 14-10
+
+### What was added
+
+**Database (V142__visual_templates_assets.sql)**
+- `templates` table: visual shell with block order + `layout_variant` per block + background config; `tenant_id = NULL` = platform default (visible to all tenants); `forked_from` FK for template versioning
+- `assets` table: per-tenant media library with 3-level tagging (L1 = object type, L2 = role/slot, L3 = mood/tone); `auto_tag_suggested JSONB` stores Claude Vision suggestions before human confirmation
+- `asset_placements` table: tracks every context an asset appears in (`LANDING_SLOT | AD_CREATIVE | MATERIALS_BLOCK`); enables cross-context reward signal
+- `tag_rlha_log` table: stores suggested vs. confirmed tag diffs per asset per level; source for `tag_correction_rate` KPI
+- `landing_variants` gains `template_id` + `template_version` FK
+
+**Java backend**
+- `LandingTemplate` entity + `LandingTemplateRepository` (findVisibleToTenant, findPlatformDefaults, findByIdAndTenantId)
+- `MediaAsset` entity + `MediaAssetRepository` (findByTenantIdAndTagsL2Contains native query)
+- `TemplateService`: list, create, update, fork (immutable snapshot + version bump), seedDefaults (idempotent, skips existing)
+- `AssetService`: register (S3 key intake), list (L1/L2/L3 filter), saveTags (confirm + RLHA log), storeAutoTagSuggestions, placements
+- `TemplateController`: GET/POST /templates, PUT /templates/{id}, POST /templates/{id}/fork, POST /templates/seed-defaults
+- `AssetController`: GET /assets, POST /assets/register, POST /assets/upload, PUT /assets/{id}/tags, POST /assets/{id}/auto-tag, POST /assets/{id}/auto-tag-result, GET /assets/{id}/placements, GET /assets/tag-values
+
+**5 platform-default templates** (tenant_id = NULL, seeded at startup):
+
+| Template | Tone | Use case | Blocks |
+|---|---|---|---|
+| Authority | Dark premium | Cold traffic, high-ticket | HERO → PROOF → PRICING → CTA → disclaimer_506c |
+| Transparency | Data-heavy light | Warm leads | HERO → data_room → PROBLEM → social_proof_investors → CTA → accreditation_checkbox |
+| Story | Warm founder | Mid-funnel | HERO → PROBLEM → PROOF → materials → CTA → FAQ |
+| Fast Track | Minimal | Retargeting, bottom-funnel | HERO → CTA → accreditation_checkbox |
+| Education First | Content-rich | Education-led cold traffic | HERO → materials → webinar_reg → PROBLEM → PROOF → CTA → disclaimer_506c |
+
+**Python ML services**
+- `auto_tag_service.py`: calls Claude Vision API to suggest L1/L2/L3 tags; filters responses to allowed vocab; strips markdown fences; `suggest_tags()` never raises (falls back to empty); `tag_correction_rate(rlha_rows)` computes correction rate per level from RLHA log
+- `visual_atoms_service.py`: `extract_visual_features()` builds GLM feature matrix from variant visual slot data; `has_enough_data()` — min 50 variants with ≥1 conversion before fitting; `fit_visual_atoms()` — sklearn LogisticRegression + OneHotEncoder; `select_best_asset()` — ranks asset candidates by GLM coefficient for the slot; skips gracefully with `skipped_reason` when data insufficient
+- ML router: `POST /api/v1/assets/{id}/auto-tag` — triggers Claude Vision auto-tagging
+- GLM router extended: `GET /api/v1/glm/atoms` now returns `visual_atoms` alongside text atoms
+
+**Frontend**
+- `LandingRenderer.tsx` updated: every block gets `layout-{variant}` CSS class; `wrapBlock()` helper renders background (inline style), `image_slot` (img), `video_slot` (video autoplay muted loop); fully additive
+- 4 layout variants: `centered`, `left-text-right-image`, `full-bleed-video`, `split-screen`
+- `TemplateBuilder.tsx` (new): 3-panel drag-and-drop template editor — block palette (all 13 block types), canvas with move/remove/reorder, per-block layout variant picker, background type + tag management
+- `AssetLibrary.tsx` (new): asset grid with L1/L2/L3 filter dropdowns, per-asset tag picker pre-filled from AI suggestions, "Confirm Tags" button, AI-suggested/confirmed badges
+
+### Tag vocabularies
+- **L1** (object type): founder_portrait, team_photo, property_aerial, property_interior, chart_graph, document, abstract_visual, product_shot
+- **L2** (role/slot): hero_background, hero_face, proof_visual, social_proof_avatar, materials_thumbnail, ad_creative_primary, ad_creative_secondary
+- **L3** (mood/tone): professional, warm_approachable, aspirational, technical_data_driven, urgent, calm_trustworthy
+
+### KPIs enabled
+- `tag_correction_rate` per level (L1/L2/L3) — measures Claude Vision accuracy; target < 20%
+- Visual atom coefficients — GLM β per (slot, L1 tag) pair; available once 50+ variants with conversions
+
+### Test coverage
+- `TemplateServiceTest.java`: 8 unit tests (5 defaults, block counts, layout_variant validity, tag values)
+- `test_auto_tag_service.py`: 16 tests (JSON parsing, fence stripping, vocab filtering, correction rate)
+- `test_visual_atoms_service.py`: 23 tests (feature extraction, data guard, fit, asset selection)
+- **Total: Java BUILD SUCCESSFUL · Python 39/39 · TypeScript 0 errors**

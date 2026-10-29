@@ -1,5 +1,5 @@
 "use client";
-import { FormEvent, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import { ApiError, apiFetch } from "@/lib/api";
 
 /** ComplianceCheck entity rows from GET /compliance/{entityId} (roadmap 9-5). */
@@ -17,8 +17,23 @@ interface ComplianceCheck {
 }
 
 const ENTITY_TYPES = ["creative", "variant", "content", "offer"];
+const RULEBASE_KEYS = ["META_FINANCIAL", "META_PERSONAL_ATTR", "SEC_506C", "CLIENT_LEGAL"];
 const input =
   "w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500";
+
+interface Rulebase {
+  key: string;
+  description: string | null;
+  enabled: boolean;
+}
+
+interface ApprovedPhrase {
+  id: string;
+  rulebaseKey: string;
+  phraseText: string;
+  notes: string | null;
+  createdAt: string;
+}
 
 function resultClass(r: string): string {
   if (r === "PASS") return "bg-green-100 text-green-800";
@@ -40,6 +55,53 @@ function findingsText(f: ComplianceCheck["findings"]): string {
 }
 
 export default function CompliancePage() {
+  const [activeTab, setActiveTab] = useState<"checks" | "rules">("checks");
+
+  // ── Rules tab state ────────────────────────────────────────────────────────
+  const [rulebases, setRulebases] = useState<Rulebase[]>([]);
+  const [phrases, setPhrases] = useState<ApprovedPhrase[]>([]);
+  const [rulesLoading, setRulesLoading] = useState(false);
+  const [phraseRulebase, setPhraseRulebase] = useState("META_FINANCIAL");
+  const [phraseText, setPhraseText] = useState("");
+  const [phraseNotes, setPhraseNotes] = useState("");
+  const [addingPhrase, setAddingPhrase] = useState(false);
+
+  const loadRules = useCallback(() => {
+    setRulesLoading(true);
+    Promise.all([
+      apiFetch<Rulebase[]>("/api/v1/compliance/rulebases"),
+      apiFetch<ApprovedPhrase[]>("/api/v1/compliance/approved-phrases"),
+    ])
+      .then(([rb, ph]) => {
+        setRulebases(Array.isArray(rb) ? rb : []);
+        setPhrases(Array.isArray(ph) ? ph : []);
+      })
+      .catch(() => {})
+      .finally(() => setRulesLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "rules") loadRules();
+  }, [activeTab, loadRules]);
+
+  async function addPhrase(e: FormEvent) {
+    e.preventDefault();
+    setAddingPhrase(true);
+    try {
+      await apiFetch("/api/v1/compliance/approved-phrases", {
+        method: "POST",
+        body: JSON.stringify({ rulebaseKey: phraseRulebase, phraseText: phraseText.trim(), notes: phraseNotes.trim() || null }),
+      });
+      setPhraseText(""); setPhraseNotes("");
+      loadRules();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setAddingPhrase(false);
+    }
+  }
+
+  // ── Checks tab state ───────────────────────────────────────────────────────
   const [entityId, setEntityId] = useState("");
   const [checks, setChecks] = useState<ComplianceCheck[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -114,7 +176,118 @@ export default function CompliancePage() {
         </p>
       </div>
 
+      {/* Tab switcher */}
+      <div className="flex gap-1 border-b border-gray-200">
+        {(["checks", "rules"] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setActiveTab(t)}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${activeTab === t ? "border-indigo-600 text-indigo-600" : "border-transparent text-gray-500 hover:text-gray-700"}`}
+          >
+            {t === "checks" ? "Checks" : "Rulebases & Phrases"}
+          </button>
+        ))}
+      </div>
+
       {error && <p className="text-sm text-red-600">{error}</p>}
+
+      {/* ── Rules tab ───────────────────────────────────────────────────────── */}
+      {activeTab === "rules" && (
+        <div className="space-y-6">
+          {rulesLoading ? <p className="text-sm text-gray-400">Loading…</p> : (
+            <>
+              {/* Rulebases */}
+              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                <div className="px-6 py-4 border-b border-gray-100">
+                  <h2 className="font-semibold text-gray-800">Rulebases</h2>
+                </div>
+                {rulebases.length === 0 ? (
+                  <p className="px-6 py-4 text-sm text-gray-400">No rulebases found.</p>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 text-gray-500 text-xs uppercase">
+                      <tr>
+                        <th className="px-6 py-3 text-left">Key</th>
+                        <th className="px-6 py-3 text-left">Description</th>
+                        <th className="px-6 py-3 text-left">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rulebases.map((rb) => (
+                        <tr key={rb.key} className="border-t border-gray-100">
+                          <td className="px-6 py-3 font-mono text-sm text-gray-800">{rb.key}</td>
+                          <td className="px-6 py-3 text-gray-600">{rb.description ?? "—"}</td>
+                          <td className="px-6 py-3">
+                            <span className={`px-2 py-0.5 rounded text-xs font-medium ${rb.enabled ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
+                              {rb.enabled ? "Active" : "Disabled"}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              {/* Approved phrases */}
+              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                <div className="px-6 py-4 border-b border-gray-100">
+                  <h2 className="font-semibold text-gray-800">Approved phrases</h2>
+                  <p className="text-xs text-gray-400 mt-0.5">Pre-approved formulations that pass compliance checks automatically.</p>
+                </div>
+                <form onSubmit={addPhrase} className="px-6 py-4 border-b border-gray-100 grid grid-cols-3 gap-3 bg-gray-50">
+                  <label className="text-sm">
+                    <span className="text-gray-700">Rulebase</span>
+                    <select value={phraseRulebase} onChange={(e) => setPhraseRulebase(e.target.value)} className={`mt-1 ${input}`}>
+                      {RULEBASE_KEYS.map((k) => <option key={k} value={k}>{k}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-sm">
+                    <span className="text-gray-700">Phrase text</span>
+                    <textarea required rows={1} value={phraseText} onChange={(e) => setPhraseText(e.target.value)} className={`mt-1 ${input}`} />
+                  </label>
+                  <label className="text-sm">
+                    <span className="text-gray-700">Notes</span>
+                    <input value={phraseNotes} onChange={(e) => setPhraseNotes(e.target.value)} className={`mt-1 ${input}`} placeholder="Why this is approved" />
+                  </label>
+                  <div className="col-span-3 text-right">
+                    <button type="submit" disabled={addingPhrase} className="bg-indigo-600 text-white text-sm font-medium rounded-lg px-4 py-2 hover:bg-indigo-700 disabled:opacity-50">
+                      {addingPhrase ? "Saving…" : "Add phrase"}
+                    </button>
+                  </div>
+                </form>
+                {phrases.length === 0 ? (
+                  <p className="px-6 py-4 text-sm text-gray-400">No approved phrases yet.</p>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 text-gray-500 text-xs uppercase">
+                      <tr>
+                        <th className="px-6 py-3 text-left">Phrase</th>
+                        <th className="px-6 py-3 text-left">Rulebase</th>
+                        <th className="px-6 py-3 text-left">Notes</th>
+                        <th className="px-6 py-3 text-left">Added</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {phrases.map((p) => (
+                        <tr key={p.id} className="border-t border-gray-100">
+                          <td className="px-6 py-3 text-gray-800 max-w-sm">{p.phraseText}</td>
+                          <td className="px-6 py-3"><span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 text-xs rounded font-mono">{p.rulebaseKey}</span></td>
+                          <td className="px-6 py-3 text-gray-500 text-xs">{p.notes ?? "—"}</td>
+                          <td className="px-6 py-3 text-gray-400 whitespace-nowrap">{new Date(p.createdAt).toLocaleDateString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── Checks tab ──────────────────────────────────────────────────────── */}
+      {activeTab === "checks" && (<>
 
       <form onSubmit={runTextCheck} className="bg-white rounded-xl border border-gray-200 p-6 space-y-4 max-w-3xl">
         <h2 className="font-semibold text-gray-800">Check a text</h2>
@@ -213,6 +386,7 @@ export default function CompliancePage() {
           </table>
         )}
       </div>
+      </>)}
     </div>
   );
 }

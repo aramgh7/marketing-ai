@@ -11,6 +11,10 @@ export default function SettingsPage() {
   const [downloadMode, setDownloadMode] = useState("FINAL");   // roadmap Phase 11: FINAL | PREVIEW_ONLY
   const [metaPageId, setMetaPageId] = useState("");
   const [igActorId, setIgActorId] = useState("");
+  const [metaToken, setMetaToken] = useState("");
+  const [metaAdAccountId, setMetaAdAccountId] = useState("");
+  const [metaAppId, setMetaAppId] = useState("");
+  const [hasToken, setHasToken] = useState(false);
   const [metaSaving, setMetaSaving] = useState(false);
   const [metaMsg, setMetaMsg] = useState("");
   const [saving, setSaving]             = useState(false);
@@ -38,6 +42,9 @@ export default function SettingsPage() {
       .then((d) => {
         setMetaPageId(d?.meta_page_id ?? d?.metaPageId ?? "");
         setIgActorId(d?.meta_instagram_actor_id ?? d?.metaInstagramActorId ?? "");
+        setMetaAdAccountId(d?.ad_account_id ?? d?.adAccountId ?? "");
+        setMetaAppId(d?.app_id ?? d?.appId ?? "");
+        setHasToken(!!d?.has_token);
       })
       .catch((e: unknown) => setMetaLoadError(e instanceof ApiError ? e.message : "Could not load Meta credentials"));
   }, []);
@@ -49,8 +56,15 @@ export default function SettingsPage() {
     try {
       await apiFetch("/api/v1/tenants/me/meta-credentials", {
         method: "PUT",
-        body: JSON.stringify({ meta_page_id: metaPageId.trim() || null, meta_instagram_actor_id: igActorId.trim() || null }),
+        body: JSON.stringify({
+          meta_page_id: metaPageId.trim() || null,
+          meta_instagram_actor_id: igActorId.trim() || null,
+          ...(metaToken.trim() ? { access_token: metaToken.trim(), ad_account_id: metaAdAccountId.trim() } : {}),
+          ...(metaAdAccountId.trim() && !metaToken.trim() ? { ad_account_id: metaAdAccountId.trim() } : {}),
+          ...(metaAppId.trim() ? { app_id: metaAppId.trim() } : {}),
+        }),
       });
+      if (metaToken.trim()) { setMetaToken(""); setHasToken(true); }
       setMetaMsg("Saved.");
     } catch (e: any) {
       setMetaMsg(e?.message ?? "Save failed");
@@ -177,10 +191,42 @@ export default function SettingsPage() {
       {/* Roadmap Phase 11: identities Meta needs when the platform creates ads */}
       <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
         <div>
-          <h2 className="font-semibold text-gray-800">Meta page</h2>
-          <p className="text-xs text-gray-400">Used when a creative is published from the Meta ads page (ad creative = page post).</p>
+          <h2 className="font-semibold text-gray-800">Meta credentials</h2>
+          <p className="text-xs text-gray-400">Access token, ad account, page ID and Instagram actor ID used when the platform creates or syncs ads.</p>
         </div>
         {metaLoadError && <LoadError title="Could not load Meta credentials" message={metaLoadError} onRetry={load} />}
+
+        {/* Token */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Meta Access Token
+            {hasToken && <span className="ml-2 text-xs font-normal text-green-600">● token set</span>}
+          </label>
+          <input
+            value={metaToken}
+            onChange={(e) => setMetaToken(e.target.value)}
+            placeholder={hasToken ? "Enter new token to rotate…" : "EAAxxxxxxx… (system user token)"}
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 font-mono"
+          />
+          <p className="text-xs text-gray-400 mt-1">
+            System user token from Meta Business Manager → System Users → Generate token. Required scopes: <code>ads_management</code>, <code>ads_read</code>, <code>business_management</code>.
+          </p>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Ad Account ID</label>
+            <input value={metaAdAccountId} onChange={(e) => setMetaAdAccountId(e.target.value)} placeholder="act_123456789"
+                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+            <p className="text-xs text-gray-400 mt-1">Required when saving a new token. Format: <code>act_</code> + numeric ID.</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">App ID (optional)</label>
+            <input value={metaAppId} onChange={(e) => setMetaAppId(e.target.value)} placeholder="1234567890"
+                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+          </div>
+        </div>
+
         <div className="grid md:grid-cols-2 gap-3">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Facebook Page ID</label>
@@ -188,15 +234,16 @@ export default function SettingsPage() {
                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Instagram actor ID (optional)</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Instagram Actor ID (optional)</label>
             <input value={igActorId} onChange={(e) => setIgActorId(e.target.value)} placeholder="17841400000000000"
                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
           </div>
         </div>
+
         <div className="flex items-center gap-3">
           <button onClick={saveMetaPage} disabled={metaSaving}
                   className="px-6 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
-            {metaSaving ? "Saving..." : "Save Meta page"}
+            {metaSaving ? "Saving..." : "Save Meta credentials"}
           </button>
           {metaMsg && <span className={`text-sm ${metaMsg === "Saved." ? "text-green-600" : "text-red-600"}`}>{metaMsg}</span>}
         </div>
