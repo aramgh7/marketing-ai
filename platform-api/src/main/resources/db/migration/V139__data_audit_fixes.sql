@@ -47,33 +47,7 @@ BEGIN
 END $$;
 
 -- ─── D-15: validate partition range before inserting events ──────────────────
--- The ensure_events_partition function only creates partitions for future months;
--- ingestion of events with an event_time outside any existing partition would raise
--- a "no partition" error.  This function returns FALSE when the given event_time has
--- no covering partition — the ingestion service calls it before accepting an event.
-CREATE OR REPLACE FUNCTION public.event_partition_exists(p_event_time timestamptz)
-RETURNS boolean
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-SET search_path = public
-AS $$
-    SELECT EXISTS (
-        SELECT 1
-        FROM   pg_class child
-        JOIN   pg_inherits inh     ON inh.inhrelid  = child.oid
-        JOIN   pg_class   parent   ON parent.oid     = inh.inhparent
-        JOIN   pg_namespace n      ON n.oid          = child.relnamespace
-        WHERE  parent.relname  = 'events'
-          AND  n.nspname        = 'public'
-          AND  child.relkind    = 'r'
-          -- pg_get_expr evaluates the partition bound and we check the timestamp falls in range
-          AND  p_event_time >= lower(pg_catalog.pg_get_partition_constraintdef(child.oid)::text::anyrange)::timestamptz
-          AND  p_event_time <  upper(pg_catalog.pg_get_partition_constraintdef(child.oid)::text::anyrange)::timestamptz
-    )
-$$;
-
--- Simpler and production-safe version: check via the partition name derived from the date
+-- Returns FALSE when the given event_time has no covering partition.
 CREATE OR REPLACE FUNCTION public.event_partition_exists(p_event_time timestamptz)
 RETURNS boolean
 LANGUAGE sql
