@@ -101,17 +101,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          script: |
+        env:
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'ENDSSH'
             set -e
             cd /home/ubuntu/marketing-ai
             git pull origin master
-            docker compose --env-file .env.prod \
-              -f docker-compose.yml \
-              -f docker-compose.override.yml \
-              up -d --build frontend platform-api ml-service
+            docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.override.yml up -d --build frontend platform-api ml-service
             docker image prune -f
+          ENDSSH
