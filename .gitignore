@@ -33,7 +33,7 @@ node_modules/
 .next/
 out/
 .vercel/
-frontend/src/_generated/
+frontend/src/_generated/*.css
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
