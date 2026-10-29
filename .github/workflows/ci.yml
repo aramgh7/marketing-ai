@@ -98,20 +98,12 @@ jobs:
     name: deploy to lightsail
     needs: [java, ml, frontend, sql]
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, lightsail]
     steps:
-      - name: Deploy via SSH
-        env:
-          SSH_KEY_B64: ${{ secrets.SSH_KEY }}
+      - name: Deploy
         run: |
-          mkdir -p ~/.ssh
-          echo "$SSH_KEY_B64" | base64 -d > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} '
-            set -e
-            cd /home/ubuntu/marketing-ai
-            git pull origin master
-            docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.override.yml up -d --build frontend platform-api ml-service
-            docker image prune -f
-          '
+          set -e
+          cd /home/ubuntu/marketing-ai
+          git pull origin master
+          docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.override.yml up -d --build frontend platform-api ml-service
+          docker image prune -f
