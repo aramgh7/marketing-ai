@@ -42,7 +42,7 @@ export default function SettingsPage() {
       .then((d) => {
         setMetaPageId(d?.meta_page_id ?? d?.metaPageId ?? "");
         setIgActorId(d?.meta_instagram_actor_id ?? d?.metaInstagramActorId ?? "");
-        setMetaAdAccountId(d?.ad_account_id ?? d?.adAccountId ?? "");
+        setMetaAdAccountId(d?.meta_ad_account_id ?? d?.ad_account_id ?? d?.adAccountId ?? "");
         setMetaAppId(d?.app_id ?? d?.appId ?? "");
         setHasToken(!!d?.has_token);
       })
