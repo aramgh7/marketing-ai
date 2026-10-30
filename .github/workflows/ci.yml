@@ -101,9 +101,12 @@ jobs:
     runs-on: [self-hosted, lightsail]
     steps:
       - name: Deploy
+        env:
+          GIT_TERMINAL_PROMPT: "0"
         run: |
           set -e
           cd /home/ubuntu/marketing-ai
+          git config --local credential.helper ""
           git pull origin master
           docker compose --env-file .env.prod -f docker-compose.yml -f docker-compose.override.yml up -d --build frontend platform-api ml-service
           docker image prune -f
