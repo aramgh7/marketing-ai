@@ -12,7 +12,16 @@ interface Campaign {
   explorationRate: number | null;
   maxSpendPerAdset: number | null;
   confirmationStatus: string | null;
+  pixelId: string | null;
   createdAt: string;
+}
+
+interface Pixel {
+  id: string;
+  pixelId: string;
+  name: string | null;
+  purpose: string;
+  isDefault: boolean;
 }
 
 interface AdSet {
@@ -57,6 +66,8 @@ export default function CampaignsPage() {
   const [explorationRate, setExplorationRate] = useState(0.15);
   const [maxSpend, setMaxSpend] = useState("");
   const [creating, setCreating] = useState(false);
+  const [pixels, setPixels] = useState<Pixel[]>([]);
+  const [pixelId, setPixelId] = useState("");
 
   // detail panel
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -73,7 +84,17 @@ export default function CampaignsPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    apiFetch<Pixel[]>("/api/v1/pixels")
+      .then((rows) => {
+        const active = (Array.isArray(rows) ? rows : []).filter((p) => p.purpose !== "ARCHIVED");
+        setPixels(active);
+        const def = active.find((p) => p.isDefault);
+        if (def) setPixelId(def.id);
+      })
+      .catch(() => {});
+  }, [load]);
 
   async function create(e: FormEvent) {
     e.preventDefault();
@@ -88,6 +109,7 @@ export default function CampaignsPage() {
           dailyBudget: dailyBudget ? Number(dailyBudget) : null,
           explorationRate,
           maxSpendPerAdset: maxSpend ? Number(maxSpend) : null,
+          pixelId: pixelId || null,
         }),
       });
       setName(""); setDailyBudget(""); setMaxSpend("");
@@ -184,6 +206,19 @@ export default function CampaignsPage() {
             <span className="text-gray-700">Max spend per ad set ($)</span>
             <input type="number" min="1" value={maxSpend} onChange={(e) => setMaxSpend(e.target.value)} className={inp} placeholder="e.g. 200" />
           </label>
+          {pixels.length > 0 && (
+            <label className="text-sm">
+              <span className="text-gray-700">Pixel</span>
+              <select value={pixelId} onChange={(e) => setPixelId(e.target.value)} className={inp}>
+                <option value="">— use tenant default —</option>
+                {pixels.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name || p.pixelId} ({p.purpose}){p.isDefault ? " ★ default" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <label className="text-sm col-span-2">
             <span className="text-gray-700">Exploration rate: <strong>{Math.round(explorationRate * 100)}%</strong></span>
             <input type="range" min="5" max="30" step="5" value={explorationRate * 100} onChange={(e) => setExplorationRate(Number(e.target.value) / 100)} className="w-full mt-1" />
@@ -212,6 +247,7 @@ export default function CampaignsPage() {
                 <th className="px-6 py-3 text-left">Status</th>
                 <th className="px-6 py-3 text-left">Objective</th>
                 <th className="px-6 py-3 text-right">Daily budget</th>
+                <th className="px-6 py-3 text-left">Pixel</th>
                 <th className="px-6 py-3 text-left">Confirmation</th>
                 <th className="px-6 py-3 text-right">Actions</th>
               </tr>
@@ -227,6 +263,11 @@ export default function CampaignsPage() {
                     <td className="px-6 py-3"><StatusBadge status={c.status} /></td>
                     <td className="px-6 py-3 text-gray-600">{c.objective}</td>
                     <td className="px-6 py-3 text-right text-gray-600">{c.dailyBudget != null ? `$${c.dailyBudget}` : "—"}</td>
+                    <td className="px-6 py-3 text-gray-500 text-xs">
+                      {c.pixelId
+                        ? (pixels.find((p) => p.id === c.pixelId)?.name || pixels.find((p) => p.id === c.pixelId)?.pixelId || c.pixelId.slice(0, 8) + "…")
+                        : <span className="text-gray-300">—</span>}
+                    </td>
                     <td className="px-6 py-3">
                       {c.confirmationStatus
                         ? <span className={`px-2 py-0.5 rounded text-xs font-medium ${c.confirmationStatus === "PASSED" ? "bg-green-100 text-green-800" : c.confirmationStatus === "FAILED" ? "bg-red-100 text-red-800" : "bg-gray-100 text-gray-600"}`}>{c.confirmationStatus}</span>
@@ -243,7 +284,7 @@ export default function CampaignsPage() {
                   </tr>
                   {selectedId === c.id && (
                     <tr key={`${c.id}-detail`} className="border-t border-indigo-100 bg-indigo-50">
-                      <td colSpan={6} className="px-6 py-4">
+                      <td colSpan={7} className="px-6 py-4">
                         <div className="space-y-3">
                           <div className="flex items-center gap-3">
                             <span className="text-sm font-semibold text-gray-700">Ad sets</span>

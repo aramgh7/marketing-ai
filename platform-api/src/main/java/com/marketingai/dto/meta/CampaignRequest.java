@@ -5,6 +5,8 @@ import jakarta.validation.constraints.NotNull;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.util.UUID;
+
 @Getter
 @Setter
 public class CampaignRequest {
@@ -22,4 +24,7 @@ public class CampaignRequest {
 
     /** Daily budget in account currency (minor units — cents) */
     private Float dailyBudget;
+
+    /** Optional pixel override — if null, the tenant's default pixel is used. */
+    private UUID pixelId;
 }

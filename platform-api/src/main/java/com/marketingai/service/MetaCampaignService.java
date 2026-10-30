@@ -9,6 +9,7 @@ import com.marketingai.entity.MetaCampaign;
 import com.marketingai.entity.Tenant;
 import com.marketingai.repository.MetaAdSetRepository;
 import com.marketingai.repository.MetaCampaignRepository;
+import com.marketingai.repository.MetaPixelRepository;
 import com.marketingai.repository.TenantRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -34,6 +35,7 @@ public class MetaCampaignService {
     private final MetaAdSetRepository adSetRepo;
     private final MetaApiService metaApi;
     private final TenantRepository tenantRepo;
+    private final MetaPixelRepository pixelRepo;
 
     // ─── Campaigns ──────────────────────────────────────────────────────────
 
@@ -59,6 +61,17 @@ public class MetaCampaignService {
         campaign.setContour(req.getContour() != null ? req.getContour() : "TEST");
         campaign.setDailyBudget(req.getDailyBudget());
         campaign.setStatus("PAUSED");
+
+        if (req.getPixelId() != null) {
+            pixelRepo.findByIdAndTenantId(req.getPixelId(), tenantId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Pixel not found"));
+            campaign.setPixelId(req.getPixelId());
+        } else {
+            pixelRepo.findByTenantIdAndStatus(tenantId, "ACTIVE").stream()
+                    .filter(p -> p.isDefaultPixel())
+                    .findFirst()
+                    .ifPresent(p -> campaign.setPixelId(p.getId()));
+        }
 
         return toResponse(campaignRepo.save(campaign));
     }
@@ -207,6 +220,7 @@ public class MetaCampaignService {
                 .spendTotal(c.getSpendTotal())
                 .confirmationAdSetId(c.getConfirmationAdSetId())
                 .confirmationStatus(c.getConfirmationStatus())
+                .pixelId(c.getPixelId())
                 .syncedAt(c.getSyncedAt())
                 .createdAt(c.getCreatedAt())
                 .build();

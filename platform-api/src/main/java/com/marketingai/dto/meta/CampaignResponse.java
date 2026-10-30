@@ -22,6 +22,7 @@ public class CampaignResponse {
     Float spendTotal;
     String confirmationAdSetId;
     String confirmationStatus;
+    UUID pixelId;
     Instant syncedAt;
     Instant createdAt;
 }
