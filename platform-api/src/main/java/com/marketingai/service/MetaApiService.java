@@ -508,6 +508,23 @@ public class MetaApiService {
     }
 
     /**
+     * Verify the token is accepted by Meta by calling GET /me.
+     * Returns a map with "valid" (boolean) and "name" (string, on success).
+     */
+    public Map<String, Object> verifyToken(String accessToken) {
+        String url = BASE_URL + "/me?fields=name,id";
+        try {
+            JsonNode resp = getWithAuth(accessToken, url);
+            Map<String, Object> out = new java.util.LinkedHashMap<>();
+            out.put("valid", true);
+            if (resp != null && resp.has("name")) out.put("name", resp.get("name").asText());
+            return out;
+        } catch (Exception e) {
+            return Map.of("valid", false, "error", e.getMessage());
+        }
+    }
+
+    /**
      * GET {BASE_URL}/{path} with the access token in the Authorization header (audit S-3).
      */
     private JsonNode getWithAuth(String accessToken, String url) {

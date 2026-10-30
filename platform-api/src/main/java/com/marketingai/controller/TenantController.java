@@ -2,7 +2,9 @@ package com.marketingai.controller;
 
 import com.marketingai.dto.meta.MetaCredentialsRequest;
 import com.marketingai.security.TenantContext;
+import com.marketingai.service.MetaApiService;
 import com.marketingai.service.TenantService;
+import com.marketingai.service.TokenVault;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -12,6 +14,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -21,8 +24,10 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class TenantController {
 
-    private final TenantService tenantService;
-    private final JdbcTemplate  jdbc;
+    private final TenantService  tenantService;
+    private final JdbcTemplate   jdbc;
+    private final TokenVault     vault;
+    private final MetaApiService metaApi;
 
     /**
      * Store Meta Marketing API credentials for the current tenant.
@@ -54,6 +59,27 @@ public class TenantController {
         out.put("has_token", r.get("has_token"));
         out.put("meta_write_stage", r.get("meta_write_stage"));
         return ResponseEntity.ok(out);
+    }
+
+    /** Live check: decrypt stored token and call Meta GET /me. */
+    @PostMapping("/me/meta-token/verify")
+    public ResponseEntity<Map<String, Object>> verifyMetaToken() {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT meta_access_token_enc FROM tenants WHERE id = ?", currentTenant());
+        if (rows.isEmpty() || rows.get(0).get("meta_access_token_enc") == null) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("valid", false);
+            out.put("error", "No token stored");
+            return ResponseEntity.ok(out);
+        }
+        String token = vault.openOrNull((byte[]) rows.get(0).get("meta_access_token_enc"));
+        if (token == null) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("valid", false);
+            out.put("error", "Token decryption failed");
+            return ResponseEntity.ok(out);
+        }
+        return ResponseEntity.ok(metaApi.verifyToken(token));
     }
 
     @GetMapping("/me/settings")

@@ -81,6 +81,8 @@ export default function MetaAdsPage() {
   const [loadErrors, setLoadErrors] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [downloadMode, setDownloadMode] = useState<string>("FINAL");
+  const [verifying, setVerifying] = useState(false);
+  const [verifyResult, setVerifyResult] = useState<{ valid: boolean; name?: string; error?: string } | null>(null);
   const [publishing, setPublishing] = useState<string | null>(null); // creative id with the panel open
   const [busy, setBusy] = useState<string | null>(null);
   const [expandedDrift, setExpandedDrift] = useState<string | null>(null);
@@ -154,6 +156,18 @@ export default function MetaAdsPage() {
     finally { setBusy(null); }
   }
 
+  async function verifyToken() {
+    setVerifying(true); setVerifyResult(null);
+    try {
+      const r = await apiFetch<{ valid: boolean; name?: string; error?: string }>(
+        "/api/v1/tenants/me/meta-token/verify", { method: "POST" }
+      );
+      setVerifyResult(r);
+    } catch (e: any) {
+      setVerifyResult({ valid: false, error: e?.message ?? "Request failed" });
+    } finally { setVerifying(false); }
+  }
+
   const healthy = health?.healthy ?? true;
   const unmanagedCount = health?.unmanaged_count ?? adMap.filter((r) => r.status === "UNMANAGED").length;
   const driftCount = health?.drift_count ?? adMap.filter((r) => r.status === "DRIFT").length;
@@ -216,6 +230,22 @@ export default function MetaAdsPage() {
             </span>
           ))}
         </div>
+        {metaCreds?.has_token && (
+          <div className="mt-2 flex items-center gap-3">
+            <button
+              onClick={verifyToken}
+              disabled={verifying}
+              className="text-xs px-3 py-1 rounded border border-gray-300 hover:bg-gray-50 disabled:opacity-50"
+            >
+              {verifying ? "Checking…" : "Verify token with Meta"}
+            </button>
+            {verifyResult && (
+              <span className={`text-xs font-medium ${verifyResult.valid ? "text-green-600" : "text-red-500"}`}>
+                {verifyResult.valid ? `✓ Valid${verifyResult.name ? ` — ${verifyResult.name}` : ""}` : `✗ ${verifyResult.error ?? "Invalid"}`}
+              </span>
+            )}
+          </div>
+        )}
         {metaCreds !== null && (!metaCreds.meta_page_id || !metaCreds.has_token) && (
           <p className="text-xs text-gray-400 mt-1">
             Set credentials in <a href="/settings" className="underline">Settings → Meta credentials</a>.
