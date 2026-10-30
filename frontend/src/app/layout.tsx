@@ -35,7 +35,7 @@ export default function RootLayout({
         )}
       </head>
       <body>
-        <style dangerouslySetInnerHTML={{ __html: globalCss }} />
+        {globalCss && <style dangerouslySetInnerHTML={{ __html: globalCss }} />}
         {children}
         {/* Fallback banner shown when Cookiebot is not configured */}
         <CookieBanner />
